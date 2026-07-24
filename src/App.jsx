@@ -123,58 +123,184 @@ function AlumnoHome({ onNav }) {
 }
 
 function RutinaScreen({ onNav }) {
-  const ejercicios = [
-    { id: 1, nombre: "Press Banca", descanso: 120, series: [{ reps: "10", rir: 2 }, { reps: "10", rir: 1 }, { reps: "8", rir: 1 }, { reps: "8", rir: 0 }] },
-    { id: 2, nombre: "Press Inclinado Mancuernas", descanso: 90, series: [{ reps: "10", rir: 2 }, { reps: "10", rir: 2 }, { reps: "8", rir: 1 }] },
-    { id: 3, nombre: "Aperturas en Polea", descanso: 60, series: [{ reps: "15", rir: 2 }, { reps: "12", rir: 1 }, { reps: "12", rir: 1 }] },
+  const calentamiento = [
+    "Movilidad articular de hombros — 2x10 círculos",
+    "Rotación de cadera — 2x10 cada lado",
+    "Press banca vacío — 2x15 reps",
+    "Estiramiento pectoral en marco — 30 seg",
   ];
+
+  const cardio = {
+    tipo: "Caminata + Pasos diarios",
+    detalle: "Objetivo: 8.000 pasos diarios",
+    postEntreno: "10 min caminata moderada post-entreno",
+  };
+
+  const ejercicios = [
+    {
+      id: 1, nombre: "Press Banca", video: true,
+      anteriorSemana: [{ kg: "100", reps: "8" }, { kg: "100", reps: "7" }, { kg: "97.5", reps: "7" }, { kg: "97.5", reps: "6" }],
+      series: [{ reps: "10", rir: 2, descanso: 120 }, { reps: "10", rir: 1, descanso: 120 }, { reps: "8", rir: 1, descanso: 120 }, { reps: "8", rir: 0, descanso: 90 }]
+    },
+    {
+      id: 2, nombre: "Press Inclinado Mancuernas", video: true,
+      anteriorSemana: [{ kg: "28", reps: "10" }, { kg: "28", reps: "9" }, { kg: "26", reps: "9" }],
+      series: [{ reps: "10", rir: 2, descanso: 90 }, { reps: "10", rir: 2, descanso: 90 }, { reps: "8", rir: 1, descanso: 90 }]
+    },
+    {
+      id: 3, nombre: "Aperturas en Polea", video: true,
+      anteriorSemana: [{ kg: "15", reps: "15" }, { kg: "15", reps: "13" }, { kg: "12.5", reps: "13" }],
+      series: [{ reps: "15", rir: 2, descanso: 60 }, { reps: "12", rir: 1, descanso: 60 }, { reps: "12", rir: 1, descanso: 60 }]
+    },
+  ];
+
   const [registros, setRegistros] = useState({});
   const [completado, setCompletado] = useState(false);
+  const [verHistorial, setVerHistorial] = useState({});
+  const [verCalentamiento, setVerCalentamiento] = useState(false);
+
   const setReg = (ejId, sIdx, campo, val) => {
     const key = `${ejId}-${sIdx}`;
     setRegistros(prev => ({ ...prev, [key]: { ...prev[key], [campo]: val } }));
   };
+
   const getRirColor = (rir) => rir === 0 ? "#EF4444" : rir === 1 ? "#F59E0B" : "#10B981";
   const getRirLabel = (rir) => rir === 0 ? "Fallo" : rir === 1 ? "RIR 1" : "RIR 2";
+
   return (
     <div style={{ padding: "20px 16px 90px", overflowY: "auto", height: "100%", boxSizing: "border-box" }}>
-      <div style={{ marginBottom: 20 }}>
+      <div style={{ marginBottom: 16 }}>
         <div style={{ color: theme.muted, fontSize: 12, marginBottom: 4 }}>ENTRENAMIENTO · LUNES</div>
         <div style={{ fontSize: 22, fontWeight: 800, color: theme.text }}>Push A 💪</div>
       </div>
+
+      {/* CALENTAMIENTO */}
+      <Card style={{ marginBottom: 14, border: `1px solid ${theme.warning}44`, background: "#1a160a" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}
+          onClick={() => setVerCalentamiento(!verCalentamiento)}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 18 }}>🔥</span>
+            <div style={{ fontSize: 14, fontWeight: 700, color: theme.warning }}>Calentamiento previo</div>
+          </div>
+          <span style={{ color: theme.warning, fontSize: 16 }}>{verCalentamiento ? "▲" : "▼"}</span>
+        </div>
+        {verCalentamiento && (
+          <div style={{ marginTop: 12 }}>
+            {calentamiento.map((c, i) => (
+              <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 8 }}>
+                <div style={{ width: 20, height: 20, borderRadius: 10, background: `${theme.warning}33`, border: `1px solid ${theme.warning}55`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 800, color: theme.warning, flexShrink: 0 }}>{i + 1}</div>
+                <span style={{ fontSize: 12, color: theme.muted, lineHeight: 1.5 }}>{c}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      {/* EJERCICIOS */}
       {ejercicios.map((ej) => (
         <Card key={ej.id} style={{ marginBottom: 14 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
-            <div>
-              <div style={{ fontSize: 15, fontWeight: 700, color: theme.text, marginBottom: 4 }}>{ej.nombre}</div>
-              <div style={{ fontSize: 11, color: theme.muted }}>⏱ Descanso: {ej.descanso}s</div>
-            </div>
-            <div style={{ width: 38, height: 38, borderRadius: 10, background: theme.surface, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", border: `1px solid ${theme.border}`, flexShrink: 0 }}>▶️</div>
+          {/* Header */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: theme.text }}>{ej.nombre}</div>
+            <div style={{ width: 36, height: 36, borderRadius: 10, background: theme.surface, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", border: `1px solid ${theme.border}`, flexShrink: 0 }}>▶️</div>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "30px 1fr 62px 54px 62px", gap: 6, marginBottom: 6 }}>
-            {["#", "OBJETIVO", "KG", "REPS", "RIR"].map(h => (<span key={h} style={{ fontSize: 10, color: theme.muted, textAlign: "center" }}>{h}</span>))}
+
+          {/* Historial semana anterior */}
+          <div style={{ marginBottom: 10 }}>
+            <button onClick={() => setVerHistorial(prev => ({ ...prev, [ej.id]: !prev[ej.id] }))}
+              style={{ background: `${theme.accent}15`, border: `1px solid ${theme.accent}33`, borderRadius: 8, padding: "5px 10px", color: theme.accentLight, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+              {verHistorial[ej.id] ? "▲ Ocultar" : "▼ Ver semana anterior"}
+            </button>
+            {verHistorial[ej.id] && (
+              <div style={{ marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {ej.anteriorSemana.map((h, i) => (
+                  <div key={i} style={{ background: theme.surface, border: `1px solid ${theme.border}`, borderRadius: 8, padding: "6px 10px", textAlign: "center" }}>
+                    <div style={{ fontSize: 13, fontWeight: 800, color: theme.muted }}>S{i + 1}</div>
+                    <div style={{ fontSize: 12, color: theme.text, fontWeight: 700 }}>{h.kg}kg</div>
+                    <div style={{ fontSize: 10, color: theme.muted }}>×{h.reps}</div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
+
+          {/* Encabezado tabla */}
+          <div style={{ display: "grid", gridTemplateColumns: "52px 52px 62px 54px 58px 60px", gap: 4, marginBottom: 6 }}>
+            {["SERIE", "DESC.", "KG", "REPS", "RIR", "✓"].map(h => (
+              <span key={h} style={{ fontSize: 9, color: theme.muted, textAlign: "center", fontWeight: 700 }}>{h}</span>
+            ))}
+          </div>
+
+          {/* Filas por serie */}
           {ej.series.map((s, idx) => {
             const key = `${ej.id}-${idx}`;
             const reg = registros[key] || {};
             const rc = getRirColor(s.rir);
+            const hecho = reg.kg && reg.reps;
             return (
-              <div key={idx} style={{ display: "grid", gridTemplateColumns: "30px 1fr 62px 54px 62px", gap: 6, alignItems: "center", marginBottom: 8, background: theme.surface, borderRadius: 10, padding: "8px 8px" }}>
-                <div style={{ width: 24, height: 24, borderRadius: 6, background: theme.card, border: `1px solid ${theme.border}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: theme.muted }}>{idx + 1}</div>
-                <div style={{ fontSize: 12, color: theme.muted }}>{s.reps} reps</div>
-                <input value={reg.kg || ""} onChange={e => setReg(ej.id, idx, "kg", e.target.value)} placeholder="—" style={{ background: theme.card, border: `1px solid ${reg.kg ? theme.accent + "66" : theme.border}`, borderRadius: 8, padding: "6px 4px", color: theme.text, fontSize: 13, fontWeight: 700, width: "100%", textAlign: "center", outline: "none", boxSizing: "border-box" }} />
-                <input value={reg.reps || ""} onChange={e => setReg(ej.id, idx, "reps", e.target.value)} placeholder="—" style={{ background: theme.card, border: `1px solid ${reg.reps ? theme.accent + "66" : theme.border}`, borderRadius: 8, padding: "6px 4px", color: theme.text, fontSize: 13, fontWeight: 700, width: "100%", textAlign: "center", outline: "none", boxSizing: "border-box" }} />
-                <div style={{ background: `${rc}18`, border: `1px solid ${rc}55`, borderRadius: 8, padding: "5px 4px", textAlign: "center", fontSize: 11, fontWeight: 800, color: rc }}>{getRirLabel(s.rir)}</div>
+              <div key={idx} style={{
+                display: "grid", gridTemplateColumns: "52px 52px 62px 54px 58px 60px",
+                gap: 4, alignItems: "center", marginBottom: 6,
+                background: hecho ? `${theme.success}12` : theme.surface,
+                border: `1px solid ${hecho ? theme.success + "44" : theme.border}`,
+                borderRadius: 10, padding: "7px 6px"
+              }}>
+                {/* Serie */}
+                <div style={{ textAlign: "center", fontSize: 11, fontWeight: 800, color: theme.muted }}>Serie {idx + 1}</div>
+                {/* Descanso */}
+                <div style={{ textAlign: "center" }}>
+                  <div style={{ fontSize: 10, color: theme.muted }}>⏱{s.descanso}s</div>
+                </div>
+                {/* KG */}
+                <input value={reg.kg || ""} onChange={e => setReg(ej.id, idx, "kg", e.target.value)} placeholder="kg"
+                  style={{ background: theme.card, border: `1px solid ${reg.kg ? theme.accent + "66" : theme.border}`, borderRadius: 6, padding: "5px 3px", color: theme.text, fontSize: 13, fontWeight: 700, width: "100%", textAlign: "center", outline: "none", boxSizing: "border-box" }} />
+                {/* REPS */}
+                <input value={reg.reps || ""} onChange={e => setReg(ej.id, idx, "reps", e.target.value)} placeholder={s.reps}
+                  style={{ background: theme.card, border: `1px solid ${reg.reps ? theme.accent + "66" : theme.border}`, borderRadius: 6, padding: "5px 3px", color: theme.text, fontSize: 13, fontWeight: 700, width: "100%", textAlign: "center", outline: "none", boxSizing: "border-box" }} />
+                {/* RIR */}
+                <div style={{ background: `${rc}18`, border: `1px solid ${rc}55`, borderRadius: 6, padding: "4px 2px", textAlign: "center", fontSize: 10, fontWeight: 800, color: rc }}>{getRirLabel(s.rir)}</div>
+                {/* Check */}
+                <div style={{ textAlign: "center", fontSize: 16 }}>{hecho ? "✅" : "⬜"}</div>
               </div>
             );
           })}
-          <div style={{ display: "flex", gap: 10, marginTop: 6, flexWrap: "wrap" }}>
-            {[["#10B981","RIR 2 · cómodo"],["#F59E0B","RIR 1 · cerca del límite"],["#EF4444","Fallo"]].map(([c,l]) => (
-              <div key={l} style={{ display: "flex", alignItems: "center", gap: 4 }}><div style={{ width: 8, height: 8, borderRadius: 4, background: c }} /><span style={{ fontSize: 10, color: theme.muted }}>{l}</span></div>
+
+          <div style={{ display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+            {[["#10B981","RIR 2"],["#F59E0B","RIR 1"],["#EF4444","Fallo"]].map(([c,l]) => (
+              <div key={l} style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                <div style={{ width: 7, height: 7, borderRadius: 4, background: c }} />
+                <span style={{ fontSize: 9, color: theme.muted }}>{l}</span>
+              </div>
             ))}
           </div>
         </Card>
       ))}
+
+      {/* CARDIO Y PASOS */}
+      <Card style={{ marginBottom: 14, border: `1px solid #10B98144`, background: "#0a1a12" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+          <span style={{ fontSize: 18 }}>🏃</span>
+          <div style={{ fontSize: 14, fontWeight: 700, color: theme.success }}>Cardio y Pasos Diarios</div>
+        </div>
+        <div style={{ display: "flex", flex: 1, gap: 10, marginBottom: 8 }}>
+          <div style={{ flex: 1, background: theme.surface, borderRadius: 10, padding: "10px 12px" }}>
+            <div style={{ fontSize: 11, color: theme.muted, marginBottom: 4 }}>🎯 Meta diaria</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: theme.text }}>{cardio.detalle}</div>
+          </div>
+          <div style={{ flex: 1, background: theme.surface, borderRadius: 10, padding: "10px 12px" }}>
+            <div style={{ fontSize: 11, color: theme.muted, marginBottom: 4 }}>🏁 Post-entreno</div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: theme.text }}>{cardio.postEntreno}</div>
+          </div>
+        </div>
+        <div style={{ background: theme.surface, borderRadius: 10, padding: "10px 12px" }}>
+          <div style={{ fontSize: 11, color: theme.muted, marginBottom: 6 }}>Pasos de hoy</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <input placeholder="0" style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 8, padding: "8px 10px", color: theme.text, fontSize: 18, fontWeight: 800, width: 100, textAlign: "center", outline: "none" }} />
+            <span style={{ fontSize: 13, color: theme.muted }}>pasos</span>
+          </div>
+        </div>
+      </Card>
+
       {!completado
         ? <Btn onClick={() => setCompletado(true)} style={{ background: theme.success, padding: 16, fontSize: 15, fontWeight: 800, letterSpacing: 1, borderRadius: 14 }}>✓ ENTRENAMIENTO COMPLETADO</Btn>
         : <Card style={{ textAlign: "center", background: `${theme.success}18`, border: `1px solid ${theme.success}44` }}>
