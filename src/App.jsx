@@ -138,19 +138,22 @@ function RutinaScreen({ onNav }) {
 
   const ejercicios = [
     {
-      id: 1, nombre: "Press Banca", video: true,
+      id: 1, nombre: "Press Banca", descanso: 120, video: true,
       anteriorSemana: [{ kg: "100", reps: "8" }, { kg: "100", reps: "7" }, { kg: "97.5", reps: "7" }, { kg: "97.5", reps: "6" }],
-      series: [{ reps: "10", rir: 2, descanso: 120 }, { reps: "10", rir: 1, descanso: 120 }, { reps: "8", rir: 1, descanso: 120 }, { reps: "8", rir: 0, descanso: 90 }]
+      aproximacion: [{ kg: "60", reps: "10" }, { kg: "80", reps: "5" }, { kg: "95", reps: "2" }],
+      series: [{ reps: "10", rir: 2 }, { reps: "10", rir: 1 }, { reps: "8", rir: 1 }, { reps: "8", rir: 0 }]
     },
     {
-      id: 2, nombre: "Press Inclinado Mancuernas", video: true,
+      id: 2, nombre: "Press Inclinado Mancuernas", descanso: 90, video: true,
       anteriorSemana: [{ kg: "28", reps: "10" }, { kg: "28", reps: "9" }, { kg: "26", reps: "9" }],
-      series: [{ reps: "10", rir: 2, descanso: 90 }, { reps: "10", rir: 2, descanso: 90 }, { reps: "8", rir: 1, descanso: 90 }]
+      aproximacion: [{ kg: "16", reps: "10" }, { kg: "22", reps: "5" }],
+      series: [{ reps: "10", rir: 2 }, { reps: "10", rir: 2 }, { reps: "8", rir: 1 }]
     },
     {
-      id: 3, nombre: "Aperturas en Polea", video: true,
+      id: 3, nombre: "Aperturas en Polea", descanso: 60, video: true,
       anteriorSemana: [{ kg: "15", reps: "15" }, { kg: "15", reps: "13" }, { kg: "12.5", reps: "13" }],
-      series: [{ reps: "15", rir: 2, descanso: 60 }, { reps: "12", rir: 1, descanso: 60 }, { reps: "12", rir: 1, descanso: 60 }]
+      aproximacion: [{ kg: "8", reps: "12" }],
+      series: [{ reps: "15", rir: 2 }, { reps: "12", rir: 1 }, { reps: "12", rir: 1 }]
     },
   ];
 
@@ -200,8 +203,11 @@ function RutinaScreen({ onNav }) {
       {ejercicios.map((ej) => (
         <Card key={ej.id} style={{ marginBottom: 14 }}>
           {/* Header */}
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
-            <div style={{ fontSize: 15, fontWeight: 700, color: theme.text }}>{ej.nombre}</div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: theme.text, marginBottom: 4 }}>{ej.nombre}</div>
+              <div style={{ fontSize: 11, color: theme.muted }}>⏱ Descanso entre series: {ej.descanso}s</div>
+            </div>
             <div style={{ width: 36, height: 36, borderRadius: 10, background: theme.surface, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", border: `1px solid ${theme.border}`, flexShrink: 0 }}>▶️</div>
           </div>
 
@@ -209,13 +215,13 @@ function RutinaScreen({ onNav }) {
           <div style={{ marginBottom: 10 }}>
             <button onClick={() => setVerHistorial(prev => ({ ...prev, [ej.id]: !prev[ej.id] }))}
               style={{ background: `${theme.accent}15`, border: `1px solid ${theme.accent}33`, borderRadius: 8, padding: "5px 10px", color: theme.accentLight, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
-              {verHistorial[ej.id] ? "▲ Ocultar" : "▼ Ver semana anterior"}
+              {verHistorial[ej.id] ? "▲ Ocultar semana anterior" : "▼ Ver semana anterior"}
             </button>
             {verHistorial[ej.id] && (
               <div style={{ marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap" }}>
                 {ej.anteriorSemana.map((h, i) => (
                   <div key={i} style={{ background: theme.surface, border: `1px solid ${theme.border}`, borderRadius: 8, padding: "6px 10px", textAlign: "center" }}>
-                    <div style={{ fontSize: 13, fontWeight: 800, color: theme.muted }}>S{i + 1}</div>
+                    <div style={{ fontSize: 11, fontWeight: 800, color: theme.muted }}>S{i + 1}</div>
                     <div style={{ fontSize: 12, color: theme.text, fontWeight: 700 }}>{h.kg}kg</div>
                     <div style={{ fontSize: 10, color: theme.muted }}>×{h.reps}</div>
                   </div>
@@ -224,9 +230,24 @@ function RutinaScreen({ onNav }) {
             )}
           </div>
 
-          {/* Encabezado tabla */}
-          <div style={{ display: "grid", gridTemplateColumns: "52px 52px 62px 54px 58px 60px", gap: 4, marginBottom: 6 }}>
-            {["SERIE", "DESC.", "KG", "REPS", "RIR", "✓"].map(h => (
+          {/* Series de aproximación */}
+          <div style={{ marginBottom: 10, background: `${theme.warning}10`, border: `1px solid ${theme.warning}33`, borderRadius: 10, padding: "8px 10px" }}>
+            <div style={{ fontSize: 10, fontWeight: 800, color: theme.warning, marginBottom: 6 }}>🎯 SERIES DE APROXIMACIÓN</div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {ej.aproximacion.map((a, i) => (
+                <div key={i} style={{ background: theme.surface, borderRadius: 8, padding: "5px 10px", textAlign: "center", border: `1px solid ${theme.border}` }}>
+                  <div style={{ fontSize: 10, color: theme.warning, fontWeight: 700 }}>Aprox {i + 1}</div>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: theme.text }}>{a.kg}kg</div>
+                  <div style={{ fontSize: 10, color: theme.muted }}>×{a.reps}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Encabezado tabla series efectivas */}
+          <div style={{ fontSize: 10, fontWeight: 800, color: theme.accent, marginBottom: 6 }}>SERIES EFECTIVAS</div>
+          <div style={{ display: "grid", gridTemplateColumns: "52px 1fr 62px 54px 60px", gap: 4, marginBottom: 6 }}>
+            {["SERIE", "OBJETIVO", "KG", "REPS", "RIR"].map(h => (
               <span key={h} style={{ fontSize: 9, color: theme.muted, textAlign: "center", fontWeight: 700 }}>{h}</span>
             ))}
           </div>
@@ -239,34 +260,25 @@ function RutinaScreen({ onNav }) {
             const hecho = reg.kg && reg.reps;
             return (
               <div key={idx} style={{
-                display: "grid", gridTemplateColumns: "52px 52px 62px 54px 58px 60px",
+                display: "grid", gridTemplateColumns: "52px 1fr 62px 54px 60px",
                 gap: 4, alignItems: "center", marginBottom: 6,
                 background: hecho ? `${theme.success}12` : theme.surface,
                 border: `1px solid ${hecho ? theme.success + "44" : theme.border}`,
                 borderRadius: 10, padding: "7px 6px"
               }}>
-                {/* Serie */}
                 <div style={{ textAlign: "center", fontSize: 11, fontWeight: 800, color: theme.muted }}>Serie {idx + 1}</div>
-                {/* Descanso */}
-                <div style={{ textAlign: "center" }}>
-                  <div style={{ fontSize: 10, color: theme.muted }}>⏱{s.descanso}s</div>
-                </div>
-                {/* KG */}
+                <div style={{ fontSize: 12, color: theme.muted, paddingLeft: 4 }}>{s.reps} reps</div>
                 <input value={reg.kg || ""} onChange={e => setReg(ej.id, idx, "kg", e.target.value)} placeholder="kg"
                   style={{ background: theme.card, border: `1px solid ${reg.kg ? theme.accent + "66" : theme.border}`, borderRadius: 6, padding: "5px 3px", color: theme.text, fontSize: 13, fontWeight: 700, width: "100%", textAlign: "center", outline: "none", boxSizing: "border-box" }} />
-                {/* REPS */}
                 <input value={reg.reps || ""} onChange={e => setReg(ej.id, idx, "reps", e.target.value)} placeholder={s.reps}
                   style={{ background: theme.card, border: `1px solid ${reg.reps ? theme.accent + "66" : theme.border}`, borderRadius: 6, padding: "5px 3px", color: theme.text, fontSize: 13, fontWeight: 700, width: "100%", textAlign: "center", outline: "none", boxSizing: "border-box" }} />
-                {/* RIR */}
                 <div style={{ background: `${rc}18`, border: `1px solid ${rc}55`, borderRadius: 6, padding: "4px 2px", textAlign: "center", fontSize: 10, fontWeight: 800, color: rc }}>{getRirLabel(s.rir)}</div>
-                {/* Check */}
-                <div style={{ textAlign: "center", fontSize: 16 }}>{hecho ? "✅" : "⬜"}</div>
               </div>
             );
           })}
 
           <div style={{ display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
-            {[["#10B981","RIR 2"],["#F59E0B","RIR 1"],["#EF4444","Fallo"]].map(([c,l]) => (
+            {[["#10B981","RIR 2 · cómodo"],["#F59E0B","RIR 1 · cerca del límite"],["#EF4444","Fallo"]].map(([c,l]) => (
               <div key={l} style={{ display: "flex", alignItems: "center", gap: 3 }}>
                 <div style={{ width: 7, height: 7, borderRadius: 4, background: c }} />
                 <span style={{ fontSize: 9, color: theme.muted }}>{l}</span>
@@ -520,9 +532,6 @@ function DiarioScreen({ onNav }) {
 
 function CheckinScreen({ onNav }) {
   const [peso, setPeso] = useState("89.5");
-  const [energia, setEnergia] = useState(7);
-  const [sueno, setSueno] = useState(7);
-  const [horasSueno, setHorasSueno] = useState("8");
   const [enviado, setEnviado] = useState(false);
   return (
     <div style={{ padding: "20px 16px 90px", overflowY: "auto", height: "100%", boxSizing: "border-box" }}>
@@ -549,43 +558,7 @@ function CheckinScreen({ onNav }) {
             </div>
           </Card>
           <Card style={{ marginBottom: 14 }}>
-            <div style={{ fontSize: 12, color: theme.muted, marginBottom: 12 }}>BIENESTAR</div>
-
-            {/* Energía */}
-            <div style={{ marginBottom: 14 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-                <span style={{ fontSize: 13, color: theme.text }}>⚡ Energía</span>
-                <span style={{ fontSize: 13, fontWeight: 700, color: theme.accent }}>{energia}/10</span>
-              </div>
-              <input type="range" min={1} max={10} value={energia} onChange={e => setEnergia(Number(e.target.value))} style={{ width: "100%", accentColor: theme.accent }} />
-            </div>
-
-            {/* Sueño - horas */}
-            <div style={{ marginBottom: 14 }}>
-              <div style={{ fontSize: 13, color: theme.text, marginBottom: 8 }}>😴 Horas dormidas</div>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <input
-                  value={horasSueno}
-                  onChange={e => setHorasSueno(e.target.value)}
-                  placeholder="0"
-                  style={{
-                    background: theme.surface, border: `2px solid #A78BFA`,
-                    borderRadius: 10, padding: "10px 14px", color: theme.text,
-                    fontSize: 20, fontWeight: 800, width: 80, textAlign: "center", outline: "none"
-                  }}
-                />
-                <span style={{ fontSize: 14, color: theme.muted }}>horas</span>
-              </div>
-            </div>
-
-            {/* Calidad del sueño */}
-            <div style={{ marginBottom: 14 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-                <span style={{ fontSize: 13, color: theme.text }}>😴 Calidad del sueño</span>
-                <span style={{ fontSize: 13, fontWeight: 700, color: "#A78BFA" }}>{sueno}/10</span>
-              </div>
-              <input type="range" min={1} max={10} value={sueno} onChange={e => setSueno(Number(e.target.value))} style={{ width: "100%", accentColor: "#A78BFA" }} />
-            </div>
+            <div style={{ fontSize: 12, color: theme.muted, marginBottom: 12 }}>COMENTARIOS Y SENSACIONES</div>
 
             <div style={{ fontSize: 12, color: theme.muted, marginBottom: 6 }}>Comentarios</div>
             <textarea placeholder="¿Cómo fue tu semana? Dudas, sensaciones..." style={{ background: theme.surface, border: `1px solid ${theme.border}`, borderRadius: 8, padding: "10px 12px", color: theme.text, fontSize: 13, width: "100%", minHeight: 80, resize: "none", outline: "none", boxSizing: "border-box" }} />
@@ -609,6 +582,16 @@ function ProgresoScreen({ onNav }) {
   const semanas = ["S1","S2","S3","S4","S5","S6"];
   const pesos = [90.5,90.0,89.5,89.0,89.2,88.8];
   const maxP = Math.max(...pesos), minP = Math.min(...pesos) - 0.5, chartH = 100;
+
+  const logros = [
+    { id: 1, titulo: "Primera semana completa", desc: "Completaste 7 días seguidos", emoji: "🌟", desbloqueado: true, fecha: "01 Jun" },
+    { id: 2, titulo: "Superaste tu PR", desc: "Press Banca: 100kg → 107.5kg", emoji: "💪", desbloqueado: true, fecha: "15 Jun" },
+    { id: 3, titulo: "Más reps, mismo peso", desc: "Sentadilla 160kg: 3→5 reps", emoji: "🔥", desbloqueado: true, fecha: "22 Jun" },
+    { id: 4, titulo: "Bajaste 2 kg", desc: "De 90.5 a 88.5 kg en 6 semanas", emoji: "⚖️", desbloqueado: true, fecha: "10 Jul" },
+    { id: 5, titulo: "Racha de 30 días", desc: "Un mes entrenando sin parar", emoji: "🏆", desbloqueado: false, fecha: null },
+    { id: 6, titulo: "PR en 3 ejercicios", desc: "Supera tu marca en press, sentadilla y peso muerto", emoji: "👑", desbloqueado: false, fecha: null },
+    { id: 7, titulo: "Masa ganada", desc: "Sube peso corporal manteniendo grasa estable", emoji: "💎", desbloqueado: false, fecha: null },
+  ];
   const [prs, setPrs] = useState([
     { ejercicio: "Press Banca", emoji: "🏋️", historial: [{ carga: "95", reps: "5" },{ carga: "100", reps: "3" },{ carga: "105", reps: "2" },{ carga: "107.5", reps: "1" }] },
     { ejercicio: "Sentadilla", emoji: "🦵", historial: [{ carga: "150", reps: "5" },{ carga: "160", reps: "3" },{ carga: "175", reps: "1" }] },
@@ -638,10 +621,10 @@ function ProgresoScreen({ onNav }) {
       <Card style={{ marginBottom: 14 }}>
         <div style={{ fontSize: 12, color: theme.muted, marginBottom: 10 }}>COMPARACIÓN DE FOTOS</div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          {[{label:"Semana 1",actual:false},{label:"Semana 6",actual:true}].map(({label,actual})=>(<div key={label} style={{ background: theme.surface, borderRadius: 10, height: 100, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", border: `1px solid ${actual?theme.accent+"44":theme.border}` }}><span style={{ fontSize: 28 }}>🏋️</span><span style={{ fontSize: 12, color: theme.muted, marginTop: 6 }}>{label}</span>{actual&&<Tag color={theme.success}>Actual</Tag>}</div>))}
+          {[{label:"Semana 1",actual:false},{label:"Semana 4",actual:true}].map(({label,actual})=>(<div key={label} style={{ background: theme.surface, borderRadius: 10, height: 100, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", border: `1px solid ${actual?theme.accent+"44":theme.border}` }}><span style={{ fontSize: 28 }}>🏋️</span><span style={{ fontSize: 12, color: theme.muted, marginTop: 6 }}>{label}</span>{actual&&<Tag color={theme.success}>Actual</Tag>}</div>))}
         </div>
       </Card>
-      <Card>
+      <Card style={{ marginBottom: 14 }}>
         <div style={{ fontSize: 12, color: theme.muted, marginBottom: 12 }}>RÉCORDS PERSONALES 🏆</div>
         {prs.map((pr,idx) => {
           const ultimo = pr.historial[pr.historial.length-1];
@@ -660,6 +643,42 @@ function ProgresoScreen({ onNav }) {
           );
         })}
       </Card>
+
+      {/* LOGROS Y MEDALLAS */}
+      <Card style={{ marginBottom: 14 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <div style={{ fontSize: 12, color: theme.muted }}>LOGROS DESBLOQUEADOS 🎖️</div>
+          <Tag color={theme.warning}>{logros.filter(l=>l.desbloqueado).length}/{logros.length}</Tag>
+        </div>
+
+        {/* Desbloqueados */}
+        {logros.filter(l => l.desbloqueado).map(l => (
+          <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 12, background: `${theme.warning}12`, border: `1px solid ${theme.warning}33`, borderRadius: 12, padding: "10px 12px", marginBottom: 8 }}>
+            <div style={{ fontSize: 28, flexShrink: 0 }}>{l.emoji}</div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: theme.text }}>{l.titulo}</div>
+              <div style={{ fontSize: 11, color: theme.muted, marginTop: 2 }}>{l.desc}</div>
+            </div>
+            <div style={{ textAlign: "right", flexShrink: 0 }}>
+              <div style={{ fontSize: 10, color: theme.warning, fontWeight: 700 }}>✓ Logrado</div>
+              <div style={{ fontSize: 10, color: theme.muted }}>{l.fecha}</div>
+            </div>
+          </div>
+        ))}
+
+        {/* Bloqueados */}
+        <div style={{ fontSize: 11, color: theme.muted, margin: "12px 0 8px", fontWeight: 700 }}>PRÓXIMOS DESAFÍOS</div>
+        {logros.filter(l => !l.desbloqueado).map(l => (
+          <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 12, background: theme.surface, border: `1px solid ${theme.border}`, borderRadius: 12, padding: "10px 12px", marginBottom: 8, opacity: 0.6 }}>
+            <div style={{ fontSize: 28, flexShrink: 0, filter: "grayscale(1)" }}>🔒</div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: theme.muted }}>{l.titulo}</div>
+              <div style={{ fontSize: 11, color: theme.muted, marginTop: 2 }}>{l.desc}</div>
+            </div>
+          </div>
+        ))}
+      </Card>
+
       <NavBar active="progreso" onNav={onNav} />
     </div>
   );
