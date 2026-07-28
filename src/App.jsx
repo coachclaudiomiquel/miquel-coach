@@ -54,9 +54,281 @@ function LoginScreen({ onNav }) {
         <span style={{ color: theme.accentLight, fontSize: 13, cursor: "pointer" }}>¿Olvidaste tu contraseña?</span>
         <div style={{ borderTop: `1px solid ${theme.border}`, paddingTop: 10 }}>
           <span style={{ color: theme.muted, fontSize: 13 }}>¿Sin cuenta? </span>
-          <span style={{ color: theme.accentLight, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Crear cuenta</span>
+          <span onClick={() => onNav("anamnesis")} style={{ color: theme.accentLight, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Crear cuenta</span>
         </div>
         <Btn variant="ghost" onClick={() => onNav("coach_panel")} style={{ marginTop: 2 }}>👤 Entrar como Coach</Btn>
+      </div>
+    </div>
+  );
+}
+
+function AnamnesisScreen({ onNav }) {
+  const [paso, setPaso] = useState(1);
+  const totalPasos = 4;
+  const [form, setForm] = useState({
+    nombre: "", edad: "", sexo: "", ocupacion: "", actividadLaboral: "",
+    instagram: "", whatsapp: "",
+    peso: "", estatura: "", porcGrasa: "", objetivo: "",
+    haEntrenado: "", queEntrenamiento: "", diasSemana: "", horarioEntreno: "",
+    enfermedadLesion: "", cualEnfermedad: "", medicamento: "", cualMedicamento: "",
+    sustanciaFarmacologica: "",
+    alimentacionDiferente: "", alergia: "", cualAlergia: "",
+    noLeGustan: "", favoritos: "",
+    horaLevanta: "", horaDuerme: "", comidasDia: "", resumenComida: "",
+  });
+
+  const set = (k, v) => setForm(prev => ({ ...prev, [k]: v }));
+
+  const inputStyle = {
+    background: theme.surface, border: `1px solid ${theme.border}`,
+    borderRadius: 10, padding: "11px 14px", color: theme.text,
+    fontSize: 13, width: "100%", outline: "none", boxSizing: "border-box", marginTop: 6
+  };
+  const labelStyle = { fontSize: 12, color: theme.muted, fontWeight: 600, marginTop: 12, display: "block" };
+  const selectStyle = { ...inputStyle, appearance: "none" };
+
+  const opciones = (arr) => arr.map(o => <option key={o} value={o}>{o}</option>);
+
+  return (
+    <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
+      {/* Header */}
+      <div style={{ padding: "16px 16px 12px", background: theme.surface, borderBottom: `1px solid ${theme.border}` }}>
+        <div style={{ fontSize: 11, color: theme.muted, marginBottom: 4 }}>PASO {paso} DE {totalPasos}</div>
+        <div style={{ fontSize: 17, fontWeight: 800, color: theme.text }}>
+          {paso === 1 && "Datos Personales"}
+          {paso === 2 && "Físico y Objetivo"}
+          {paso === 3 && "Entrenamiento y Salud"}
+          {paso === 4 && "Alimentación y Hábitos"}
+        </div>
+        {/* Barra de progreso */}
+        <div style={{ background: theme.border, borderRadius: 4, height: 4, marginTop: 10 }}>
+          <div style={{ width: `${(paso / totalPasos) * 100}%`, height: "100%", background: theme.accent, borderRadius: 4, transition: "width 0.3s" }} />
+        </div>
+      </div>
+
+      {/* Contenido por paso */}
+      <div style={{ flex: 1, overflowY: "auto", padding: "16px 16px 20px" }}>
+
+        {/* PASO 1 — Datos personales */}
+        {paso === 1 && (
+          <div>
+            <span style={labelStyle}>Nombre completo *</span>
+            <input style={inputStyle} placeholder="Tu nombre completo" value={form.nombre} onChange={e => set("nombre", e.target.value)} />
+
+            <span style={labelStyle}>Edad *</span>
+            <input style={inputStyle} placeholder="Ej: 28" type="number" value={form.edad} onChange={e => set("edad", e.target.value)} />
+
+            <span style={labelStyle}>Sexo *</span>
+            <select style={selectStyle} value={form.sexo} onChange={e => set("sexo", e.target.value)}>
+              <option value="">Selecciona...</option>
+              {opciones(["Masculino", "Femenino", "Otro"])}
+            </select>
+
+            <span style={labelStyle}>Ocupación *</span>
+            <input style={inputStyle} placeholder="Ej: Ingeniero, Estudiante, Vendedor..." value={form.ocupacion} onChange={e => set("ocupacion", e.target.value)} />
+
+            <span style={labelStyle}>Describe tu actividad laboral diaria</span>
+            <textarea style={{ ...inputStyle, minHeight: 70, resize: "none" }}
+              placeholder="Ej: Trabajo sentado frente a un computador 8 horas, poca actividad física..."
+              value={form.actividadLaboral} onChange={e => set("actividadLaboral", e.target.value)} />
+
+            <span style={labelStyle}>WhatsApp</span>
+            <input style={inputStyle} placeholder="+56 9 XXXX XXXX" value={form.whatsapp} onChange={e => set("whatsapp", e.target.value)} />
+
+            <span style={labelStyle}>Instagram (opcional)</span>
+            <input style={inputStyle} placeholder="@usuario" value={form.instagram} onChange={e => set("instagram", e.target.value)} />
+          </div>
+        )}
+
+        {/* PASO 2 — Físico y objetivo */}
+        {paso === 2 && (
+          <div>
+            <span style={labelStyle}>Peso actual (kg) *</span>
+            <input style={inputStyle} placeholder="Ej: 80" type="number" value={form.peso} onChange={e => set("peso", e.target.value)} />
+
+            <span style={labelStyle}>Estatura (cm) *</span>
+            <input style={inputStyle} placeholder="Ej: 175" type="number" value={form.estatura} onChange={e => set("estatura", e.target.value)} />
+
+            <span style={labelStyle}>Porcentaje de grasa estimado (%)</span>
+            <input style={inputStyle} placeholder="Ej: 20" type="number" value={form.porcGrasa} onChange={e => set("porcGrasa", e.target.value)} />
+            <div style={{ fontSize: 11, color: theme.muted, marginTop: 4 }}>Si no lo sabes, deja en blanco</div>
+
+            <span style={labelStyle}>¿Cuál es tu objetivo principal? *</span>
+            <select style={selectStyle} value={form.objetivo} onChange={e => set("objetivo", e.target.value)}>
+              <option value="">Selecciona...</option>
+              {opciones(["Bajar grasa", "Ganar masa muscular", "Recomposición corporal", "Mejorar rendimiento deportivo", "Mantener peso y mejorar salud"])}
+            </select>
+          </div>
+        )}
+
+        {/* PASO 3 — Entrenamiento y salud */}
+        {paso === 3 && (
+          <div>
+            <span style={labelStyle}>¿Ha entrenado en gimnasio o realiza algún deporte? *</span>
+            <select style={selectStyle} value={form.haEntrenado} onChange={e => set("haEntrenado", e.target.value)}>
+              <option value="">Selecciona...</option>
+              {opciones(["Sí", "No"])}
+            </select>
+
+            {form.haEntrenado === "Sí" && (
+              <>
+                <span style={labelStyle}>Especifique qué entrenamiento o deporte</span>
+                <input style={inputStyle} placeholder="Ej: Gym 3 veces por semana, fútbol..." value={form.queEntrenamiento} onChange={e => set("queEntrenamiento", e.target.value)} />
+              </>
+            )}
+
+            <span style={labelStyle}>¿Cuántas veces a la semana pretendes entrenar? *</span>
+            <select style={selectStyle} value={form.diasSemana} onChange={e => set("diasSemana", e.target.value)}>
+              <option value="">Selecciona...</option>
+              {opciones(["1 día", "2 días", "3 días", "4 días", "5 días", "6 días"])}
+            </select>
+
+            <span style={labelStyle}>¿En qué horario pretendes entrenar? *</span>
+            <input style={inputStyle} placeholder="Ej: 07:00 o Entre 18:00 y 20:00" value={form.horarioEntreno} onChange={e => set("horarioEntreno", e.target.value)} />
+
+            <span style={labelStyle}>¿Tiene alguna enfermedad o lesión? *</span>
+            <select style={selectStyle} value={form.enfermedadLesion} onChange={e => set("enfermedadLesion", e.target.value)}>
+              <option value="">Selecciona...</option>
+              {opciones(["Sí", "No"])}
+            </select>
+
+            {form.enfermedadLesion === "Sí" && (
+              <>
+                <span style={labelStyle}>Especifique qué enfermedad o lesión</span>
+                <input style={inputStyle} placeholder="Ej: Dolor lumbar, rodilla operada..." value={form.cualEnfermedad} onChange={e => set("cualEnfermedad", e.target.value)} />
+              </>
+            )}
+
+            <span style={labelStyle}>¿Toma algún medicamento actualmente?</span>
+            <select style={selectStyle} value={form.medicamento} onChange={e => set("medicamento", e.target.value)}>
+              <option value="">Selecciona...</option>
+              {opciones(["Sí", "No"])}
+            </select>
+
+            {form.medicamento === "Sí" && (
+              <>
+                <span style={labelStyle}>Especifique qué medicamento</span>
+                <input style={inputStyle} placeholder="Ej: Metformina, Levotiroxina..." value={form.cualMedicamento} onChange={e => set("cualMedicamento", e.target.value)} />
+              </>
+            )}
+
+            <span style={labelStyle}>¿Consume o ha consumido sustancias farmacológicas para aumentar masa muscular o rendimiento? (esteroides, etc.)</span>
+            <select style={selectStyle} value={form.sustanciaFarmacologica} onChange={e => set("sustanciaFarmacologica", e.target.value)}>
+              <option value="">Selecciona...</option>
+              {opciones(["Sí", "No", "Prefiero no responder"])}
+            </select>
+          </div>
+        )}
+
+        {/* PASO 4 — Alimentación */}
+        {paso === 4 && (
+          <div>
+            <span style={labelStyle}>¿Lleva algún tipo de alimentación especial?</span>
+            <input style={inputStyle} placeholder="Ej: Vegetariano, Keto, Sin gluten..." value={form.alimentacionDiferente} onChange={e => set("alimentacionDiferente", e.target.value)} />
+
+            <span style={labelStyle}>¿Es alérgico a algún alimento, suplemento o medicamento?</span>
+            <select style={selectStyle} value={form.alergia} onChange={e => set("alergia", e.target.value)}>
+              <option value="">Selecciona...</option>
+              {opciones(["Sí", "No"])}
+            </select>
+
+            {form.alergia === "Sí" && (
+              <>
+                <span style={labelStyle}>Especifique a qué</span>
+                <input style={inputStyle} placeholder="Ej: Mariscos, lactosa, aspirina..." value={form.cualAlergia} onChange={e => set("cualAlergia", e.target.value)} />
+              </>
+            )}
+
+            <span style={labelStyle}>¿Qué alimentos no le gustan?</span>
+            <input style={inputStyle} placeholder="Ej: Brócoli, hígado, pescado..." value={form.noLeGustan} onChange={e => set("noLeGustan", e.target.value)} />
+
+            <span style={labelStyle}>¿Cuáles son sus alimentos favoritos?</span>
+            <input style={inputStyle} placeholder="Ej: Pollo, arroz, frutas..." value={form.favoritos} onChange={e => set("favoritos", e.target.value)} />
+
+            <span style={labelStyle}>¿A qué hora se levanta?</span>
+            <input style={inputStyle} placeholder="Ej: 07:00" value={form.horaLevanta} onChange={e => set("horaLevanta", e.target.value)} />
+
+            <span style={labelStyle}>¿A qué hora se duerme?</span>
+            <input style={inputStyle} placeholder="Ej: 23:00" value={form.horaDuerme} onChange={e => set("horaDuerme", e.target.value)} />
+
+            <span style={labelStyle}>¿Cuántas comidas y/o colaciones haces al día?</span>
+            <select style={selectStyle} value={form.comidasDia} onChange={e => set("comidasDia", e.target.value)}>
+              <option value="">Selecciona...</option>
+              {opciones(["1", "2", "3", "4", "5", "6", "Más de 6"])}
+            </select>
+
+            <span style={labelStyle}>Resumen de lo que comes en un día típico</span>
+            <div style={{ background: theme.surface, border: `1px solid ${theme.border}`, borderRadius: 10, overflow: "hidden", marginTop: 6 }}>
+              {[
+                { key: "desayuno", label: "🌅 Desayuno", placeholder: "Ej: 2 huevos, avena, café..." },
+                { key: "snack", label: "🍎 Snack", placeholder: "Ej: Fruta, yogur, nueces..." },
+                { key: "almuerzo", label: "🍽️ Almuerzo", placeholder: "Ej: Arroz, pollo, ensalada..." },
+                { key: "once", label: "☕ Once", placeholder: "Ej: Pan, queso, té..." },
+                { key: "cena", label: "🌙 Cena", placeholder: "Ej: Carne, papas, verduras..." },
+              ].map((c, i) => (
+                <div key={c.key} style={{ borderBottom: i < 4 ? `1px solid ${theme.border}` : "none" }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: theme.muted, padding: "8px 12px 2px", background: theme.card }}>{c.label}</div>
+                  <input
+                    style={{ background: "transparent", border: "none", padding: "6px 12px 10px", color: theme.text, fontSize: 12, width: "100%", outline: "none", boxSizing: "border-box" }}
+                    placeholder={c.placeholder}
+                    value={form[c.key] || ""}
+                    onChange={e => set(c.key, e.target.value)}
+                  />
+                </div>
+              ))}
+            </div>
+
+            <span style={labelStyle}>📸 Fotos corporales iniciales</span>
+            <div style={{ fontSize: 11, color: theme.muted, marginBottom: 8, marginTop: 4 }}>Se guardarán para comparar tu progreso cada 4 semanas</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              {[
+                { key: "fotoFrente", label: "Frente", emoji: "👤" },
+                { key: "fotoEspalda", label: "Espalda", emoji: "🔙" },
+                { key: "fotoPerfDer", label: "Perfil derecho", emoji: "➡️" },
+                { key: "fotoPerfIzq", label: "Perfil izquierdo", emoji: "⬅️" },
+              ].map(f => (
+                <label key={f.key} style={{
+                  background: form[f.key] ? `${theme.success}18` : theme.surface,
+                  border: `1px dashed ${form[f.key] ? theme.success : theme.border}`,
+                  borderRadius: 10, padding: "14px 8px",
+                  display: "flex", flexDirection: "column", alignItems: "center",
+                  justifyContent: "center", gap: 6, cursor: "pointer", textAlign: "center"
+                }}>
+                  <span style={{ fontSize: 24 }}>{form[f.key] ? "✅" : f.emoji}</span>
+                  <span style={{ fontSize: 11, color: form[f.key] ? theme.success : theme.muted, fontWeight: 600 }}>
+                    {form[f.key] ? "Foto cargada" : f.label}
+                  </span>
+                  <input type="file" accept="image/*" style={{ display: "none" }}
+                    onChange={e => { if (e.target.files[0]) set(f.key, e.target.files[0].name); }} />
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Botones navegación */}
+      <div style={{ padding: "12px 16px", background: theme.surface, borderTop: `1px solid ${theme.border}`, display: "flex", gap: 10 }}>
+        {paso > 1 && (
+          <button onClick={() => setPaso(paso - 1)} style={{
+            flex: 1, background: "transparent", border: `1px solid ${theme.border}`,
+            borderRadius: 10, padding: "12px", color: theme.muted,
+            fontSize: 14, fontWeight: 700, cursor: "pointer"
+          }}>← Anterior</button>
+        )}
+        {paso < totalPasos ? (
+          <button onClick={() => setPaso(paso + 1)} style={{
+            flex: 2, background: theme.accent, border: "none",
+            borderRadius: 10, padding: "12px", color: "#fff",
+            fontSize: 14, fontWeight: 700, cursor: "pointer"
+          }}>Siguiente →</button>
+        ) : (
+          <button onClick={() => onNav("alumno_home")} style={{
+            flex: 2, background: theme.success, border: "none",
+            borderRadius: 10, padding: "12px", color: "#fff",
+            fontSize: 14, fontWeight: 800, cursor: "pointer"
+          }}>✓ Enviar y comenzar</button>
+        )}
       </div>
     </div>
   );
@@ -789,7 +1061,7 @@ function CoachAlumno({ onNav }) {
 
 export default function App() {
   const [screen,setScreen]=useState("login");
-  const screenMap={ login:<LoginScreen onNav={setScreen}/>,alumno_home:<AlumnoHome onNav={setScreen}/>,rutina:<RutinaScreen onNav={setScreen}/>,nutricion:<NutricionScreen onNav={setScreen}/>,diario:<DiarioScreen onNav={setScreen}/>,checkin:<CheckinScreen onNav={setScreen}/>,progreso:<ProgresoScreen onNav={setScreen}/>,coach_panel:<CoachPanel onNav={setScreen}/>,coach_alumno:<CoachAlumno onNav={setScreen}/> };
+  const screenMap={ login:<LoginScreen onNav={setScreen}/>,anamnesis:<AnamnesisScreen onNav={setScreen}/>,alumno_home:<AlumnoHome onNav={setScreen}/>,rutina:<RutinaScreen onNav={setScreen}/>,nutricion:<NutricionScreen onNav={setScreen}/>,diario:<DiarioScreen onNav={setScreen}/>,checkin:<CheckinScreen onNav={setScreen}/>,progreso:<ProgresoScreen onNav={setScreen}/>,coach_panel:<CoachPanel onNav={setScreen}/>,coach_alumno:<CoachAlumno onNav={setScreen}/> };
   return (
     <div style={{ background:"#0d0d1a",minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Inter',-apple-system,sans-serif",padding:16 }}>
       <div style={{ textAlign:"center" }}>
@@ -800,7 +1072,7 @@ export default function App() {
           <div style={{ width:375,height:720,background:theme.bg,borderRadius:36,overflow:"hidden",position:"relative" }}>{screenMap[screen]}</div>
         </div>
         <div style={{ marginTop:20,display:"flex",gap:8,flexWrap:"wrap",justifyContent:"center",maxWidth:420 }}>
-          {[["login","Login"],["alumno_home","Inicio"],["rutina","Rutina"],["nutricion","Dieta"],["diario","Diario"],["checkin","Check-in"],["progreso","Progreso"],["coach_panel","Coach Panel"],["coach_alumno","Perfil Alumno"]].map(([id,label])=>(<button key={id} onClick={()=>setScreen(id)} style={{ background:screen===id?"#2563EB":"#13131a",border:`1px solid ${screen===id?"#2563EB":"#2a2a38"}`,color:screen===id?"#fff":"#666",borderRadius:8,padding:"6px 12px",fontSize:11,cursor:"pointer",fontWeight:600 }}>{label}</button>))}
+          {[["login","Login"],["anamnesis","Anamnesis"],["alumno_home","Inicio"],["rutina","Rutina"],["nutricion","Dieta"],["diario","Diario"],["checkin","Check-in"],["progreso","Progreso"],["coach_panel","Coach Panel"],["coach_alumno","Perfil Alumno"]].map(([id,label])=>(<button key={id} onClick={()=>setScreen(id)} style={{ background:screen===id?"#2563EB":"#13131a",border:`1px solid ${screen===id?"#2563EB":"#2a2a38"}`,color:screen===id?"#fff":"#666",borderRadius:8,padding:"6px 12px",fontSize:11,cursor:"pointer",fontWeight:600 }}>{label}</button>))}
         </div>
       </div>
     </div>
