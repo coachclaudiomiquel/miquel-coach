@@ -37,6 +37,23 @@ const NavBar = ({ active, onNav }) => {
 };
 
 function LoginScreen({ onNav }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleLogin = async () => {
+    setLoading(true);
+    setError("");
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) {
+      setError("Correo o contraseña incorrectos");
+    } else {
+      onNav("alumno_home");
+    }
+    setLoading(false);
+  };
+
   return (
     <div style={{ padding: "28px 32px", display: "flex", flexDirection: "column", gap: 20, justifyContent: "center", height: "100%", boxSizing: "border-box" }}>
       <div style={{ textAlign: "center", marginBottom: 4 }}>
@@ -46,17 +63,88 @@ function LoginScreen({ onNav }) {
         <div style={{ fontSize: 12, color: theme.muted, marginTop: 10, letterSpacing: 0.3 }}>Transformando disciplina en resultados</div>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        <Input placeholder="Correo electrónico" type="email" />
-        <Input placeholder="Contraseña" type="password" />
-        <Btn onClick={() => onNav("alumno_home")}>Iniciar Sesión</Btn>
+        <Input placeholder="Correo electrónico" type="email" value={email} onChange={e => setEmail(e.target.value)} />
+        <Input placeholder="Contraseña" type="password" value={password} onChange={e => setPassword(e.target.value)} />
+        {error && <div style={{ color: theme.danger, fontSize: 12, textAlign: "center" }}>{error}</div>}
+        <Btn onClick={handleLogin}>{loading ? "Cargando..." : "Iniciar Sesión"}</Btn>
       </div>
       <div style={{ textAlign: "center", display: "flex", flexDirection: "column", gap: 10 }}>
         <span style={{ color: theme.accentLight, fontSize: 13, cursor: "pointer" }}>¿Olvidaste tu contraseña?</span>
         <div style={{ borderTop: `1px solid ${theme.border}`, paddingTop: 10 }}>
           <span style={{ color: theme.muted, fontSize: 13 }}>¿Sin cuenta? </span>
-          <span onClick={() => onNav("anamnesis")} style={{ color: theme.accentLight, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Crear cuenta</span>
+          <span onClick={() => onNav("registro")} style={{ color: theme.accentLight, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Crear cuenta</span>
         </div>
         <Btn variant="ghost" onClick={() => onNav("coach_panel")} style={{ marginTop: 2 }}>👤 Entrar como Coach</Btn>
+      </div>
+    </div>
+  );
+}
+
+function RegistroScreen({ onNav }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmar, setConfirmar] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleRegistro = async () => {
+    if (!email || !password || !confirmar) {
+      setError("Completa todos los campos");
+      return;
+    }
+    if (password !== confirmar) {
+      setError("Las contraseñas no coinciden");
+      return;
+    }
+    if (password.length < 6) {
+      setError("La contraseña debe tener al menos 6 caracteres");
+      return;
+    }
+    setLoading(true);
+    setError("");
+    const { error } = await supabase.auth.signUp({ email, password });
+    if (error) {
+      setError("Error al crear cuenta. Intenta de nuevo.");
+    } else {
+      onNav("anamnesis");
+    }
+    setLoading(false);
+  };
+
+  return (
+    <div style={{ padding: "28px 32px", display: "flex", flexDirection: "column", gap: 20, justifyContent: "center", height: "100%", boxSizing: "border-box" }}>
+      <div style={{ textAlign: "center", marginBottom: 4 }}>
+        <img src={ICON} alt="Miquel Coach Performance" style={{ width: 100, height: 90, objectFit: "contain", display: "block", margin: "0 auto 14px" }} />
+        <div style={{ fontSize: 20, fontWeight: 900, letterSpacing: 1, color: theme.text }}>CREAR CUENTA</div>
+        <div style={{ fontSize: 12, color: theme.muted, marginTop: 6 }}>Completa tus datos para comenzar</div>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div>
+          <div style={{ fontSize: 11, color: theme.muted, fontWeight: 600, marginBottom: 6 }}>CORREO ELECTRÓNICO</div>
+          <Input placeholder="tu@correo.com" type="email" value={email} onChange={e => setEmail(e.target.value)} />
+        </div>
+        <div>
+          <div style={{ fontSize: 11, color: theme.muted, fontWeight: 600, marginBottom: 6 }}>CONTRASEÑA</div>
+          <Input placeholder="Mínimo 6 caracteres" type="password" value={password} onChange={e => setPassword(e.target.value)} />
+        </div>
+        <div>
+          <div style={{ fontSize: 11, color: theme.muted, fontWeight: 600, marginBottom: 6 }}>CONFIRMAR CONTRASEÑA</div>
+          <Input placeholder="Repite tu contraseña" type="password" value={confirmar} onChange={e => setConfirmar(e.target.value)} />
+        </div>
+
+        {error && (
+          <div style={{ background: `${theme.danger}18`, border: `1px solid ${theme.danger}44`, borderRadius: 8, padding: "10px 14px", fontSize: 12, color: theme.danger, textAlign: "center" }}>
+            {error}
+          </div>
+        )}
+
+        <Btn onClick={handleRegistro}>{loading ? "Creando cuenta..." : "Crear cuenta →"}</Btn>
+      </div>
+
+      <div style={{ textAlign: "center" }}>
+        <span style={{ color: theme.muted, fontSize: 13 }}>¿Ya tienes cuenta? </span>
+        <span onClick={() => onNav("login")} style={{ color: theme.accentLight, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Iniciar sesión</span>
       </div>
     </div>
   );
@@ -1061,7 +1149,7 @@ function CoachAlumno({ onNav }) {
 
 export default function App() {
   const [screen,setScreen]=useState("login");
-  const screenMap={ login:<LoginScreen onNav={setScreen}/>,anamnesis:<AnamnesisScreen onNav={setScreen}/>,alumno_home:<AlumnoHome onNav={setScreen}/>,rutina:<RutinaScreen onNav={setScreen}/>,nutricion:<NutricionScreen onNav={setScreen}/>,diario:<DiarioScreen onNav={setScreen}/>,checkin:<CheckinScreen onNav={setScreen}/>,progreso:<ProgresoScreen onNav={setScreen}/>,coach_panel:<CoachPanel onNav={setScreen}/>,coach_alumno:<CoachAlumno onNav={setScreen}/> };
+  const screenMap={ login:<LoginScreen onNav={setScreen}/>,registro:<RegistroScreen onNav={setScreen}/>,anamnesis:<AnamnesisScreen onNav={setScreen}/>,alumno_home:<AlumnoHome onNav={setScreen}/>,rutina:<RutinaScreen onNav={setScreen}/>,nutricion:<NutricionScreen onNav={setScreen}/>,diario:<DiarioScreen onNav={setScreen}/>,checkin:<CheckinScreen onNav={setScreen}/>,progreso:<ProgresoScreen onNav={setScreen}/>,coach_panel:<CoachPanel onNav={setScreen}/>,coach_alumno:<CoachAlumno onNav={setScreen}/> };
   return (
     <div style={{ background:"#0d0d1a",minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Inter',-apple-system,sans-serif",padding:16 }}>
       <div style={{ textAlign:"center" }}>
@@ -1072,7 +1160,7 @@ export default function App() {
           <div style={{ width:375,height:720,background:theme.bg,borderRadius:36,overflow:"hidden",position:"relative" }}>{screenMap[screen]}</div>
         </div>
         <div style={{ marginTop:20,display:"flex",gap:8,flexWrap:"wrap",justifyContent:"center",maxWidth:420 }}>
-          {[["login","Login"],["anamnesis","Anamnesis"],["alumno_home","Inicio"],["rutina","Rutina"],["nutricion","Dieta"],["diario","Diario"],["checkin","Check-in"],["progreso","Progreso"],["coach_panel","Coach Panel"],["coach_alumno","Perfil Alumno"]].map(([id,label])=>(<button key={id} onClick={()=>setScreen(id)} style={{ background:screen===id?"#2563EB":"#13131a",border:`1px solid ${screen===id?"#2563EB":"#2a2a38"}`,color:screen===id?"#fff":"#666",borderRadius:8,padding:"6px 12px",fontSize:11,cursor:"pointer",fontWeight:600 }}>{label}</button>))}
+          {[["login","Login"],["registro","Registro"],["anamnesis","Anamnesis"],["alumno_home","Inicio"],["rutina","Rutina"],["nutricion","Dieta"],["diario","Diario"],["checkin","Check-in"],["progreso","Progreso"],["coach_panel","Coach Panel"],["coach_alumno","Perfil Alumno"]].map(([id,label])=>(<button key={id} onClick={()=>setScreen(id)} style={{ background:screen===id?"#2563EB":"#13131a",border:`1px solid ${screen===id?"#2563EB":"#2a2a38"}`,color:screen===id?"#fff":"#666",borderRadius:8,padding:"6px 12px",fontSize:11,cursor:"pointer",fontWeight:600 }}>{label}</button>))}
         </div>
       </div>
     </div>
