@@ -46,11 +46,16 @@ function LoginScreen({ onNav }) {
   const handleLogin = async () => {
     setLoading(true);
     setError("");
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) {
       setError("Correo o contraseña incorrectos");
     } else {
-      onNav("alumno_home");
+      const COACH_EMAIL = "coach.claudiomiquel@gmail.com";
+      if (data.user.email === COACH_EMAIL) {
+        onNav("coach_panel");
+      } else {
+        onNav("alumno_home");
+      }
     }
     setLoading(false);
   };
@@ -1106,19 +1111,108 @@ function ProgresoScreen({ onNav }) {
 }
 
 function CoachPanel({ onNav }) {
-  const [pagos, setPagos] = useState([
+  const [alumnos, setAlumnos] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [seleccionado, setSeleccionado] = useState(null);
+
+  useEffect(() => {
+    const cargarAlumnos = async () => {
+      const { data } = await supabase
+        .from("usuarios")
+        .select("id, nombre, email, objetivo, peso_actual, created_at")
+        .order("created_at", { ascending: false });
+      if (data) setAlumnos(data.filter(a => a.email !== "coach.claudiomiquel@gmail.com"));
+      setLoading(false);
+    };
+    cargarAlumnos();
+  }, []);
+
+  const pagos = [
     { nombre: "Valentina S.", estado: "vencido", diasText: "Vencido hace 5 días", bloqueado: false },
     { nombre: "Matías C.", estado: "por_vencer", diasText: "Vence en 3 días", bloqueado: false },
-    { nombre: "Daniela R.", estado: "reportado", diasText: "Transfirió hoy — pendiente confirmar", bloqueado: false },
-  ]);
-  const confirmarPago = (i) => { const upd=[...pagos]; upd.splice(i,1); setPagos(upd); };
-  const bloquear = (i) => { const upd=[...pagos]; upd[i].bloqueado=!upd[i].bloqueado; setPagos(upd); };
-  const alumnos = [
-    { nombre:"Rodrigo M.",objetivo:"Volumen",semana:8,checkin:"Pendiente",pago:"ok" },
-    { nombre:"Felipe A.",objetivo:"Definición",semana:4,checkin:"Revisado",pago:"ok" },
-    { nombre:"Valentina S.",objetivo:"Recomposición",semana:11,checkin:"Pendiente",pago:"vencido" },
-    { nombre:"Matías C.",objetivo:"Fuerza",semana:2,checkin:"Revisado",pago:"por_vencer" },
   ];
+  const [pagosList, setPagosList] = useState(pagos);
+  const confirmarPago = (i) => { const upd=[...pagosList]; upd.splice(i,1); setPagosList(upd); };
+  const bloquear = (i) => { const upd=[...pagosList]; upd[i].bloqueado=!upd[i].bloqueado; setPagosList(upd); };
+
+  return (
+    <div style={{ padding:"20px 16px 24px",overflowY:"auto",height:"100%",boxSizing:"border-box" }}>
+      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20 }}>
+        <div>
+          <div style={{ display:"flex",alignItems:"center",gap:8,marginBottom:2 }}>
+            <img src={ICON} alt="logo" style={{ width:28,height:18,objectFit:"contain" }}/>
+            <div style={{ fontSize:18,fontWeight:900,letterSpacing:1,color:theme.text }}>MIQUEL COACH</div>
+          </div>
+          <div style={{ fontSize:10,fontWeight:800,color:theme.accentLight,letterSpacing:4 }}>PERFORMANCE</div>
+        </div>
+        <Btn onClick={() => { supabase.auth.signOut(); onNav("login"); }} variant="ghost" style={{ width:"auto",padding:"8px 14px",fontSize:12 }}>Salir</Btn>
+      </div>
+
+      {/* Métricas */}
+      <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:16 }}>
+        {[
+          { label:"Alumnos", value: String(alumnos.length), icon:"👥", color:theme.accentLight },
+          { label:"Check-ins", value:"0", icon:"📋", color:theme.warning },
+          { label:"Sin pago", value:String(pagosList.length), icon:"💳", color:theme.danger },
+        ].map(m=>(
+          <Card key={m.label} style={{ textAlign:"center",padding:14 }}>
+            <div style={{ fontSize:20 }}>{m.icon}</div>
+            <div style={{ fontSize:22,fontWeight:900,color:m.color,marginTop:4 }}>{m.value}</div>
+            <div style={{ fontSize:10,color:theme.muted }}>{m.label}</div>
+          </Card>
+        ))}
+      </div>
+
+      {/* Lista alumnos reales */}
+      <div style={{ fontSize:12,color:theme.muted,marginBottom:10 }}>ALUMNOS REGISTRADOS</div>
+      {loading ? (
+        <Card style={{ textAlign:"center",padding:20 }}>
+          <div style={{ color:theme.muted,fontSize:13 }}>Cargando alumnos...</div>
+        </Card>
+      ) : alumnos.length === 0 ? (
+        <Card style={{ textAlign:"center",padding:20 }}>
+          <div style={{ fontSize:24,marginBottom:8 }}>👥</div>
+          <div style={{ color:theme.muted,fontSize:13 }}>Aún no hay alumnos registrados</div>
+        </Card>
+      ) : (
+        alumnos.map(a => (
+          <Card key={a.id} style={{ marginBottom:10,cursor:"pointer" }} onClick={() => { setSeleccionado(a); onNav("coach_alumno"); }}>
+            <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center" }}>
+              <div style={{ display:"flex",alignItems:"center",gap:12 }}>
+                <div style={{ width:40,height:40,borderRadius:12,background:theme.accent,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,fontWeight:800 }}>
+                  {a.nombre ? a.nombre[0].toUpperCase() : "?"}
+                </div>
+                <div>
+                  <div style={{ fontSize:14,fontWeight:700,color:theme.text }}>{a.nombre || "Sin nombre"}</div>
+                  <div style={{ fontSize:12,color:theme.muted }}>{a.objetivo || "Sin objetivo"} · {a.peso_actual ? a.peso_actual + " kg" : "Sin peso"}</div>
+                </div>
+              </div>
+              <div style={{ fontSize:11,color:theme.muted }}>{a.email}</div>
+            </div>
+          </Card>
+        ))
+      )}
+
+      {/* Pagos pendientes */}
+      {pagosList.length > 0 && (<>
+        <div style={{ fontSize:12,color:theme.muted,marginBottom:10,marginTop:16 }}>💳 PAGOS PENDIENTES</div>
+        {pagosList.map((p,i)=>(
+          <div key={i} style={{ background:p.estado==="vencido"?`${theme.danger}10`:`${theme.warning}10`,border:`1px solid ${p.estado==="vencido"?theme.danger+"44":theme.warning+"44"}`,borderRadius:12,padding:"12px 14px",marginBottom:10 }}>
+            <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10 }}>
+              <div><div style={{ fontSize:14,fontWeight:700,color:theme.text }}>{p.nombre}</div><div style={{ fontSize:12,color:theme.muted,marginTop:2 }}>{p.diasText}</div></div>
+              <Tag color={p.estado==="vencido"?theme.danger:theme.warning}>{p.estado==="vencido"?"Vencido":"Por vencer"}</Tag>
+            </div>
+            <div style={{ display:"flex",gap:8 }}>
+              <button onClick={()=>bloquear(i)} style={{ flex:1,background:p.bloqueado?`${theme.success}22`:`${theme.danger}22`,border:`1px solid ${p.bloqueado?theme.success+"55":theme.danger+"55"}`,borderRadius:8,padding:"7px",color:p.bloqueado?theme.success:theme.danger,fontSize:12,fontWeight:700,cursor:"pointer" }}>
+                {p.bloqueado?"🔓 Desbloquear":"🔒 Bloquear acceso"}
+              </button>
+            </div>
+          </div>
+        ))}
+      </>)}
+    </div>
+  );
+}
   return (
     <div style={{ padding:"20px 16px 24px",overflowY:"auto",height:"100%",boxSizing:"border-box" }}>
       <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20 }}>
