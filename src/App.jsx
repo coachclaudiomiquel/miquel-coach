@@ -413,45 +413,50 @@ function AnamnesisScreen({ onNav }) {
           }}>Siguiente →</button>
         ) : (
           <button onClick={async () => {
-            const { data: { user } } = await supabase.auth.getUser();
-            if (user) {
-              await supabase.from("usuarios").upsert({
-                id: user.id,
-                nombre: form.nombre,
-                email: user.email,
-                edad: parseInt(form.edad),
-                sexo: form.sexo,
-                ocupacion: form.ocupacion,
-                actividad_laboral: form.actividadLaboral,
-                whatsapp: form.whatsapp,
-                instagram: form.instagram,
-                peso_actual: parseFloat(form.peso),
-                estatura: parseFloat(form.estatura),
-                porc_grasa: parseFloat(form.porcGrasa),
-                objetivo: form.objetivo,
-                ha_entrenado: form.haEntrenado,
-                que_entrenamiento: form.queEntrenamiento,
-                dias_semana: form.diasSemana,
-                horario_entreno: form.horarioEntreno,
-                enfermedad_lesion: form.enfermedadLesion,
-                cual_enfermedad: form.cualEnfermedad,
-                medicamento: form.medicamento,
-                cual_medicamento: form.cualMedicamento,
-                sustancia_farmacologica: form.sustanciaFarmacologica,
-                alimentacion_diferente: form.alimentacionDiferente,
-                alergia: form.alergia,
-                cual_alergia: form.cualAlergia,
-                no_le_gustan: form.noLeGustan,
-                favoritos: form.favoritos,
-                hora_levanta: form.horaLevanta,
-                hora_duerme: form.horaDuerme,
-                comidas_dia: form.comidasDia,
-                resumen_desayuno: form.desayuno,
-                resumen_snack: form.snack,
-                resumen_almuerzo: form.almuerzo,
-                resumen_once: form.once,
-                resumen_cena: form.cena,
-              });
+            try {
+              const { data: { user } } = await supabase.auth.getUser();
+              if (user) {
+                const { error } = await supabase.from("usuarios").upsert({
+                  id: user.id,
+                  nombre: form.nombre,
+                  email: user.email,
+                  edad: parseInt(form.edad) || null,
+                  sexo: form.sexo,
+                  ocupacion: form.ocupacion,
+                  actividad_laboral: form.actividadLaboral,
+                  whatsapp: form.whatsapp,
+                  instagram: form.instagram,
+                  peso_actual: parseFloat(form.peso) || null,
+                  estatura: parseFloat(form.estatura) || null,
+                  porc_grasa: parseFloat(form.porcGrasa) || null,
+                  objetivo: form.objetivo,
+                  ha_entrenado: form.haEntrenado,
+                  que_entrenamiento: form.queEntrenamiento,
+                  dias_semana: form.diasSemana,
+                  horario_entreno: form.horarioEntreno,
+                  enfermedad_lesion: form.enfermedadLesion,
+                  cual_enfermedad: form.cualEnfermedad,
+                  medicamento: form.medicamento,
+                  cual_medicamento: form.cualMedicamento,
+                  sustancia_farmacologica: form.sustanciaFarmacologica,
+                  alimentacion_diferente: form.alimentacionDiferente,
+                  alergia: form.alergia,
+                  cual_alergia: form.cualAlergia,
+                  no_le_gustan: form.noLeGustan,
+                  favoritos: form.favoritos,
+                  hora_levanta: form.horaLevanta,
+                  hora_duerme: form.horaDuerme,
+                  comidas_dia: form.comidasDia,
+                  resumen_desayuno: form.desayuno,
+                  resumen_snack: form.snack,
+                  resumen_almuerzo: form.almuerzo,
+                  resumen_once: form.once,
+                  resumen_cena: form.cena,
+                }, { onConflict: "id" });
+                if (error) console.error("Error guardando anamnesis:", error.message);
+              }
+            } catch(e) {
+              console.error("Error:", e);
             }
             onNav("alumno_home");
           }} style={{
