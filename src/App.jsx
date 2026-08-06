@@ -478,46 +478,42 @@ function AnamnesisScreen({ onNav }) {
 function AlumnoHome({ onNav }) {
   const [pagoReportado, setPagoReportado] = useState(false);
   const [nombre, setNombre] = useState("Alumno");
-  const pagoVencido = true;
+  const [rutina, setRutina] = useState(null);
+  const pagoVencido = false;
   const diasRestantes = 2;
 
   useEffect(() => {
-    const cargarNombre = async () => {
+    const cargar = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
-        const { data } = await supabase.from("usuarios").select("nombre").eq("id", user.id).single();
-        if (data?.nombre) setNombre(data.nombre.split(" ")[0]);
+        const { data: usuario } = await supabase.from("usuarios").select("nombre").eq("id", user.id).single();
+        if (usuario?.nombre) setNombre(usuario.nombre.split(" ")[0]);
+
+        const { data: rutinas } = await supabase
+          .from("rutinas")
+          .select("*, ejercicios(*)")
+          .eq("usuario_id", user.id)
+          .order("created_at", { ascending: false })
+          .limit(1);
+        if (rutinas && rutinas.length > 0) setRutina(rutinas[0]);
       }
     };
-    cargarNombre();
+    cargar();
   }, []);
 
   return (
     <div style={{ padding: "20px 16px 90px", overflowY: "auto", height: "100%", boxSizing: "border-box" }}>
-      {pagoVencido && (
-        <div style={{ background: `${theme.danger}15`, border: `1px solid ${theme.danger}55`, borderRadius: 14, padding: "14px 16px", marginBottom: 16 }}>
-          <div style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 12 }}>
-            <span style={{ fontSize: 22 }}>⚠️</span>
-            <div>
-              <div style={{ fontSize: 14, fontWeight: 800, color: theme.danger, marginBottom: 3 }}>Pago pendiente — {diasRestantes} días para cierre</div>
-              <div style={{ fontSize: 12, color: theme.muted, lineHeight: 1.5 }}>Realiza tu transferencia y avísale a tu coach aquí abajo para mantener el acceso.</div>
-            </div>
-          </div>
-          {!pagoReportado
-            ? <button onClick={() => setPagoReportado(true)} style={{ background: theme.accent, border: "none", borderRadius: 10, padding: "10px 16px", color: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer", width: "100%" }}>✓ Ya realicé la transferencia</button>
-            : <div style={{ background: `${theme.success}18`, border: `1px solid ${theme.success}44`, borderRadius: 10, padding: "10px 14px", textAlign: "center" }}><span style={{ fontSize: 13, fontWeight: 700, color: theme.success }}>✅ Aviso enviado al coach — en revisión</span></div>
-          }
-        </div>
-      )}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
         <div>
           <div style={{ color: theme.muted, fontSize: 12 }}>BUENOS DÍAS</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: theme.text }}>Hola, {nombre} 👋</div>
         </div>
-        <div style={{ width: 40, height: 40, borderRadius: 20, background: theme.accent, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>C</div>
+        <div style={{ width: 40, height: 40, borderRadius: 20, background: theme.accent, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>
+          {nombre[0]?.toUpperCase() || "A"}
+        </div>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
-        {[{ label: "Peso actual", value: "89.5 kg", icon: "⚖️" }, { label: "Calorías", value: "3.200 kcal", icon: "🔥" }, { label: "Próximo check-in", value: "3 días", icon: "📅" }, { label: "Semana", value: "Semana 6", icon: "📆" }].map(s => (
+        {[{ label: "Peso actual", value: "— kg", icon: "⚖️" }, { label: "Calorías", value: "— kcal", icon: "🔥" }, { label: "Próximo check-in", value: "—", icon: "📅" }, { label: "Semana", value: "—", icon: "📆" }].map(s => (
           <Card key={s.label} style={{ padding: 14 }}>
             <div style={{ fontSize: 18, marginBottom: 4 }}>{s.icon}</div>
             <div style={{ fontSize: 18, fontWeight: 800, color: theme.text }}>{s.value}</div>
@@ -525,21 +521,36 @@ function AlumnoHome({ onNav }) {
           </Card>
         ))}
       </div>
-      <Card style={{ marginBottom: 14, background: "linear-gradient(135deg,#1a1a2e,#16213e)", border: `1px solid ${theme.accent}44` }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}><Tag>HOY</Tag><span style={{ fontSize: 11, color: theme.muted }}>Push A</span></div>
-        <div style={{ fontSize: 17, fontWeight: 700, color: theme.text, marginBottom: 12 }}>Entrenamiento de hoy</div>
-        <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
-          {["Press Banca", "Press Inclinado", "Fondos", "Laterales"].map(e => (<span key={e} style={{ background: theme.border, borderRadius: 6, padding: "4px 8px", fontSize: 11, color: theme.muted }}>{e}</span>))}
-        </div>
-        <Btn onClick={() => onNav("rutina")}>Comenzar Entrenamiento →</Btn>
-      </Card>
+
+      {rutina ? (
+        <Card style={{ marginBottom: 14, background: "linear-gradient(135deg,#1a1a2e,#16213e)", border: `1px solid ${theme.accent}44` }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <Tag>HOY</Tag>
+            <span style={{ fontSize: 11, color: theme.muted }}>{rutina.dia || ""}</span>
+          </div>
+          <div style={{ fontSize: 17, fontWeight: 700, color: theme.text, marginBottom: 12 }}>{rutina.nombre}</div>
+          <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+            {rutina.ejercicios?.slice(0, 4).map(e => (
+              <span key={e.id} style={{ background: theme.border, borderRadius: 6, padding: "4px 8px", fontSize: 11, color: theme.muted }}>{e.nombre}</span>
+            ))}
+          </div>
+          <Btn onClick={() => onNav("rutina")}>Comenzar Entrenamiento →</Btn>
+        </Card>
+      ) : (
+        <Card style={{ marginBottom: 14, textAlign: "center", padding: 24 }}>
+          <div style={{ fontSize: 24, marginBottom: 8 }}>💪</div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: theme.text, marginBottom: 4 }}>Sin rutina asignada</div>
+          <div style={{ fontSize: 12, color: theme.muted }}>Tu coach aún no ha creado tu plan</div>
+        </Card>
+      )}
+
       <Card>
         <div style={{ fontSize: 11, color: theme.muted, marginBottom: 6 }}>ÚLTIMO MENSAJE DEL COACH</div>
         <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
           <div style={{ width: 32, height: 32, borderRadius: 16, background: theme.accent, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, flexShrink: 0 }}>M</div>
           <div>
-            <div style={{ fontSize: 13, color: theme.text, lineHeight: 1.5 }}>"Excelente progreso esta semana. El peso en banca mejoró bien."</div>
-            <div style={{ fontSize: 11, color: theme.muted, marginTop: 4 }}>Coach Claudio · hace 2 días</div>
+            <div style={{ fontSize: 13, color: theme.text, lineHeight: 1.5 }}>"Bienvenido a Miquel Coach Performance 💪"</div>
+            <div style={{ fontSize: 11, color: theme.muted, marginTop: 4 }}>Coach Claudio</div>
           </div>
         </div>
       </Card>
@@ -549,44 +560,36 @@ function AlumnoHome({ onNav }) {
 }
 
 function RutinaScreen({ onNav }) {
-  const calentamiento = [
-    "Movilidad articular de hombros — 2x10 círculos",
-    "Rotación de cadera — 2x10 cada lado",
-    "Press banca vacío — 2x15 reps",
-    "Estiramiento pectoral en marco — 30 seg",
-  ];
-
-  const cardio = {
-    tipo: "Caminata + Pasos diarios",
-    detalle: "Objetivo: 8.000 pasos diarios",
-    postEntreno: "10 min caminata moderada post-entreno",
-  };
-
-  const ejercicios = [
-    {
-      id: 1, nombre: "Press Banca", descanso: 120, video: true,
-      anteriorSemana: [{ kg: "100", reps: "8" }, { kg: "100", reps: "7" }, { kg: "97.5", reps: "7" }, { kg: "97.5", reps: "6" }],
-      aproximacion: [{ kg: "60", reps: "10" }, { kg: "80", reps: "5" }, { kg: "95", reps: "2" }],
-      series: [{ reps: "10", rir: 2 }, { reps: "10", rir: 1 }, { reps: "8", rir: 1 }, { reps: "8", rir: 0 }]
-    },
-    {
-      id: 2, nombre: "Press Inclinado Mancuernas", descanso: 90, video: true,
-      anteriorSemana: [{ kg: "28", reps: "10" }, { kg: "28", reps: "9" }, { kg: "26", reps: "9" }],
-      aproximacion: [{ kg: "16", reps: "10" }, { kg: "22", reps: "5" }],
-      series: [{ reps: "10", rir: 2 }, { reps: "10", rir: 2 }, { reps: "8", rir: 1 }]
-    },
-    {
-      id: 3, nombre: "Aperturas en Polea", descanso: 60, video: true,
-      anteriorSemana: [{ kg: "15", reps: "15" }, { kg: "15", reps: "13" }, { kg: "12.5", reps: "13" }],
-      aproximacion: [{ kg: "8", reps: "12" }],
-      series: [{ reps: "15", rir: 2 }, { reps: "12", rir: 1 }, { reps: "12", rir: 1 }]
-    },
-  ];
-
+  const [rutinas, setRutinas] = useState([]);
+  const [rutinaActiva, setRutinaActiva] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [registros, setRegistros] = useState({});
   const [completado, setCompletado] = useState(false);
-  const [verHistorial, setVerHistorial] = useState({});
   const [verCalentamiento, setVerCalentamiento] = useState(false);
+
+  useEffect(() => {
+    setCompletado(false);
+    setRegistros({});
+  }, [rutinaActiva]);
+
+  useEffect(() => {
+    const cargar = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        const { data } = await supabase
+          .from("rutinas")
+          .select("*, ejercicios(*)")
+          .eq("usuario_id", user.id)
+          .order("created_at", { ascending: false });
+        if (data && data.length > 0) {
+          setRutinas(data);
+          setRutinaActiva(data[0]);
+        }
+      }
+      setLoading(false);
+    };
+    cargar();
+  }, []);
 
   const setReg = (ejId, sIdx, campo, val) => {
     const key = `${ejId}-${sIdx}`;
@@ -596,151 +599,119 @@ function RutinaScreen({ onNav }) {
   const getRirColor = (rir) => rir === 0 ? "#EF4444" : rir === 1 ? "#F59E0B" : "#10B981";
   const getRirLabel = (rir) => rir === 0 ? "Fallo" : rir === 1 ? "RIR 1" : "RIR 2";
 
+  if (loading) return (
+    <div style={{ padding: "20px 16px 90px", height: "100%", boxSizing: "border-box", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ color: theme.muted }}>Cargando rutina...</div>
+    </div>
+  );
+
+  if (!rutinaActiva) return (
+    <div style={{ padding: "20px 16px 90px", height: "100%", boxSizing: "border-box" }}>
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ color: theme.muted, fontSize: 12 }}>ENTRENAMIENTO</div>
+        <div style={{ fontSize: 22, fontWeight: 800, color: theme.text }}>Sin rutina 💪</div>
+      </div>
+      <Card style={{ textAlign: "center", padding: 40 }}>
+        <div style={{ fontSize: 32, marginBottom: 12 }}>📋</div>
+        <div style={{ fontSize: 15, fontWeight: 700, color: theme.text, marginBottom: 8 }}>Tu coach aún no ha asignado una rutina</div>
+        <div style={{ fontSize: 13, color: theme.muted }}>Cuando tu coach cree tu plan de entrenamiento aparecerá aquí</div>
+      </Card>
+      <NavBar active="rutina" onNav={onNav} />
+    </div>
+  );
+
+  const ejercicios = rutinaActiva.ejercicios?.sort((a, b) => a.orden - b.orden) || [];
+
   return (
     <div style={{ padding: "20px 16px 90px", overflowY: "auto", height: "100%", boxSizing: "border-box" }}>
       <div style={{ marginBottom: 16 }}>
-        <div style={{ color: theme.muted, fontSize: 12, marginBottom: 4 }}>ENTRENAMIENTO · LUNES</div>
-        <div style={{ fontSize: 22, fontWeight: 800, color: theme.text }}>Push A 💪</div>
+        <div style={{ color: theme.muted, fontSize: 12, marginBottom: 4 }}>ENTRENAMIENTO · {rutinaActiva.dia?.toUpperCase() || ""}</div>
+        <div style={{ fontSize: 22, fontWeight: 800, color: theme.text }}>{rutinaActiva.nombre} 💪</div>
       </div>
 
-      {/* CALENTAMIENTO */}
-      <Card style={{ marginBottom: 14, border: `1px solid ${theme.warning}44`, background: "#1a160a" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}
-          onClick={() => setVerCalentamiento(!verCalentamiento)}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontSize: 18 }}>🔥</span>
-            <div style={{ fontSize: 14, fontWeight: 700, color: theme.warning }}>Calentamiento previo</div>
-          </div>
-          <span style={{ color: theme.warning, fontSize: 16 }}>{verCalentamiento ? "▲" : "▼"}</span>
-        </div>
-        {verCalentamiento && (
-          <div style={{ marginTop: 12 }}>
-            {calentamiento.map((c, i) => (
-              <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 8 }}>
-                <div style={{ width: 20, height: 20, borderRadius: 10, background: `${theme.warning}33`, border: `1px solid ${theme.warning}55`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 800, color: theme.warning, flexShrink: 0 }}>{i + 1}</div>
-                <span style={{ fontSize: 12, color: theme.muted, lineHeight: 1.5 }}>{c}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </Card>
-
-      {/* EJERCICIOS */}
-      {ejercicios.map((ej) => (
-        <Card key={ej.id} style={{ marginBottom: 14 }}>
-          {/* Header */}
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
-            <div>
-              <div style={{ fontSize: 15, fontWeight: 700, color: theme.text, marginBottom: 4 }}>{ej.nombre}</div>
-              <div style={{ fontSize: 11, color: theme.muted }}>⏱ Descanso entre series: {ej.descanso}s</div>
-            </div>
-            <div style={{ width: 36, height: 36, borderRadius: 10, background: theme.surface, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", border: `1px solid ${theme.border}`, flexShrink: 0 }}>▶️</div>
-          </div>
-
-          {/* Historial semana anterior */}
-          <div style={{ marginBottom: 10 }}>
-            <button onClick={() => setVerHistorial(prev => ({ ...prev, [ej.id]: !prev[ej.id] }))}
-              style={{ background: `${theme.accent}15`, border: `1px solid ${theme.accent}33`, borderRadius: 8, padding: "5px 10px", color: theme.accentLight, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
-              {verHistorial[ej.id] ? "▲ Ocultar semana anterior" : "▼ Ver semana anterior"}
+      {/* Selector de rutina si hay más de una */}
+      {rutinas.length > 1 && (
+        <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+          {rutinas.map(r => (
+            <button key={r.id} onClick={() => { setRutinaActiva(r); setCompletado(false); setRegistros({}); }}
+              style={{ background: rutinaActiva.id === r.id ? theme.accent : theme.surface, border: `1px solid ${rutinaActiva.id === r.id ? theme.accent : theme.border}`, borderRadius: 8, padding: "6px 12px", color: rutinaActiva.id === r.id ? "#fff" : theme.muted, fontSize: 12, cursor: "pointer", fontWeight: 600 }}>
+              {r.nombre}
             </button>
-            {verHistorial[ej.id] && (
-              <div style={{ marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap" }}>
-                {ej.anteriorSemana.map((h, i) => (
-                  <div key={i} style={{ background: theme.surface, border: `1px solid ${theme.border}`, borderRadius: 8, padding: "6px 10px", textAlign: "center" }}>
-                    <div style={{ fontSize: 11, fontWeight: 800, color: theme.muted }}>S{i + 1}</div>
-                    <div style={{ fontSize: 12, color: theme.text, fontWeight: 700 }}>{h.kg}kg</div>
-                    <div style={{ fontSize: 10, color: theme.muted }}>×{h.reps}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+          ))}
+        </div>
+      )}
 
-          {/* Series de aproximación */}
-          <div style={{ marginBottom: 10, background: `${theme.warning}10`, border: `1px solid ${theme.warning}33`, borderRadius: 10, padding: "8px 10px" }}>
-            <div style={{ fontSize: 10, fontWeight: 800, color: theme.warning, marginBottom: 6 }}>🎯 SERIES DE APROXIMACIÓN</div>
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-              {ej.aproximacion.map((a, i) => (
-                <div key={i} style={{ background: theme.surface, borderRadius: 8, padding: "5px 10px", textAlign: "center", border: `1px solid ${theme.border}` }}>
-                  <div style={{ fontSize: 10, color: theme.warning, fontWeight: 700 }}>Aprox {i + 1}</div>
-                  <div style={{ fontSize: 12, fontWeight: 800, color: theme.text }}>{a.kg}kg</div>
-                  <div style={{ fontSize: 10, color: theme.muted }}>×{a.reps}</div>
-                </div>
+      {/* Ejercicios */}
+      {ejercicios.map((ej) => {
+        const series = Array.isArray(ej.series) ? ej.series : [];
+        return (
+          <Card key={ej.id} style={{ marginBottom: 14 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: theme.text, marginBottom: 4 }}>{ej.nombre}</div>
+                <div style={{ fontSize: 11, color: theme.muted }}>⏱ Descanso: {ej.descanso}s</div>
+              </div>
+              {ej.video_url && (
+                <a href={ej.video_url} target="_blank" rel="noreferrer" style={{ width: 36, height: 36, borderRadius: 10, background: theme.surface, display: "flex", alignItems: "center", justifyContent: "center", border: `1px solid ${theme.border}`, flexShrink: 0, textDecoration: "none" }}>▶️</a>
+              )}
+            </div>
+
+            {/* Encabezado tabla */}
+            <div style={{ display: "grid", gridTemplateColumns: "52px 1fr 62px 54px 60px", gap: 4, marginBottom: 6 }}>
+              {["SERIE", "OBJETIVO", "KG", "REPS", "RIR"].map(h => (
+                <span key={h} style={{ fontSize: 9, color: theme.muted, textAlign: "center", fontWeight: 700 }}>{h}</span>
               ))}
             </div>
-          </div>
 
-          {/* Encabezado tabla series efectivas */}
-          <div style={{ fontSize: 10, fontWeight: 800, color: theme.accent, marginBottom: 6 }}>SERIES EFECTIVAS</div>
-          <div style={{ display: "grid", gridTemplateColumns: "52px 1fr 62px 54px 60px", gap: 4, marginBottom: 6 }}>
-            {["SERIE", "OBJETIVO", "KG", "REPS", "RIR"].map(h => (
-              <span key={h} style={{ fontSize: 9, color: theme.muted, textAlign: "center", fontWeight: 700 }}>{h}</span>
-            ))}
-          </div>
-
-          {/* Filas por serie */}
-          {ej.series.map((s, idx) => {
-            const key = `${ej.id}-${idx}`;
-            const reg = registros[key] || {};
-            const rc = getRirColor(s.rir);
-            const hecho = reg.kg && reg.reps;
-            return (
-              <div key={idx} style={{
-                display: "grid", gridTemplateColumns: "52px 1fr 62px 54px 60px",
-                gap: 4, alignItems: "center", marginBottom: 6,
-                background: hecho ? `${theme.success}12` : theme.surface,
-                border: `1px solid ${hecho ? theme.success + "44" : theme.border}`,
-                borderRadius: 10, padding: "7px 6px"
-              }}>
-                <div style={{ textAlign: "center", fontSize: 11, fontWeight: 800, color: theme.muted }}>Serie {idx + 1}</div>
-                <div style={{ fontSize: 12, color: theme.muted, paddingLeft: 4 }}>{s.reps} reps</div>
-                <input value={reg.kg || ""} onChange={e => setReg(ej.id, idx, "kg", e.target.value)} placeholder="kg"
-                  style={{ background: theme.card, border: `1px solid ${reg.kg ? theme.accent + "66" : theme.border}`, borderRadius: 6, padding: "5px 3px", color: theme.text, fontSize: 13, fontWeight: 700, width: "100%", textAlign: "center", outline: "none", boxSizing: "border-box" }} />
-                <input value={reg.reps || ""} onChange={e => setReg(ej.id, idx, "reps", e.target.value)} placeholder={s.reps}
-                  style={{ background: theme.card, border: `1px solid ${reg.reps ? theme.accent + "66" : theme.border}`, borderRadius: 6, padding: "5px 3px", color: theme.text, fontSize: 13, fontWeight: 700, width: "100%", textAlign: "center", outline: "none", boxSizing: "border-box" }} />
-                <div style={{ background: `${rc}18`, border: `1px solid ${rc}55`, borderRadius: 6, padding: "4px 2px", textAlign: "center", fontSize: 10, fontWeight: 800, color: rc }}>{getRirLabel(s.rir)}</div>
-              </div>
-            );
-          })}
-
-          <div style={{ display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
-            {[["#10B981","RIR 2 · cómodo"],["#F59E0B","RIR 1 · cerca del límite"],["#EF4444","Fallo"]].map(([c,l]) => (
-              <div key={l} style={{ display: "flex", alignItems: "center", gap: 3 }}>
-                <div style={{ width: 7, height: 7, borderRadius: 4, background: c }} />
-                <span style={{ fontSize: 9, color: theme.muted }}>{l}</span>
-              </div>
-            ))}
-          </div>
-        </Card>
-      ))}
-
-      {/* CARDIO Y PASOS */}
-      <Card style={{ marginBottom: 14, border: `1px solid #10B98144`, background: "#0a1a12" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-          <span style={{ fontSize: 18 }}>🏃</span>
-          <div style={{ fontSize: 14, fontWeight: 700, color: theme.success }}>Cardio y Pasos Diarios</div>
-        </div>
-        <div style={{ display: "flex", flex: 1, gap: 10, marginBottom: 8 }}>
-          <div style={{ flex: 1, background: theme.surface, borderRadius: 10, padding: "10px 12px" }}>
-            <div style={{ fontSize: 11, color: theme.muted, marginBottom: 4 }}>🎯 Meta diaria</div>
-            <div style={{ fontSize: 14, fontWeight: 700, color: theme.text }}>{cardio.detalle}</div>
-          </div>
-          <div style={{ flex: 1, background: theme.surface, borderRadius: 10, padding: "10px 12px" }}>
-            <div style={{ fontSize: 11, color: theme.muted, marginBottom: 4 }}>🏁 Post-entreno</div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: theme.text }}>{cardio.postEntreno}</div>
-          </div>
-        </div>
-        <div style={{ background: theme.surface, borderRadius: 10, padding: "10px 12px" }}>
-          <div style={{ fontSize: 11, color: theme.muted, marginBottom: 6 }}>Pasos de hoy</div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <input placeholder="0" style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 8, padding: "8px 10px", color: theme.text, fontSize: 18, fontWeight: 800, width: 100, textAlign: "center", outline: "none" }} />
-            <span style={{ fontSize: 13, color: theme.muted }}>pasos</span>
-          </div>
-        </div>
-      </Card>
+            {series.map((s, idx) => {
+              const key = `${ej.id}-${idx}`;
+              const reg = registros[key] || {};
+              const rir = typeof s.rir === "number" ? s.rir : parseInt(s.rir) || 2;
+              const rc = getRirColor(rir);
+              return (
+                <div key={idx} style={{ display: "grid", gridTemplateColumns: "52px 1fr 62px 54px 60px", gap: 4, alignItems: "center", marginBottom: 6, background: reg.kg && reg.reps ? `${theme.success}12` : theme.surface, border: `1px solid ${reg.kg && reg.reps ? theme.success + "44" : theme.border}`, borderRadius: 10, padding: "7px 6px" }}>
+                  <div style={{ textAlign: "center", fontSize: 11, fontWeight: 800, color: theme.muted }}>Serie {idx + 1}</div>
+                  <div style={{ fontSize: 12, color: theme.muted, paddingLeft: 4 }}>{s.reps} reps</div>
+                  <input value={reg.kg || ""} onChange={e => setReg(ej.id, idx, "kg", e.target.value)} placeholder="kg"
+                    style={{ background: theme.card, border: `1px solid ${reg.kg ? theme.accent + "66" : theme.border}`, borderRadius: 6, padding: "5px 3px", color: theme.text, fontSize: 13, fontWeight: 700, width: "100%", textAlign: "center", outline: "none", boxSizing: "border-box" }} />
+                  <input value={reg.reps || ""} onChange={e => setReg(ej.id, idx, "reps", e.target.value)} placeholder={s.reps}
+                    style={{ background: theme.card, border: `1px solid ${reg.reps ? theme.accent + "66" : theme.border}`, borderRadius: 6, padding: "5px 3px", color: theme.text, fontSize: 13, fontWeight: 700, width: "100%", textAlign: "center", outline: "none", boxSizing: "border-box" }} />
+                  <div style={{ background: `${rc}18`, border: `1px solid ${rc}55`, borderRadius: 6, padding: "4px 2px", textAlign: "center", fontSize: 10, fontWeight: 800, color: rc }}>{getRirLabel(rir)}</div>
+                </div>
+              );
+            })}
+          </Card>
+        );
+      })}
 
       {!completado
-        ? <Btn onClick={() => setCompletado(true)} style={{ background: theme.success, padding: 16, fontSize: 15, fontWeight: 800, letterSpacing: 1, borderRadius: 14 }}>✓ ENTRENAMIENTO COMPLETADO</Btn>
+        ? <Btn onClick={async () => {
+            const { data: { user } } = await supabase.auth.getUser();
+            if (user && rutinaActiva) {
+              const inserts = [];
+              ejercicios.forEach(ej => {
+                const series = Array.isArray(ej.series) ? ej.series : [];
+                series.forEach((s, idx) => {
+                  const key = `${ej.id}-${idx}`;
+                  const reg = registros[key] || {};
+                  if (reg.kg || reg.reps) {
+                    inserts.push({
+                      usuario_id: user.id,
+                      ejercicio_id: ej.id,
+                      rutina_id: rutinaActiva.id,
+                      serie: idx + 1,
+                      kg: parseFloat(reg.kg) || null,
+                      reps: parseInt(reg.reps) || null,
+                    });
+                  }
+                });
+              });
+              if (inserts.length > 0) {
+                await supabase.from("registros_entreno").insert(inserts);
+              }
+            }
+            setCompletado(true);
+          }} style={{ background: theme.success, padding: 16, fontSize: 15, fontWeight: 800, letterSpacing: 1, borderRadius: 14 }}>✓ ENTRENAMIENTO COMPLETADO</Btn>
         : <Card style={{ textAlign: "center", background: `${theme.success}18`, border: `1px solid ${theme.success}44` }}>
             <div style={{ fontSize: 32, marginBottom: 8 }}>🏆</div>
             <div style={{ fontSize: 16, fontWeight: 700, color: theme.success }}>¡Bien hecho!</div>
@@ -752,61 +723,310 @@ function RutinaScreen({ onNav }) {
   );
 }
 
+  const cardio = {
+    tipo: "Caminata + Pasos diarios",
+    detalle: "Objetivo: 8.000 pasos diarios",
+    postEntreno: "10 min caminata moderada post-entreno",
+  };
+
 function NutricionScreen({ onNav }) {
-  const comidas = [
-    { num: 1, hora: "07:00", nombre: "Desayuno", items: ["4 huevos revueltos", "100g avena con leche", "1 plátano", "Café sin azúcar"] },
-    { num: 2, hora: "10:30", nombre: "Colación", items: ["200g yogur griego", "30g nueces", "1 fruta"] },
-    { num: 3, hora: "13:30", nombre: "Almuerzo", items: ["200g pecho de pollo", "250g arroz cocido", "Ensalada mixta"] },
-    { num: 4, hora: "17:00", nombre: "Pre-Entreno", items: ["2 tostadas integrales", "2 huevos", "1 plátano"] },
-    { num: 5, hora: "20:30", nombre: "Cena", items: ["200g carne magra", "300g papas cocidas", "Verduras salteadas"] },
-  ];
-  const suplementos = [{ nombre: "Proteína Whey", dosis: "30g", momento: "Post-entreno", icono: "🥛" }, { nombre: "Creatina", dosis: "5g", momento: "Con comida 1", icono: "⚡" }, { nombre: "Omega 3", dosis: "2 cápsulas", momento: "Con comida 3", icono: "🐟" }];
+  const [dieta, setDieta] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const cargar = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        const { data } = await supabase
+          .from("dietas")
+          .select("*")
+          .eq("usuario_id", user.id)
+          .order("created_at", { ascending: false })
+          .limit(1);
+        if (data && data.length > 0) setDieta(data[0]);
+      }
+      setLoading(false);
+    };
+    cargar();
+  }, []);
+
+  if (loading) return (
+    <div style={{ padding:"20px 16px 90px", height:"100%", boxSizing:"border-box", display:"flex", alignItems:"center", justifyContent:"center" }}>
+      <div style={{ color:theme.muted }}>Cargando dieta...</div>
+    </div>
+  );
+
+  if (!dieta) return (
+    <div style={{ padding:"20px 16px 90px", overflowY:"auto", height:"100%", boxSizing:"border-box" }}>
+      <div style={{ marginBottom:20 }}>
+        <div style={{ color:theme.muted, fontSize:12 }}>PLAN NUTRICIONAL</div>
+        <div style={{ fontSize:22, fontWeight:800, color:theme.text }}>Tu Dieta 🥗</div>
+      </div>
+      <Card style={{ textAlign:"center", padding:40 }}>
+        <div style={{ fontSize:32, marginBottom:12 }}>🥗</div>
+        <div style={{ fontSize:15, fontWeight:700, color:theme.text, marginBottom:8 }}>Tu coach aún no ha creado tu plan nutricional</div>
+        <div style={{ fontSize:13, color:theme.muted }}>Aparecerá aquí cuando esté listo</div>
+      </Card>
+      <NavBar active="nutricion" onNav={onNav} />
+    </div>
+  );
+
+  const comidas = Array.isArray(dieta.comidas) ? dieta.comidas : [];
+  const suplementos = Array.isArray(dieta.suplementos) ? dieta.suplementos : [];
+  const equivalencias = Array.isArray(dieta.equivalencias) ? dieta.equivalencias : [];
+
   return (
-    <div style={{ padding: "20px 16px 90px", overflowY: "auto", height: "100%", boxSizing: "border-box" }}>
-      <div style={{ marginBottom: 20 }}><div style={{ color: theme.muted, fontSize: 12 }}>PLAN NUTRICIONAL</div><div style={{ fontSize: 22, fontWeight: 800, color: theme.text }}>Tu Dieta 🥗</div></div>
-      <Card style={{ marginBottom: 14, background: "linear-gradient(135deg,#0f172a,#1e293b)", border: `1px solid ${theme.accent}33` }}>
-        <div style={{ fontSize: 12, color: theme.muted, marginBottom: 12 }}>OBJETIVOS DIARIOS</div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8, textAlign: "center" }}>
-          {[{ label: "Calorías", value: "3.200", unit: "kcal", color: theme.warning }, { label: "Proteína", value: "200", unit: "g", color: "#EF4444" }, { label: "Carbos", value: "380", unit: "g", color: theme.accentLight }, { label: "Grasas", value: "80", unit: "g", color: "#A78BFA" }].map(m => (
-            <div key={m.label}><div style={{ fontSize: 18, fontWeight: 800, color: m.color }}>{m.value}</div><div style={{ fontSize: 10, color: theme.muted }}>{m.unit}</div><div style={{ fontSize: 10, color: theme.muted, marginTop: 2 }}>{m.label}</div></div>
+    <div style={{ padding:"20px 16px 90px", overflowY:"auto", height:"100%", boxSizing:"border-box" }}>
+      <div style={{ marginBottom:20 }}>
+        <div style={{ color:theme.muted, fontSize:12 }}>PLAN NUTRICIONAL</div>
+        <div style={{ fontSize:22, fontWeight:800, color:theme.text }}>Tu Dieta 🥗</div>
+      </div>
+
+      {/* Macros */}
+      <Card style={{ marginBottom:14, background:"linear-gradient(135deg,#0f172a,#1e293b)", border:`1px solid ${theme.accent}33` }}>
+        <div style={{ fontSize:12, color:theme.muted, marginBottom:12 }}>OBJETIVOS DIARIOS</div>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:8, textAlign:"center" }}>
+          {[
+            { label:"Calorías", value:dieta.calorias, unit:"kcal", color:theme.warning },
+            { label:"Proteína", value:dieta.proteinas, unit:"g", color:"#EF4444" },
+            { label:"Carbos", value:dieta.carbos, unit:"g", color:theme.accentLight },
+            { label:"Grasas", value:dieta.grasas, unit:"g", color:"#A78BFA" },
+          ].map(m => (
+            <div key={m.label}>
+              <div style={{ fontSize:18, fontWeight:800, color:m.color }}>{m.value || "—"}</div>
+              <div style={{ fontSize:10, color:theme.muted }}>{m.unit}</div>
+              <div style={{ fontSize:10, color:theme.muted, marginTop:2 }}>{m.label}</div>
+            </div>
           ))}
         </div>
       </Card>
-      {comidas.map(c => (
-        <Card key={c.num} style={{ marginBottom: 10 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <div style={{ width: 28, height: 28, borderRadius: 8, background: theme.accent, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 800 }}>{c.num}</div>
-              <div style={{ fontSize: 14, fontWeight: 700, color: theme.text }}>{c.nombre}</div>
+
+      {/* Comidas */}
+      {comidas.map((c, i) => (
+        <Card key={i} style={{ marginBottom:10 }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+            <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+              <div style={{ width:28, height:28, borderRadius:8, background:theme.accent, display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, fontWeight:800 }}>{i+1}</div>
+              <div style={{ fontSize:14, fontWeight:700, color:theme.text }}>{c.nombre}</div>
             </div>
-            <span style={{ fontSize: 12, color: theme.muted }}>{c.hora}</span>
+            {c.hora && <span style={{ fontSize:12, color:theme.muted }}>{c.hora}</span>}
           </div>
-          {c.items.map(item => (<div key={item} style={{ fontSize: 13, color: theme.muted, paddingLeft: 36, lineHeight: 1.8 }}>· {item}</div>))}
+          {c.alimentos?.map((a, ai) => (
+            <div key={ai} style={{ fontSize:13, color:theme.muted, paddingLeft:36, lineHeight:1.8 }}>
+              · {a.gramos ? `${a.gramos}g ` : ""}{a.nombre}
+            </div>
+          ))}
         </Card>
       ))}
-      <Card style={{ marginBottom: 12 }}>
-        <div style={{ fontSize: 12, color: theme.muted, marginBottom: 10 }}>EQUIVALENCIAS PERMITIDAS</div>
-        {[["🍗 Pollo","🦃 Pavo"],["🍚 Arroz","🍝 Pasta"],["🥔 Papa","🍠 Camote"]].map(([a,b]) => (
-          <div key={a} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, fontSize: 13 }}>
-            <span style={{ color: theme.text }}>{a}</span><span style={{ color: theme.accent, fontWeight: 700 }}>↔</span><span style={{ color: theme.text }}>{b}</span>
+
+      {/* Equivalencias */}
+      {equivalencias.length > 0 && (
+        <Card style={{ marginBottom:12 }}>
+          <div style={{ fontSize:12, color:theme.muted, marginBottom:10 }}>EQUIVALENCIAS PERMITIDAS</div>
+          {equivalencias.map((e, i) => (
+            <div key={i} style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6, fontSize:13 }}>
+              <span style={{ color:theme.text }}>{e.a}</span>
+              <span style={{ color:theme.accent, fontWeight:700 }}>↔</span>
+              <span style={{ color:theme.text }}>{e.b}</span>
+            </div>
+          ))}
+        </Card>
+      )}
+
+      {/* Suplementos */}
+      {suplementos.length > 0 && (
+        <Card style={{ marginBottom:14, border:`1px solid #A78BFA44`, background:"#13111f" }}>
+          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:12 }}>
+            <span style={{ fontSize:16 }}>💊</span>
+            <div style={{ fontSize:12, fontWeight:800, color:"#A78BFA", letterSpacing:0.5 }}>SUPLEMENTACIÓN</div>
           </div>
-        ))}
-      </Card>
-      <Card style={{ marginBottom: 14, border: `1px solid #A78BFA44`, background: "#13111f" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}><span style={{ fontSize: 16 }}>💊</span><div style={{ fontSize: 12, fontWeight: 800, color: "#A78BFA", letterSpacing: 0.5 }}>SUPLEMENTACIÓN</div></div>
-        {suplementos.map(s => (
-          <div key={s.nombre} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: theme.surface, borderRadius: 10, padding: "10px 12px", marginBottom: 8 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}><span style={{ fontSize: 20 }}>{s.icono}</span><div><div style={{ fontSize: 13, fontWeight: 700, color: theme.text }}>{s.nombre}</div><div style={{ fontSize: 11, color: theme.muted }}>{s.momento}</div></div></div>
-            <div style={{ background: "#A78BFA22", border: "1px solid #A78BFA44", borderRadius: 6, padding: "3px 10px", fontSize: 12, fontWeight: 700, color: "#A78BFA" }}>{s.dosis}</div>
-          </div>
-        ))}
-      </Card>
+          {suplementos.map((s, i) => (
+            <div key={i} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", background:theme.surface, borderRadius:10, padding:"10px 12px", marginBottom:8 }}>
+              <div>
+                <div style={{ fontSize:13, fontWeight:700, color:theme.text }}>{s.nombre}</div>
+                <div style={{ fontSize:11, color:theme.muted }}>{s.momento}</div>
+              </div>
+              <div style={{ background:"#A78BFA22", border:"1px solid #A78BFA44", borderRadius:6, padding:"3px 10px", fontSize:12, fontWeight:700, color:"#A78BFA" }}>{s.dosis}</div>
+            </div>
+          ))}
+        </Card>
+      )}
+
+      {dieta.notas && (
+        <Card style={{ marginBottom:14 }}>
+          <div style={{ fontSize:12, color:theme.muted, marginBottom:6 }}>📝 NOTAS DEL COACH</div>
+          <div style={{ fontSize:13, color:theme.text, lineHeight:1.6 }}>{dieta.notas}</div>
+        </Card>
+      )}
+
       <NavBar active="nutricion" onNav={onNav} />
     </div>
   );
 }
 
+function DietaCoach({ alumno }) {
+  const [dietas, setDietas] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [creando, setCreando] = useState(false);
+  const [guardando, setGuardando] = useState(false);
+  const [exito, setExito] = useState(false);
 
+  const [calorias, setCalorias] = useState("");
+  const [proteinas, setProteinas] = useState("");
+  const [carbos, setCarbos] = useState("");
+  const [grasas, setGrasas] = useState("");
+  const [notas, setNotas] = useState("");
+  const [comidas, setComidas] = useState([
+    { nombre: "Desayuno", hora: "07:00", alimentos: [{ nombre: "", gramos: "" }] },
+    { nombre: "Almuerzo", hora: "13:00", alimentos: [{ nombre: "", gramos: "" }] },
+    { nombre: "Cena", hora: "20:00", alimentos: [{ nombre: "", gramos: "" }] },
+  ]);
+  const [suplementos, setSuplemento] = useState([{ nombre: "", dosis: "", momento: "" }]);
+  const [equivalencias, setEquivalencias] = useState([{ a: "", b: "" }]);
+
+  useEffect(() => { cargarDietas(); }, [alumno]);
+
+  const cargarDietas = async () => {
+    if (!alumno?.id) return;
+    const { data } = await supabase.from("dietas").select("*").eq("usuario_id", alumno.id).order("created_at", { ascending: false });
+    if (data) setDietas(data);
+    setLoading(false);
+  };
+
+  const agregarComida = () => setComidas([...comidas, { nombre: "Snack", hora: "", alimentos: [{ nombre: "", gramos: "" }] }]);
+  const agregarAlimento = (ci) => { const u = [...comidas]; u[ci].alimentos.push({ nombre: "", gramos: "" }); setComidas(u); };
+  const eliminarAlimento = (ci, ai) => { const u = [...comidas]; u[ci].alimentos.splice(ai, 1); setComidas(u); };
+  const eliminarComida = (ci) => { const u = [...comidas]; u.splice(ci, 1); setComidas(u); };
+  const updateComida = (ci, campo, val) => { const u = [...comidas]; u[ci][campo] = val; setComidas(u); };
+  const updateAlimento = (ci, ai, campo, val) => { const u = [...comidas]; u[ci].alimentos[ai][campo] = val; setComidas(u); };
+
+  const inputStyle = { background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:8, padding:"8px 10px", color:theme.text, fontSize:13, outline:"none", width:"100%", boxSizing:"border-box" };
+
+  const guardar = async () => {
+    setGuardando(true);
+    await supabase.from("dietas").insert({
+      usuario_id: alumno.id,
+      calorias: parseInt(calorias) || null,
+      proteinas: parseInt(proteinas) || null,
+      carbos: parseInt(carbos) || null,
+      grasas: parseInt(grasas) || null,
+      comidas: comidas.filter(c => c.nombre),
+      suplementos: suplementos.filter(s => s.nombre),
+      equivalencias: equivalencias.filter(e => e.a && e.b),
+      notas,
+    });
+    setGuardando(false);
+    setExito(true);
+    setCreando(false);
+    cargarDietas();
+    setTimeout(() => setExito(false), 3000);
+  };
+
+  return (
+    <div>
+      {exito && (
+        <Card style={{ textAlign:"center", padding:16, marginBottom:14, background:`${theme.success}18`, border:`1px solid ${theme.success}44` }}>
+          <div style={{ fontSize:13, fontWeight:700, color:theme.success }}>✅ Dieta guardada correctamente</div>
+        </Card>
+      )}
+
+      {/* Dietas existentes */}
+      {!loading && dietas.map(d => (
+        <Card key={d.id} style={{ marginBottom:10 }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+            <div style={{ fontSize:14, fontWeight:700, color:theme.text }}>🥗 Plan Nutricional</div>
+            <div style={{ display:"flex", gap:6 }}>
+              <Tag color={theme.warning}>{d.calorias} kcal</Tag>
+              <button onClick={async () => { await supabase.from("dietas").delete().eq("id", d.id); cargarDietas(); }}
+                style={{ background:`${theme.danger}22`, border:`1px solid ${theme.danger}44`, borderRadius:6, padding:"4px 8px", color:theme.danger, fontSize:11, cursor:"pointer", fontWeight:700 }}>× Eliminar</button>
+            </div>
+          </div>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:6, fontSize:12, color:theme.muted }}>
+            <span>Prot: {d.proteinas}g</span>
+            <span>Carbos: {d.carbos}g</span>
+            <span>Grasas: {d.grasas}g</span>
+          </div>
+          {Array.isArray(d.comidas) && d.comidas.length > 0 && (
+            <div style={{ marginTop:8, fontSize:11, color:theme.muted }}>
+              {d.comidas.map((c, i) => <span key={i} style={{ marginRight:8 }}>• {c.nombre}</span>)}
+            </div>
+          )}
+        </Card>
+      ))}
+
+      {!creando ? (
+        <Btn onClick={() => setCreando(true)}>+ Crear Plan Nutricional</Btn>
+      ) : (
+        <Card>
+          <div style={{ fontSize:13, fontWeight:800, color:theme.accent, marginBottom:14 }}>NUEVO PLAN NUTRICIONAL</div>
+
+          {/* Macros */}
+          <div style={{ fontSize:11, fontWeight:700, color:theme.muted, marginBottom:8 }}>MACROS DIARIOS</div>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:14 }}>
+            {[["Calorías (kcal)", calorias, setCalorias],["Proteínas (g)", proteinas, setProteinas],["Carbohidratos (g)", carbos, setCarbos],["Grasas (g)", grasas, setGrasas]].map(([label, val, set]) => (
+              <div key={label}>
+                <div style={{ fontSize:10, color:theme.muted, marginBottom:3 }}>{label}</div>
+                <input style={inputStyle} type="number" placeholder="0" value={val} onChange={e => set(e.target.value)} />
+              </div>
+            ))}
+          </div>
+
+          {/* Comidas */}
+          <div style={{ fontSize:11, fontWeight:700, color:theme.muted, marginBottom:8 }}>COMIDAS</div>
+          {comidas.map((c, ci) => (
+            <div key={ci} style={{ background:theme.surface, borderRadius:10, padding:12, marginBottom:10 }}>
+              <div style={{ display:"flex", gap:8, marginBottom:8, alignItems:"center" }}>
+                <input style={{ ...inputStyle, flex:2 }} placeholder="Nombre comida" value={c.nombre} onChange={e => updateComida(ci, "nombre", e.target.value)} />
+                <input style={{ ...inputStyle, flex:1 }} placeholder="Hora" value={c.hora} onChange={e => updateComida(ci, "hora", e.target.value)} />
+                <button onClick={() => eliminarComida(ci)} style={{ background:`${theme.danger}22`, border:`1px solid ${theme.danger}44`, borderRadius:6, padding:"6px 8px", color:theme.danger, fontSize:12, cursor:"pointer" }}>×</button>
+              </div>
+              {c.alimentos.map((a, ai) => (
+                <div key={ai} style={{ display:"flex", gap:6, marginBottom:6, alignItems:"center" }}>
+                  <input style={{ ...inputStyle, flex:3 }} placeholder="Alimento (ej: Pechuga de pollo)" value={a.nombre} onChange={e => updateAlimento(ci, ai, "nombre", e.target.value)} />
+                  <input style={{ ...inputStyle, flex:1, width:60 }} placeholder="g" type="number" value={a.gramos} onChange={e => updateAlimento(ci, ai, "gramos", e.target.value)} />
+                  {c.alimentos.length > 1 && <button onClick={() => eliminarAlimento(ci, ai)} style={{ background:"transparent", border:"none", color:theme.danger, fontSize:16, cursor:"pointer" }}>×</button>}
+                </div>
+              ))}
+              <button onClick={() => agregarAlimento(ci)} style={{ background:"transparent", border:`1px dashed ${theme.border}`, borderRadius:6, padding:"4px 10px", color:theme.muted, fontSize:11, cursor:"pointer" }}>+ Alimento</button>
+            </div>
+          ))}
+          <button onClick={agregarComida} style={{ background:"transparent", border:`1px dashed ${theme.accent}`, borderRadius:8, padding:"8px", color:theme.accentLight, fontSize:12, cursor:"pointer", width:"100%", marginBottom:14 }}>+ Agregar Comida</button>
+
+          {/* Suplementos */}
+          <div style={{ fontSize:11, fontWeight:700, color:theme.muted, marginBottom:8 }}>SUPLEMENTACIÓN</div>
+          {suplementos.map((s, i) => (
+            <div key={i} style={{ display:"flex", gap:6, marginBottom:6 }}>
+              <input style={{ ...inputStyle, flex:2 }} placeholder="Suplemento" value={s.nombre} onChange={e => { const u=[...suplementos]; u[i].nombre=e.target.value; setSuplemento(u); }} />
+              <input style={{ ...inputStyle, flex:1 }} placeholder="Dosis" value={s.dosis} onChange={e => { const u=[...suplementos]; u[i].dosis=e.target.value; setSuplemento(u); }} />
+              <input style={{ ...inputStyle, flex:2 }} placeholder="Momento" value={s.momento} onChange={e => { const u=[...suplementos]; u[i].momento=e.target.value; setSuplemento(u); }} />
+            </div>
+          ))}
+          <button onClick={() => setSuplemento([...suplementos, { nombre:"", dosis:"", momento:"" }])} style={{ background:"transparent", border:`1px dashed ${theme.border}`, borderRadius:6, padding:"4px 10px", color:theme.muted, fontSize:11, cursor:"pointer", marginBottom:14 }}>+ Suplemento</button>
+
+          {/* Equivalencias */}
+          <div style={{ fontSize:11, fontWeight:700, color:theme.muted, marginBottom:8 }}>EQUIVALENCIAS PERMITIDAS</div>
+          {equivalencias.map((e, i) => (
+            <div key={i} style={{ display:"flex", gap:6, alignItems:"center", marginBottom:6 }}>
+              <input style={{ ...inputStyle, flex:1 }} placeholder="Ej: Pollo" value={e.a} onChange={ev => { const u=[...equivalencias]; u[i].a=ev.target.value; setEquivalencias(u); }} />
+              <span style={{ color:theme.accent, fontWeight:700 }}>↔</span>
+              <input style={{ ...inputStyle, flex:1 }} placeholder="Ej: Pavo" value={e.b} onChange={ev => { const u=[...equivalencias]; u[i].b=ev.target.value; setEquivalencias(u); }} />
+            </div>
+          ))}
+          <button onClick={() => setEquivalencias([...equivalencias, { a:"", b:"" }])} style={{ background:"transparent", border:`1px dashed ${theme.border}`, borderRadius:6, padding:"4px 10px", color:theme.muted, fontSize:11, cursor:"pointer", marginBottom:14 }}>+ Equivalencia</button>
+
+          {/* Notas */}
+          <div style={{ fontSize:11, fontWeight:700, color:theme.muted, marginBottom:6 }}>NOTAS PARA EL ALUMNO</div>
+          <textarea style={{ ...inputStyle, minHeight:60, resize:"none", marginBottom:14 }} placeholder="Indicaciones generales..." value={notas} onChange={e => setNotas(e.target.value)} />
+
+          <div style={{ display:"flex", gap:8 }}>
+            <Btn onClick={guardar} style={{ background:theme.success }}>{guardando ? "Guardando..." : "✓ Guardar Dieta"}</Btn>
+            <Btn variant="ghost" onClick={() => setCreando(false)}>Cancelar</Btn>
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+}
 function DiarioScreen({ onNav }) {
   const [energia, setEnergia] = useState(7);
   const [sueno, setSueno] = useState(7);
@@ -957,46 +1177,109 @@ function DiarioScreen({ onNav }) {
 }
 
 function CheckinScreen({ onNav }) {
-  const [peso, setPeso] = useState("89.5");
+  const [peso, setPeso] = useState("");
+  const [cintura, setCintura] = useState("");
+  const [brazo, setBrazo] = useState("");
+  const [pecho, setPecho] = useState("");
+  const [pierna, setPierna] = useState("");
+  const [comentarios, setComentarios] = useState("");
   const [enviado, setEnviado] = useState(false);
+  const [guardando, setGuardando] = useState(false);
+  const [checkins, setCheckins] = useState([]);
+
+  useEffect(() => {
+    const cargar = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        const { data } = await supabase
+          .from("checkins")
+          .select("*")
+          .eq("usuario_id", user.id)
+          .order("fecha", { ascending: false })
+          .limit(4);
+        if (data) setCheckins(data);
+      }
+    };
+    cargar();
+  }, [enviado]);
+
+  const enviarCheckin = async () => {
+    setGuardando(true);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) {
+      await supabase.from("checkins").insert({
+        usuario_id: user.id,
+        peso: parseFloat(peso) || null,
+        cintura: parseFloat(cintura) || null,
+        brazo: parseFloat(brazo) || null,
+        pecho: parseFloat(pecho) || null,
+        pierna: parseFloat(pierna) || null,
+        comentarios,
+      });
+    }
+    setGuardando(false);
+    setEnviado(true);
+  };
+
   return (
     <div style={{ padding: "20px 16px 90px", overflowY: "auto", height: "100%", boxSizing: "border-box" }}>
-      <div style={{ marginBottom: 20 }}><div style={{ color: theme.muted, fontSize: 12 }}>SEMANA 6</div><div style={{ fontSize: 22, fontWeight: 800, color: theme.text }}>Check-In 📊</div></div>
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ color: theme.muted, fontSize: 12 }}>SEGUIMIENTO</div>
+        <div style={{ fontSize: 22, fontWeight: 800, color: theme.text }}>Check-In 📊</div>
+      </div>
+
+      {/* Historial reciente */}
+      {checkins.length > 0 && (
+        <Card style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 12, color: theme.muted, marginBottom: 10 }}>HISTORIAL RECIENTE</div>
+          <div style={{ display: "flex", gap: 8, overflowX: "auto" }}>
+            {checkins.map((c, i) => (
+              <div key={i} style={{ background: theme.surface, borderRadius: 10, padding: "10px 12px", flexShrink: 0, textAlign: "center", minWidth: 80 }}>
+                <div style={{ fontSize: 10, color: theme.muted, marginBottom: 4 }}>{c.fecha}</div>
+                <div style={{ fontSize: 16, fontWeight: 800, color: theme.text }}>{c.peso}kg</div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
       {!enviado ? (
         <>
           <Card style={{ marginBottom: 14 }}>
             <div style={{ fontSize: 12, color: theme.muted, marginBottom: 10 }}>PESO ACTUAL</div>
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-              <input value={peso} onChange={e => setPeso(e.target.value)} style={{ background: theme.surface, border: `2px solid ${theme.accent}`, borderRadius: 10, padding: "12px 16px", color: theme.text, fontSize: 24, fontWeight: 800, width: 120, textAlign: "center", outline: "none" }} />
+              <input value={peso} onChange={e => setPeso(e.target.value)} placeholder="0.0" type="number" step="0.1"
+                style={{ background: theme.surface, border: `2px solid ${theme.accent}`, borderRadius: 10, padding: "12px 16px", color: theme.text, fontSize: 24, fontWeight: 800, width: 120, textAlign: "center", outline: "none" }} />
               <span style={{ fontSize: 18, color: theme.muted }}>kg</span>
-            </div>
-          </Card>
-          <Card style={{ marginBottom: 14 }}>
-            <div style={{ fontSize: 12, color: theme.muted, marginBottom: 10 }}>FOTOS</div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-              {["Frente","Perfil","Espalda"].map(f => (<div key={f} style={{ background: theme.surface, border: `1px dashed ${theme.border}`, borderRadius: 10, height: 80, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", cursor: "pointer", gap: 4 }}><span style={{ fontSize: 20 }}>📷</span><span style={{ fontSize: 10, color: theme.muted }}>{f}</span></div>))}
             </div>
           </Card>
           <Card style={{ marginBottom: 14 }}>
             <div style={{ fontSize: 12, color: theme.muted, marginBottom: 10 }}>MEDIDAS (cm)</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              {["Cintura","Brazo","Pecho","Pierna"].map(m => (<div key={m}><div style={{ fontSize: 11, color: theme.muted, marginBottom: 4 }}>{m}</div><input placeholder="0" style={{ background: theme.surface, border: `1px solid ${theme.border}`, borderRadius: 8, padding: "8px 12px", color: theme.text, fontSize: 15, width: "100%", textAlign: "center", outline: "none", boxSizing: "border-box" }} /></div>))}
+              {[["Cintura", cintura, setCintura],["Brazo", brazo, setBrazo],["Pecho", pecho, setPecho],["Pierna", pierna, setPierna]].map(([label, val, set]) => (
+                <div key={label}>
+                  <div style={{ fontSize: 11, color: theme.muted, marginBottom: 4 }}>{label}</div>
+                  <input value={val} onChange={e => set(e.target.value)} placeholder="0" type="number"
+                    style={{ background: theme.surface, border: `1px solid ${theme.border}`, borderRadius: 8, padding: "8px 12px", color: theme.text, fontSize: 15, width: "100%", textAlign: "center", outline: "none", boxSizing: "border-box" }} />
+                </div>
+              ))}
             </div>
           </Card>
           <Card style={{ marginBottom: 14 }}>
-            <div style={{ fontSize: 12, color: theme.muted, marginBottom: 12 }}>COMENTARIOS Y SENSACIONES</div>
-
-            <div style={{ fontSize: 12, color: theme.muted, marginBottom: 6 }}>Comentarios</div>
-            <textarea placeholder="¿Cómo fue tu semana? Dudas, sensaciones..." style={{ background: theme.surface, border: `1px solid ${theme.border}`, borderRadius: 8, padding: "10px 12px", color: theme.text, fontSize: 13, width: "100%", minHeight: 80, resize: "none", outline: "none", boxSizing: "border-box" }} />
+            <div style={{ fontSize: 12, color: theme.muted, marginBottom: 6 }}>Comentarios y sensaciones</div>
+            <textarea value={comentarios} onChange={e => setComentarios(e.target.value)}
+              placeholder="¿Cómo fue tu semana? Dudas, sensaciones..." style={{ background: theme.surface, border: `1px solid ${theme.border}`, borderRadius: 8, padding: "10px 12px", color: theme.text, fontSize: 13, width: "100%", minHeight: 80, resize: "none", outline: "none", boxSizing: "border-box" }} />
           </Card>
-          <Btn onClick={() => setEnviado(true)} style={{ fontSize: 15, fontWeight: 800, padding: 16 }}>Enviar Check-In →</Btn>
+          <Btn onClick={enviarCheckin} style={{ fontSize: 15, fontWeight: 800, padding: 16 }}>
+            {guardando ? "Enviando..." : "Enviar Check-In →"}
+          </Btn>
         </>
       ) : (
         <Card style={{ textAlign: "center", padding: 32 }}>
           <div style={{ fontSize: 48, marginBottom: 12 }}>✅</div>
           <div style={{ fontSize: 18, fontWeight: 800, color: theme.text, marginBottom: 6 }}>¡Check-In enviado!</div>
           <div style={{ fontSize: 13, color: theme.muted }}>Tu coach revisará tu progreso pronto.</div>
-          <Btn onClick={() => setEnviado(false)} style={{ marginTop: 20 }} variant="ghost">Nuevo check-in</Btn>
+          <Btn onClick={() => { setEnviado(false); setPeso(""); setCintura(""); setBrazo(""); setPecho(""); setPierna(""); setComentarios(""); }} style={{ marginTop: 20 }} variant="ghost">Nuevo check-in</Btn>
         </Card>
       )}
       <NavBar active="checkin" onNav={onNav} />
@@ -1110,16 +1393,15 @@ function ProgresoScreen({ onNav }) {
   );
 }
 
-function CoachPanel({ onNav }) {
+function CoachPanel({ onNav, onVerAlumno }) {
   const [alumnos, setAlumnos] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [seleccionado, setSeleccionado] = useState(null);
 
   useEffect(() => {
     const cargarAlumnos = async () => {
       const { data } = await supabase
         .from("usuarios")
-        .select("id, nombre, email, objetivo, peso_actual, created_at")
+        .select("id, nombre, email, objetivo, peso_actual, edad, sexo, estatura, created_at")
         .order("created_at", { ascending: false });
       if (data) setAlumnos(data.filter(a => a.email !== "coach.claudiomiquel@gmail.com"));
       setLoading(false);
@@ -1176,7 +1458,7 @@ function CoachPanel({ onNav }) {
         </Card>
       ) : (
         alumnos.map(a => (
-          <Card key={a.id} style={{ marginBottom:10,cursor:"pointer" }} onClick={() => { setSeleccionado(a); onNav("coach_alumno"); }}>
+          <div key={a.id} onClick={() => { console.log("CLICK ALUMNO", a.nombre); onVerAlumno(a); }} style={{ marginBottom:10, cursor:"pointer", background:theme.card, border:`1px solid ${theme.border}`, borderRadius:14, padding:16 }}>
             <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center" }}>
               <div style={{ display:"flex",alignItems:"center",gap:12 }}>
                 <div style={{ width:40,height:40,borderRadius:12,background:theme.accent,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,fontWeight:800 }}>
@@ -1189,7 +1471,7 @@ function CoachPanel({ onNav }) {
               </div>
               <div style={{ fontSize:11,color:theme.muted }}>{a.email}</div>
             </div>
-          </Card>
+          </div>
         ))
       )}
 
@@ -1214,16 +1496,330 @@ function CoachPanel({ onNav }) {
   );
 }
 
-function CoachAlumno({ onNav }) {
+function RutinaCoach({ alumno }) {
+  const [rutinas, setRutinas] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [creando, setCreando] = useState(false);
+  const [verCargas, setVerCargas] = useState({});
+  const [cargas, setCargas] = useState({});
+  const [nombreRutina, setNombreRutina] = useState("");
+  const [diaRutina, setDiaRutina] = useState("");
+  const [ejercicios, setEjercicios] = useState([
+    { nombre: "", videoUrl: "", descanso: 90, series: [{ reps: "10", rir: 2 }] }
+  ]);
+  const [guardando, setGuardando] = useState(false);
+  const [exito, setExito] = useState(false);
+
+  useEffect(() => {
+    cargarRutinas();
+  }, [alumno]);
+
+  const cargarRutinas = async () => {
+    if (!alumno?.id) return;
+    const { data } = await supabase
+      .from("rutinas")
+      .select("*, ejercicios(*)")
+      .eq("usuario_id", alumno.id)
+      .order("created_at", { ascending: false });
+    if (data) setRutinas(data);
+
+    const { data: cargasData } = await supabase
+      .from("registros_entreno")
+      .select("*, ejercicios(nombre)")
+      .eq("usuario_id", alumno.id)
+      .order("fecha", { ascending: false });
+    if (cargasData) {
+      const grouped = {};
+      cargasData.forEach(c => {
+        if (!grouped[c.ejercicio_id]) grouped[c.ejercicio_id] = [];
+        grouped[c.ejercicio_id].push(c);
+      });
+      setCargas(grouped);
+    }
+    setLoading(false);
+  };
+
+  const agregarEjercicio = () => {
+    setEjercicios([...ejercicios, { nombre: "", videoUrl: "", descanso: 90, series: [{ reps: "10", rir: 2 }] }]);
+  };
+
+  const agregarSerie = (ejIdx) => {
+    const upd = [...ejercicios];
+    upd[ejIdx].series.push({ reps: "10", rir: 2 });
+    setEjercicios(upd);
+  };
+
+  const eliminarSerie = (ejIdx, sIdx) => {
+    const upd = [...ejercicios];
+    upd[ejIdx].series.splice(sIdx, 1);
+    setEjercicios(upd);
+  };
+
+  const updateEj = (idx, campo, val) => {
+    const upd = [...ejercicios];
+    upd[idx][campo] = val;
+    setEjercicios(upd);
+  };
+
+  const updateSerie = (ejIdx, sIdx, campo, val) => {
+    const upd = [...ejercicios];
+    upd[ejIdx].series[sIdx][campo] = val === "" ? val : (campo === "rir" ? parseInt(val) : val);
+    setEjercicios(upd);
+  };
+
+  const guardarRutina = async () => {
+    if (!nombreRutina) return;
+    setGuardando(true);
+    const { data: rutina } = await supabase
+      .from("rutinas")
+      .insert({ usuario_id: alumno.id, nombre: nombreRutina, dia: diaRutina })
+      .select().single();
+
+    if (rutina) {
+      for (let i = 0; i < ejercicios.length; i++) {
+        const ej = ejercicios[i];
+        if (ej.nombre) {
+          await supabase.from("ejercicios").insert({
+            rutina_id: rutina.id,
+            nombre: ej.nombre,
+            video_url: ej.videoUrl,
+            descanso: parseInt(ej.descanso),
+            orden: i,
+            series: ej.series
+          });
+        }
+      }
+    }
+    setGuardando(false);
+    setExito(true);
+    setCreando(false);
+    setNombreRutina("");
+    setDiaRutina("");
+    setEjercicios([{ nombre: "", videoUrl: "", descanso: 90, series: [{ reps: "10", rir: 2 }] }]);
+    cargarRutinas();
+    setTimeout(() => setExito(false), 3000);
+  };
+
+  const inputStyle = { background: theme.surface, border: `1px solid ${theme.border}`, borderRadius: 8, padding: "8px 10px", color: theme.text, fontSize: 13, outline: "none", width: "100%", boxSizing: "border-box" };
+  const smallInput = { ...inputStyle, width: 60, textAlign: "center", padding: "6px 4px" };
+
+  return (
+    <div>
+      {exito && (
+        <Card style={{ textAlign:"center", padding:16, marginBottom:14, background:`${theme.success}18`, border:`1px solid ${theme.success}44` }}>
+          <div style={{ fontSize:20, marginBottom:4 }}>✅</div>
+          <div style={{ fontSize:13, fontWeight:700, color:theme.success }}>Rutina guardada correctamente</div>
+        </Card>
+      )}
+
+      {/* Rutinas existentes */}
+      {loading ? (
+        <Card style={{ textAlign:"center", padding:20 }}><div style={{ color:theme.muted }}>Cargando...</div></Card>
+      ) : rutinas.length > 0 ? (
+        <div style={{ marginBottom:14 }}>
+          <div style={{ fontSize:12, color:theme.muted, marginBottom:10 }}>RUTINAS ASIGNADAS</div>
+          {rutinas.map(r => (
+            <Card key={r.id} style={{ marginBottom:10 }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+                <div style={{ fontSize:14, fontWeight:700, color:theme.text }}>💪 {r.nombre}</div>
+                <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+                  <Tag>{r.dia || "Sin día"}</Tag>
+                  <button onClick={async () => {
+                    await supabase.from("ejercicios").delete().eq("rutina_id", r.id);
+                    await supabase.from("rutinas").delete().eq("id", r.id);
+                    cargarRutinas();
+                  }} style={{ background:`${theme.danger}22`, border:`1px solid ${theme.danger}44`, borderRadius:6, padding:"4px 8px", color:theme.danger, fontSize:11, cursor:"pointer", fontWeight:700 }}>× Eliminar</button>
+                </div>
+              </div>
+              <div style={{ fontSize:12, color:theme.muted }}>{r.ejercicios?.length || 0} ejercicios</div>
+              {r.ejercicios?.map((ej, i) => (
+                <div key={i} style={{ marginTop: 6 }}>
+                  <div style={{ fontSize:12, color:theme.muted, paddingLeft:8 }}>· {ej.nombre}</div>
+                  {cargas[ej.id] && (
+                    <div style={{ paddingLeft:16, marginTop:4 }}>
+                      <button onClick={() => setVerCargas(prev => ({ ...prev, [ej.id]: !prev[ej.id] }))}
+                        style={{ background:`${theme.accent}15`, border:`1px solid ${theme.accent}33`, borderRadius:6, padding:"3px 8px", color:theme.accentLight, fontSize:10, cursor:"pointer", marginBottom:4 }}>
+                        {verCargas[ej.id] ? "▲ Ocultar cargas" : `▼ Ver cargas (${cargas[ej.id].length} series)`}
+                      </button>
+                      {verCargas[ej.id] && (
+                        <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+                          {cargas[ej.id].slice(0, 8).map((c, ci) => (
+                            <div key={ci} style={{ background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:8, padding:"4px 8px", textAlign:"center" }}>
+                              <div style={{ fontSize:10, color:theme.muted }}>S{c.serie} · {c.fecha}</div>
+                              <div style={{ fontSize:12, fontWeight:800, color:theme.text }}>{c.kg}kg</div>
+                              <div style={{ fontSize:10, color:theme.muted }}>×{c.reps}</div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </Card>
+          ))}
+        </div>
+      ) : null}
+
+      {/* Botón crear */}
+      {!creando ? (
+        <Btn onClick={() => setCreando(true)}>+ Crear Nueva Rutina</Btn>
+      ) : (
+        <Card>
+          <div style={{ fontSize:13, fontWeight:800, color:theme.accent, marginBottom:14 }}>NUEVA RUTINA</div>
+
+          <div style={{ marginBottom:10 }}>
+            <div style={{ fontSize:11, color:theme.muted, marginBottom:4 }}>Nombre de la rutina</div>
+            <input style={inputStyle} placeholder="Ej: Push A - Lunes" value={nombreRutina} onChange={e => setNombreRutina(e.target.value)} />
+          </div>
+
+          <div style={{ marginBottom:16 }}>
+            <div style={{ fontSize:11, color:theme.muted, marginBottom:4 }}>Día</div>
+            <select style={inputStyle} value={diaRutina} onChange={e => setDiaRutina(e.target.value)}>
+              <option value="">Selecciona...</option>
+              {["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"].map(d => <option key={d} value={d}>{d}</option>)}
+            </select>
+          </div>
+
+          <div style={{ fontSize:12, fontWeight:800, color:theme.text, marginBottom:10 }}>EJERCICIOS</div>
+
+          {ejercicios.map((ej, ejIdx) => (
+            <div key={ejIdx} style={{ background:theme.surface, borderRadius:10, padding:12, marginBottom:12 }}>
+              <div style={{ fontSize:11, fontWeight:700, color:theme.accent, marginBottom:8 }}>Ejercicio {ejIdx + 1}</div>
+
+              <div style={{ marginBottom:8 }}>
+                <div style={{ fontSize:10, color:theme.muted, marginBottom:3 }}>Nombre</div>
+                <input style={inputStyle} placeholder="Ej: Press Banca" value={ej.nombre} onChange={e => updateEj(ejIdx, "nombre", e.target.value)} />
+              </div>
+
+              <div style={{ marginBottom:8 }}>
+                <div style={{ fontSize:10, color:theme.muted, marginBottom:3 }}>Link YouTube (opcional)</div>
+                <input style={inputStyle} placeholder="https://youtube.com/..." value={ej.videoUrl} onChange={e => updateEj(ejIdx, "videoUrl", e.target.value)} />
+              </div>
+
+              <div style={{ marginBottom:10 }}>
+                <div style={{ fontSize:10, color:theme.muted, marginBottom:3 }}>Descanso entre series (segundos)</div>
+                <input style={{ ...inputStyle, width:80 }} type="number" placeholder="90" value={ej.descanso} onChange={e => updateEj(ejIdx, "descanso", e.target.value)} />
+              </div>
+
+              <div style={{ fontSize:10, fontWeight:700, color:theme.muted, marginBottom:6 }}>SERIES</div>
+              <div style={{ display:"grid", gridTemplateColumns:"30px 1fr 60px 50px 20px", gap:4, marginBottom:6 }}>
+                {["#","REPS","RIR","",""].map((h,i) => <span key={i} style={{ fontSize:9, color:theme.muted, textAlign:"center" }}>{h}</span>)}
+              </div>
+              {ej.series.map((s, sIdx) => (
+                <div key={sIdx} style={{ display:"grid", gridTemplateColumns:"30px 1fr 60px 50px 20px", gap:4, alignItems:"center", marginBottom:6 }}>
+                  <div style={{ textAlign:"center", fontSize:11, color:theme.muted }}>{sIdx+1}</div>
+                  <input style={inputStyle} placeholder="10" value={s.reps} onChange={e => updateSerie(ejIdx, sIdx, "reps", e.target.value)} />
+                  <select style={{ ...inputStyle, padding:"6px 4px" }} value={s.rir} onChange={e => updateSerie(ejIdx, sIdx, "rir", e.target.value)}>
+                    <option value={0}>Fallo</option>
+                    <option value={1}>RIR 1</option>
+                    <option value={2}>RIR 2</option>
+                    <option value={3}>RIR 3</option>
+                  </select>
+                  <div></div>
+                  {ej.series.length > 1 && (
+                    <span onClick={() => eliminarSerie(ejIdx, sIdx)} style={{ cursor:"pointer", color:theme.danger, fontSize:14, textAlign:"center" }}>×</span>
+                  )}
+                </div>
+              ))}
+              <button onClick={() => agregarSerie(ejIdx)} style={{ background:"transparent", border:`1px dashed ${theme.border}`, borderRadius:6, padding:"4px 10px", color:theme.muted, fontSize:11, cursor:"pointer", marginTop:4 }}>+ Serie</button>
+            </div>
+          ))}
+
+          <button onClick={agregarEjercicio} style={{ background:"transparent", border:`1px dashed ${theme.accent}`, borderRadius:8, padding:"8px", color:theme.accentLight, fontSize:12, cursor:"pointer", width:"100%", marginBottom:12 }}>+ Agregar Ejercicio</button>
+
+          <div style={{ display:"flex", gap:8 }}>
+            <Btn onClick={guardarRutina} style={{ background:theme.success }}>{guardando ? "Guardando..." : "✓ Guardar Rutina"}</Btn>
+            <Btn variant="ghost" onClick={() => setCreando(false)}>Cancelar</Btn>
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function CheckinsCoach({ alumno }) {
+  const [checkins, setCheckins] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const cargar = async () => {
+      if (!alumno?.id) return;
+      const { data } = await supabase
+        .from("checkins")
+        .select("*")
+        .eq("usuario_id", alumno.id)
+        .order("fecha", { ascending: false });
+      if (data) setCheckins(data);
+      setLoading(false);
+    };
+    cargar();
+  }, [alumno]);
+
+  if (loading) return <Card style={{ textAlign:"center", padding:20 }}><div style={{ color:theme.muted }}>Cargando...</div></Card>;
+
+  if (checkins.length === 0) return (
+    <Card style={{ textAlign:"center", padding:30 }}>
+      <div style={{ fontSize:24, marginBottom:8 }}>📊</div>
+      <div style={{ color:theme.muted, fontSize:13 }}>Aún no hay check-ins de {alumno?.nombre || "este alumno"}</div>
+    </Card>
+  );
+
+  return (
+    <div>
+      {checkins.map((c, i) => (
+        <Card key={i} style={{ marginBottom:12 }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
+            <div style={{ fontSize:14, fontWeight:700, color:theme.text }}>📅 {c.fecha}</div>
+            <div style={{ fontSize:20, fontWeight:900, color:theme.accent }}>{c.peso} kg</div>
+          </div>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:8, marginBottom:8 }}>
+            {[["Cintura", c.cintura], ["Brazo", c.brazo], ["Pecho", c.pecho], ["Pierna", c.pierna]].map(([label, val]) => (
+              <div key={label} style={{ background:theme.surface, borderRadius:8, padding:"6px 8px", textAlign:"center" }}>
+                <div style={{ fontSize:10, color:theme.muted }}>{label}</div>
+                <div style={{ fontSize:13, fontWeight:700, color:theme.text }}>{val || "—"} cm</div>
+              </div>
+            ))}
+          </div>
+          {c.comentarios && (
+            <div style={{ fontSize:12, color:theme.muted, fontStyle:"italic", borderTop:`1px solid ${theme.border}`, paddingTop:8 }}>
+              "{c.comentarios}"
+            </div>
+          )}
+        </Card>
+      ))}
+    </div>
+  );
+}
+
+function CoachAlumno({ onNav, alumno }) {
   const tabs=["Datos","Rutina","Dieta","Check-ins","Progreso","Mensajes"];
   const [tab,setTab]=useState("Datos");
+  const [datosCompletos, setDatosCompletos] = useState(null);
+
+  useEffect(() => {
+    if (alumno?.id) {
+      const cargar = async () => {
+        const { data } = await supabase
+          .from("usuarios")
+          .select("*")
+          .eq("id", alumno.id)
+          .single();
+        if (data) setDatosCompletos(data);
+      };
+      cargar();
+    }
+  }, [alumno]);
   return (
     <div style={{ height:"100%",display:"flex",flexDirection:"column" }}>
       <div style={{ padding:"16px 16px 0",background:theme.surface,borderBottom:`1px solid ${theme.border}` }}>
         <div style={{ display:"flex",alignItems:"center",gap:12,marginBottom:14 }}>
           <span onClick={()=>onNav("coach_panel")} style={{ color:theme.accent,cursor:"pointer",fontSize:20 }}>←</span>
-          <div style={{ flex:1 }}><div style={{ fontSize:18,fontWeight:800,color:theme.text }}>Rodrigo M.</div><div style={{ fontSize:12,color:theme.muted }}>Volumen · Semana 8 · 82.3 kg</div></div>
-          <Tag color={theme.success}>✓ Pagado</Tag>
+          <div style={{ flex:1 }}>
+            <div style={{ fontSize:18,fontWeight:800,color:theme.text }}>{alumno?.nombre || "Sin nombre"}</div>
+            <div style={{ fontSize:12,color:theme.muted }}>{alumno?.objetivo || "Sin objetivo"} · {alumno?.peso_actual ? alumno.peso_actual + " kg" : "Sin peso"}</div>
+          </div>
+          <Tag color={theme.success}>✓ Activo</Tag>
         </div>
         <div style={{ display:"flex",gap:4,overflowX:"auto",paddingBottom:12 }}>
           {tabs.map(t=>(<button key={t} onClick={()=>setTab(t)} style={{ background:tab===t?theme.accent:"transparent",border:`1px solid ${tab===t?theme.accent:theme.border}`,borderRadius:8,padding:"6px 12px",color:tab===t?"#fff":theme.muted,fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap" }}>{t}</button>))}
@@ -1231,27 +1827,127 @@ function CoachAlumno({ onNav }) {
       </div>
       <div style={{ flex:1,overflowY:"auto",padding:16 }}>
         {tab==="Datos"&&(<div style={{ display:"flex",flexDirection:"column",gap:10 }}>
-          <Card><div style={{ fontSize:12,color:theme.muted,marginBottom:10 }}>DATOS PERSONALES</div>{[["Nombre","Rodrigo Morales"],["Edad","29 años"],["Estatura","178 cm"],["Peso","82.3 kg"]].map(([k,v])=>(<div key={k} style={{ display:"flex",justifyContent:"space-between",marginBottom:8 }}><span style={{ color:theme.muted,fontSize:13 }}>{k}</span><span style={{ color:theme.text,fontSize:13,fontWeight:600 }}>{v}</span></div>))}</Card>
-          <Card><div style={{ fontSize:12,color:theme.muted,marginBottom:10 }}>ANAMNESIS</div>{[["Objetivo","Ganar masa muscular"],["Experiencia","Intermedio"],["Lesiones","Ninguna"],["Restricciones","Ninguna"]].map(([k,v])=>(<div key={k} style={{ display:"flex",justifyContent:"space-between",marginBottom:8 }}><span style={{ color:theme.muted,fontSize:13 }}>{k}</span><span style={{ color:theme.text,fontSize:13,fontWeight:600 }}>{v}</span></div>))}</Card>
+          <Card>
+            <div style={{ fontSize:12,color:theme.muted,marginBottom:10 }}>DATOS PERSONALES</div>
+            {[
+              ["Nombre", datosCompletos?.nombre],
+              ["Email", datosCompletos?.email],
+              ["Edad", datosCompletos?.edad ? datosCompletos.edad + " años" : null],
+              ["Sexo", datosCompletos?.sexo],
+              ["Estatura", datosCompletos?.estatura ? datosCompletos.estatura + " cm" : null],
+              ["Peso actual", datosCompletos?.peso_actual ? datosCompletos.peso_actual + " kg" : null],
+              ["WhatsApp", datosCompletos?.whatsapp],
+              ["Instagram", datosCompletos?.instagram],
+              ["Ocupación", datosCompletos?.ocupacion],
+              ["Actividad laboral", datosCompletos?.actividad_laboral],
+            ].filter(([,v]) => v).map(([k,v])=>(
+              <div key={k} style={{ display:"flex",justifyContent:"space-between",marginBottom:8,flexWrap:"wrap",gap:4 }}>
+                <span style={{ color:theme.muted,fontSize:13 }}>{k}</span>
+                <span style={{ color:theme.text,fontSize:13,fontWeight:600,textAlign:"right",maxWidth:"60%" }}>{v}</span>
+              </div>
+            ))}
+          </Card>
+          <Card>
+            <div style={{ fontSize:12,color:theme.muted,marginBottom:10 }}>ANAMNESIS</div>
+            {[
+              ["Objetivo", datosCompletos?.objetivo],
+              ["Ha entrenado", datosCompletos?.ha_entrenado],
+              ["Entrenamiento previo", datosCompletos?.que_entrenamiento],
+              ["Días/semana", datosCompletos?.dias_semana],
+              ["Horario entreno", datosCompletos?.horario_entreno],
+              ["Enfermedad/Lesión", datosCompletos?.enfermedad_lesion === "Sí" ? datosCompletos?.cual_enfermedad : "No"],
+              ["Medicamento", datosCompletos?.medicamento === "Sí" ? datosCompletos?.cual_medicamento : "No"],
+              ["Sustancias farmacológicas", datosCompletos?.sustancia_farmacologica],
+            ].filter(([,v]) => v).map(([k,v])=>(
+              <div key={k} style={{ display:"flex",justifyContent:"space-between",marginBottom:8,flexWrap:"wrap",gap:4 }}>
+                <span style={{ color:theme.muted,fontSize:13 }}>{k}</span>
+                <span style={{ color:theme.text,fontSize:13,fontWeight:600,textAlign:"right",maxWidth:"60%" }}>{v}</span>
+              </div>
+            ))}
+          </Card>
+          <Card>
+            <div style={{ fontSize:12,color:theme.muted,marginBottom:10 }}>ALIMENTACIÓN</div>
+            {[
+              ["Alergias", datosCompletos?.alergia === "Sí" ? datosCompletos?.cual_alergia : "No"],
+              ["No le gustan", datosCompletos?.no_le_gustan],
+              ["Favoritos", datosCompletos?.favoritos],
+              ["Dieta especial", datosCompletos?.alimentacion_diferente],
+              ["Hora levantarse", datosCompletos?.hora_levanta],
+              ["Hora dormir", datosCompletos?.hora_duerme],
+              ["Comidas al día", datosCompletos?.comidas_dia],
+            ].filter(([,v]) => v).map(([k,v])=>(
+              <div key={k} style={{ display:"flex",justifyContent:"space-between",marginBottom:8,flexWrap:"wrap",gap:4 }}>
+                <span style={{ color:theme.muted,fontSize:13 }}>{k}</span>
+                <span style={{ color:theme.text,fontSize:13,fontWeight:600,textAlign:"right",maxWidth:"60%" }}>{v}</span>
+              </div>
+            ))}
+            {datosCompletos?.resumen_desayuno && (
+              <div style={{ marginTop:10 }}>
+                <div style={{ fontSize:11,color:theme.muted,marginBottom:8,fontWeight:700 }}>RESUMEN DIETA TÍPICA</div>
+                {[
+                  ["🌅 Desayuno", datosCompletos?.resumen_desayuno],
+                  ["🍎 Snack", datosCompletos?.resumen_snack],
+                  ["🍽️ Almuerzo", datosCompletos?.resumen_almuerzo],
+                  ["☕ Once", datosCompletos?.resumen_once],
+                  ["🌙 Cena", datosCompletos?.resumen_cena],
+                ].filter(([,v]) => v).map(([k,v])=>(
+                  <div key={k} style={{ marginBottom:8, background:theme.surface, borderRadius:8, padding:"8px 10px" }}>
+                    <div style={{ fontSize:11,color:theme.muted,marginBottom:2 }}>{k}</div>
+                    <div style={{ fontSize:13,color:theme.text }}>{v}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
         </div>)}
-        {tab==="Check-ins"&&(<div style={{ display:"flex",flexDirection:"column",gap:10 }}>
-          {[{semana:"Semana 8",peso:"82.3 kg",energia:8,comentario:"Me siento con más fuerza.",estado:"Pendiente"},{semana:"Semana 6",peso:"83.1 kg",energia:7,comentario:"Semana con mucho estrés.",estado:"Revisado"}].map(c=>(
-            <Card key={c.semana}><div style={{ display:"flex",justifyContent:"space-between",marginBottom:8 }}><span style={{ fontSize:14,fontWeight:700,color:theme.text }}>{c.semana}</span><Tag color={c.estado==="Pendiente"?theme.warning:theme.success}>{c.estado}</Tag></div><div style={{ fontSize:20,fontWeight:800,color:theme.text,marginBottom:4 }}>{c.peso}</div><div style={{ fontSize:12,color:theme.muted,marginBottom:8 }}>Energía: {c.energia}/10</div><div style={{ fontSize:13,color:theme.muted,fontStyle:"italic" }}>"{c.comentario}"</div>{c.estado==="Pendiente"&&(<div style={{ marginTop:12 }}><textarea placeholder="Respuesta del coach..." style={{ background:theme.surface,border:`1px solid ${theme.accent}`,borderRadius:8,padding:"10px 12px",color:theme.text,fontSize:13,width:"100%",minHeight:70,resize:"none",outline:"none",boxSizing:"border-box",marginBottom:8 }}/><Btn>Enviar feedback</Btn></div>)}</Card>
-          ))}
-        </div>)}
+        {tab==="Check-ins"&&(<CheckinsCoach alumno={alumno}/>)}
         {tab==="Mensajes"&&(<div style={{ display:"flex",flexDirection:"column",gap:10 }}>
-          {[{de:"alumno",texto:"Coach, tuve mucha hambre esta semana."},{de:"coach",texto:"Agregamos 150 kcal en la cena."},{de:"alumno",texto:"¿Pierna con DOMS?"},{de:"coach",texto:"Sí, baja 20% de intensidad. No es lesión."}].map((m,i)=>(<div key={i} style={{ display:"flex",justifyContent:m.de==="coach"?"flex-end":"flex-start" }}><div style={{ background:m.de==="coach"?theme.accent:theme.card,border:`1px solid ${m.de==="coach"?theme.accent:theme.border}`,borderRadius:12,padding:"10px 14px",maxWidth:"80%",fontSize:13,color:theme.text,lineHeight:1.5 }}>{m.texto}</div></div>))}
+          <Card style={{ textAlign:"center",padding:30 }}>
+            <div style={{ fontSize:24,marginBottom:8 }}>💬</div>
+            <div style={{ color:theme.muted,fontSize:13 }}>Mensajes próximamente</div>
+          </Card>
           <div style={{ display:"flex",gap:8,marginTop:8 }}><input placeholder="Escribe un mensaje..." style={{ flex:1,background:theme.surface,border:`1px solid ${theme.border}`,borderRadius:10,padding:"10px 14px",color:theme.text,fontSize:13,outline:"none" }}/><Btn style={{ width:"auto",padding:"10px 16px" }}>→</Btn></div>
         </div>)}
-        {!["Datos","Check-ins","Mensajes"].includes(tab)&&(<Card style={{ textAlign:"center",padding:40 }}><div style={{ fontSize:32,marginBottom:10 }}>{tab==="Rutina"?"💪":tab==="Dieta"?"🥗":"📈"}</div><div style={{ fontSize:15,fontWeight:700,color:theme.text,marginBottom:6 }}>{tab} de Rodrigo</div><div style={{ fontSize:13,color:theme.muted,marginBottom:16 }}>Aquí gestionas el {tab.toLowerCase()} del alumno</div><Btn>{tab==="Rutina"?"Editar Rutina":tab==="Dieta"?"Editar Dieta":"Ver Progreso"}</Btn></Card>)}
+        {tab==="Rutina"&&(<RutinaCoach alumno={alumno}/>)}
+        {tab==="Dieta"&&(<DietaCoach alumno={alumno}/>)}
+        {tab==="Progreso"&&(
+          <Card style={{ textAlign:"center",padding:40 }}>
+            <div style={{ fontSize:32,marginBottom:10 }}>📈</div>
+            <div style={{ fontSize:15,fontWeight:700,color:theme.text,marginBottom:6 }}>Progreso de {alumno?.nombre || "alumno"}</div>
+            <div style={{ fontSize:13,color:theme.muted,marginBottom:16 }}>Próximamente</div>
+          </Card>
+        )}
       </div>
     </div>
   );
 }
 
 export default function App() {
-  const [screen,setScreen]=useState("login");
-  const screenMap={ login:<LoginScreen onNav={setScreen}/>,registro:<RegistroScreen onNav={setScreen}/>,anamnesis:<AnamnesisScreen onNav={setScreen}/>,alumno_home:<AlumnoHome onNav={setScreen}/>,rutina:<RutinaScreen onNav={setScreen}/>,nutricion:<NutricionScreen onNav={setScreen}/>,diario:<DiarioScreen onNav={setScreen}/>,checkin:<CheckinScreen onNav={setScreen}/>,progreso:<ProgresoScreen onNav={setScreen}/>,coach_panel:<CoachPanel onNav={setScreen}/>,coach_alumno:<CoachAlumno onNav={setScreen}/> };
+  const [screen, setScreen] = useState("login");
+  const [alumnoSeleccionado, setAlumnoSeleccionado] = useState(null);
+
+  const navCoachAlumno = (alumno) => {
+    setAlumnoSeleccionado(alumno);
+    setScreen("coach_alumno");
+  };
+
+  const renderScreen = () => {
+    switch(screen) {
+      case "login": return <LoginScreen onNav={setScreen}/>;
+      case "registro": return <RegistroScreen onNav={setScreen}/>;
+      case "anamnesis": return <AnamnesisScreen onNav={setScreen}/>;
+      case "alumno_home": return <AlumnoHome onNav={setScreen}/>;
+      case "rutina": return <RutinaScreen onNav={setScreen}/>;
+      case "nutricion": return <NutricionScreen onNav={setScreen}/>;
+      case "diario": return <DiarioScreen onNav={setScreen}/>;
+      case "checkin": return <CheckinScreen onNav={setScreen}/>;
+      case "progreso": return <ProgresoScreen onNav={setScreen}/>;
+      case "coach_panel": return <CoachPanel onNav={setScreen} onVerAlumno={navCoachAlumno}/>;
+      case "coach_alumno": return <CoachAlumno onNav={setScreen} alumno={alumnoSeleccionado}/>;
+      default: return <LoginScreen onNav={setScreen}/>;
+    }
+  };
+
   return (
     <div style={{ background:"#0d0d1a",minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Inter',-apple-system,sans-serif",padding:16 }}>
       <div style={{ textAlign:"center" }}>
@@ -1259,7 +1955,7 @@ export default function App() {
         <div style={{ position:"relative",width:375,height:720,margin:"0 auto" }}>
           <div style={{ position:"absolute",inset:-12,border:"12px solid #1e1e2e",borderRadius:48,boxShadow:"0 0 0 2px #2e2e3e, 0 32px 80px rgba(0,0,0,0.9)",pointerEvents:"none",zIndex:10 }}/>
           <div style={{ position:"absolute",top:-18,left:"50%",transform:"translateX(-50%)",width:90,height:7,background:"#1e1e2e",borderRadius:4,zIndex:11 }}/>
-          <div style={{ width:375,height:720,background:theme.bg,borderRadius:36,overflow:"hidden",position:"relative" }}>{screenMap[screen]}</div>
+          <div style={{ width:375,height:720,background:theme.bg,borderRadius:36,overflow:"auto",position:"relative" }}>{renderScreen()}</div>
         </div>
         <div style={{ marginTop:20,display:"flex",gap:8,flexWrap:"wrap",justifyContent:"center",maxWidth:420 }}>
           {[["login","Login"],["registro","Registro"],["anamnesis","Anamnesis"],["alumno_home","Inicio"],["rutina","Rutina"],["nutricion","Dieta"],["diario","Diario"],["checkin","Check-in"],["progreso","Progreso"],["coach_panel","Coach Panel"],["coach_alumno","Perfil Alumno"]].map(([id,label])=>(<button key={id} onClick={()=>setScreen(id)} style={{ background:screen===id?"#2563EB":"#13131a",border:`1px solid ${screen===id?"#2563EB":"#2a2a38"}`,color:screen===id?"#fff":"#666",borderRadius:8,padding:"6px 12px",fontSize:11,cursor:"pointer",fontWeight:600 }}>{label}</button>))}
