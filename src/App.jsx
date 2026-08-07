@@ -25,8 +25,7 @@ const Input = ({ placeholder, type = "text", value, onChange }) => (
   <input type={type} placeholder={placeholder} value={value} onChange={onChange} style={{ background: theme.surface, border: `1px solid ${theme.border}`, borderRadius: 10, padding: "13px 16px", color: theme.text, fontSize: 14, width: "100%", outline: "none", boxSizing: "border-box" }} />
 );
 const NavBar = ({ active, onNav }) => {
-  const items = [{ id: "alumno_home", icon: "⊞", label: "Inicio" }, { id: "rutina", icon: "💪", label: "Entreno" }, { id: "nutricion", icon: "🥗", label: "Dieta" }, { id: "diario", icon: "🌙", label: "Diario" }, { id: "checkin", icon: "📊", label: "Check-in" }, { id: "progreso", icon: "📈", label: "Progreso" }];
-  return (
+const items = [{ id: "alumno_home", icon: "⊞", label: "Inicio" }, { id: "rutina", icon: "💪", label: "Entreno" }, { id: "nutricion", icon: "🥗", label: "Dieta" }, { id: "diario", icon: "🌙", label: "Diario" }, { id: "checkin", icon: "📊", label: "Check-in" }, { id: "progreso", icon: "📈", label: "Progreso" }];  return (
     <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, background: theme.surface, borderTop: `1px solid ${theme.border}`, display: "flex", padding: "10px 0 16px" }}>
       {items.map(i => (
         <div key={i.id} onClick={() => onNav(i.id)} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4, cursor: "pointer" }}>
@@ -480,8 +479,10 @@ function AnamnesisScreen({ onNav }) {
 function AlumnoHome({ onNav }) {
   const [pagoReportado, setPagoReportado] = useState(false);
   const [nombre, setNombre] = useState("Alumno");
-  const [rutina, setRutina] = useState(null);
-  const pagoVencido = false;
+const [rutina, setRutina] = useState(null);
+  const [checkin, setCheckin] = useState(null);
+  const [dieta, setDieta] = useState(null);
+  const [semana, setSemana] = useState(null);  const pagoVencido = false;
   const diasRestantes = 2;
 
   useEffect(() => {
@@ -498,6 +499,12 @@ function AlumnoHome({ onNav }) {
           .order("created_at", { ascending: false })
           .limit(1);
         if (rutinas && rutinas.length > 0) setRutina(rutinas[0]);
+        const { data: checkins } = await supabase.from("checkins").select("peso").eq("usuario_id", user.id).order("fecha", { ascending: false }).limit(1);
+        if (checkins && checkins.length > 0) setCheckin(checkins[0]);
+        const { data: dietas } = await supabase.from("dietas").select("calorias").eq("usuario_id", user.id).order("created_at", { ascending: false }).limit(1);
+        if (dietas && dietas.length > 0) setDieta(dietas[0]);
+        const { data: usr } = await supabase.from("usuarios").select("created_at").eq("id", user.id).single();
+        if (usr?.created_at) { const inicio = new Date(usr.created_at); const dias = Math.floor((new Date() - inicio) / 86400000); setSemana(Math.floor(dias / 7) + 1); }
       }
     };
     cargar();
@@ -515,8 +522,7 @@ function AlumnoHome({ onNav }) {
         </div>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
-        {[{ label: "Peso actual", value: "— kg", icon: "⚖️" }, { label: "Calorías", value: "— kcal", icon: "🔥" }, { label: "Próximo check-in", value: "—", icon: "📅" }, { label: "Semana", value: "—", icon: "📆" }].map(s => (
-          <Card key={s.label} style={{ padding: 14 }}>
+{[{ label: "Peso actual", value: checkin ? checkin.peso + " kg" : "— kg", icon: "⚖️" }, { label: "Calorías", value: dieta ? dieta.calorias + " kcal" : "— kcal", icon: "🔥" }, { label: "Próximo check-in", value: (() => { if (!checkin) return "—"; const fecha = new Date(checkin.fecha || new Date()); fecha.setDate(fecha.getDate() + 28); return fecha.toLocaleDateString("es-CL", { day: "numeric", month: "short" }); })(), icon: "📅" }, { label: "Semana actual", value: semana ? "Semana " + semana : "—", icon: "📆" }].map(s => (          <Card key={s.label} style={{ padding: 14 }}>
             <div style={{ fontSize: 18, marginBottom: 4 }}>{s.icon}</div>
             <div style={{ fontSize: 18, fontWeight: 800, color: theme.text }}>{s.value}</div>
             <div style={{ fontSize: 11, color: theme.muted }}>{s.label}</div>
@@ -1324,7 +1330,8 @@ function CheckinScreen({ onNav }) {
             <div style={{ marginTop: 12, background: theme.surface, borderRadius: 10, padding: 10 }}>
               <div style={{ fontSize: 11, color: "#A78BFA", fontWeight: 700, marginBottom: 6 }}>📊 Referencia % grasa corporal</div>
               <div style={{ fontSize: 10, color: theme.muted, marginBottom: 6 }}>Compárate con la imagen y estima tu porcentaje</div>
-<img src={GRASA_IMG} alt="Referencia % grasa" onClick={() => { const w = window.open("", "_blank"); w.document.write('<img src="' + GRASA_IMG + '" style="max-width:100%;height:auto">'); }} style={{ width: "100%", borderRadius: 8, marginBottom: 4, cursor: "pointer" }} />            </div>
+              <img src={GRASA_IMG} alt="Referencia % grasa" style={{ width: "100%", borderRadius: 8, marginBottom: 4 }} />
+            </div>
           </Card>
 
           {/* Medidas */}
