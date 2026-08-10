@@ -24,12 +24,20 @@ const Btn = ({ children, onClick, variant = "primary", style = {} }) => (
 const Input = ({ placeholder, type = "text", value, onChange }) => (
   <input type={type} placeholder={placeholder} value={value} onChange={onChange} style={{ background: theme.surface, border: `1px solid ${theme.border}`, borderRadius: 10, padding: "13px 16px", color: theme.text, fontSize: 14, width: "100%", outline: "none", boxSizing: "border-box" }} />
 );
-const NavBar = ({ active, onNav }) => {
-const items = [{ id: "alumno_home", icon: "⊞", label: "Inicio" }, { id: "rutina", icon: "💪", label: "Entreno" }, { id: "nutricion", icon: "🥗", label: "Dieta" }, { id: "diario", icon: "🌙", label: "Diario" }, { id: "checkin", icon: "📊", label: "Check-in" }, { id: "progreso", icon: "📈", label: "Progreso" }];  return (
+const NavBar = ({ active, onNav, mensajesNoLeidos = 0 }) => {
+  const items = [{ id: "alumno_home", icon: "⊞", label: "Inicio" }, { id: "rutina", icon: "💪", label: "Entreno" }, { id: "nutricion", icon: "🥗", label: "Dieta" }, { id: "diario", icon: "🌙", label: "Diario" }, { id: "checkin", icon: "📊", label: "Check-in" }, { id: "mensajes", icon: "💬", label: "Mensajes" }, { id: "progreso", icon: "📈", label: "Progreso" }];
+  return (
     <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, background: theme.surface, borderTop: `1px solid ${theme.border}`, display: "flex", padding: "10px 0 16px" }}>
       {items.map(i => (
-        <div key={i.id} onClick={() => onNav(i.id)} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4, cursor: "pointer" }}>
-          <span style={{ fontSize: 20 }}>{i.icon}</span>
+        <div key={i.id} onClick={() => onNav(i.id)} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4, cursor: "pointer", position: "relative" }}>
+          <div style={{ position: "relative" }}>
+            <span style={{ fontSize: 20 }}>{i.icon}</span>
+            {i.id === "mensajes" && mensajesNoLeidos > 0 && (
+              <div style={{ position: "absolute", top: -4, right: -6, width: 16, height: 16, borderRadius: 8, background: theme.danger, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, fontWeight: 800, color: "#fff" }}>
+                {mensajesNoLeidos > 9 ? "9+" : mensajesNoLeidos}
+              </div>
+            )}
+          </div>
           <span style={{ fontSize: 10, color: active === i.id ? theme.accentLight : theme.muted, fontWeight: 600 }}>{i.label}</span>
           {active === i.id && <div style={{ width: 4, height: 4, borderRadius: 2, background: theme.accent }} />}
         </div>
@@ -37,7 +45,6 @@ const items = [{ id: "alumno_home", icon: "⊞", label: "Inicio" }, { id: "rutin
     </div>
   );
 };
-
 function LoginScreen({ onNav }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -422,8 +429,7 @@ function AnamnesisScreen({ onNav }) {
             try {
               const { data: { user } } = await supabase.auth.getUser();
               if (user) {
-                const { error } = await supabase.from("usuarios").upsert({
-                  id: user.id,
+await supabase.from("usuarios").insert({                  id: user.id,
                   nombre: form.nombre,
                   email: user.email,
                   edad: parseInt(form.edad) || null,
@@ -458,7 +464,7 @@ function AnamnesisScreen({ onNav }) {
                   resumen_almuerzo: form.almuerzo,
                   resumen_once: form.once,
                   resumen_cena: form.cena,
-                }, { onConflict: "id" });
+                });
                 if (error) console.error("Error guardando anamnesis:", error.message);
               }
             } catch(e) {
@@ -482,7 +488,7 @@ function AlumnoHome({ onNav }) {
 const [rutina, setRutina] = useState(null);
   const [checkin, setCheckin] = useState(null);
   const [dieta, setDieta] = useState(null);
-  const [semana, setSemana] = useState(null);  const pagoVencido = false;
+  const [semana, setSemana] = useState(null); const [mensajesNoLeidos, setMensajesNoLeidos] = useState(0); const pagoVencido = false;
   const diasRestantes = 2;
 
   useEffect(() => {
@@ -505,6 +511,8 @@ const [rutina, setRutina] = useState(null);
         if (dietas && dietas.length > 0) setDieta(dietas[0]);
         const { data: usr } = await supabase.from("usuarios").select("created_at").eq("id", user.id).single();
         if (usr?.created_at) { const inicio = new Date(usr.created_at); const dias = Math.floor((new Date() - inicio) / 86400000); setSemana(Math.floor(dias / 7) + 1); }
+        const { data: noLeidos } = await supabase.from("mensajes").select("id").eq("usuario_id", user.id).eq("de", "coach").eq("leido", false);
+        if (noLeidos) setMensajesNoLeidos(noLeidos.length);
       }
     };
     cargar();
@@ -562,7 +570,7 @@ const [rutina, setRutina] = useState(null);
           </div>
         </div>
       </Card>
-      <NavBar active="alumno_home" onNav={onNav} />
+      <NavBar active="alumno_home" onNav={onNav} mensajesNoLeidos={mensajesNoLeidos} />
     </div>
   );
 }
@@ -1330,7 +1338,7 @@ function CheckinScreen({ onNav }) {
             <div style={{ marginTop: 12, background: theme.surface, borderRadius: 10, padding: 10 }}>
               <div style={{ fontSize: 11, color: "#A78BFA", fontWeight: 700, marginBottom: 6 }}>📊 Referencia % grasa corporal</div>
               <div style={{ fontSize: 10, color: theme.muted, marginBottom: 6 }}>Compárate con la imagen y estima tu porcentaje</div>
-              <img src={GRASA_IMG} alt="Referencia % grasa" style={{ width: "100%", borderRadius: 8, marginBottom: 4 }} />
+              <img src={GRASA_IMG} alt="Referencia % grasa" onClick={() => { const w = window.open("", "_blank"); w.document.write('<img src="' + GRASA_IMG + '" style="max-width:100%;height:auto">'); }} style={{ width: "100%", borderRadius: 8, marginBottom: 4, cursor: "pointer" }} />
             </div>
           </Card>
 
@@ -1415,6 +1423,97 @@ function CheckinScreen({ onNav }) {
   );
 }
 
+function MensajesScreen({ onNav }) {
+  const [mensajes, setMensajes] = useState([]);
+  const [texto, setTexto] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [userId, setUserId] = useState(null);
+
+  useEffect(() => {
+    const init = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        setUserId(user.id);
+        await cargarMensajes(user.id);
+        // Marcar como leídos los mensajes del coach
+        // mensajes marcados como leidos al abrir el chat
+      }
+      setLoading(false);
+    };
+    init();
+
+    // Realtime — escucha nuevos mensajes
+    const channel = supabase.channel("mensajes-alumno")
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "mensajes" }, () => {
+        supabase.auth.getUser().then(({ data: { user } }) => {
+          if (user) cargarMensajes(user.id);
+        });
+      })
+      .subscribe();
+
+    return () => supabase.removeChannel(channel);
+  }, []);
+
+  const cargarMensajes = async (uid) => {
+    const { data } = await supabase
+      .from("mensajes")
+      .select("*")
+      .eq("usuario_id", uid)
+      .order("created_at", { ascending: true });
+    if (data) setMensajes(data);
+  };
+
+  const enviar = async () => {
+    if (!texto.trim() || !userId) return;
+    await supabase.from("mensajes").insert({
+      usuario_id: userId,
+      de: "alumno",
+      texto: texto.trim(),
+      leido: false,
+    });
+    setTexto("");
+  };
+
+  return (
+    <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
+      <div style={{ padding: "16px 16px 12px", background: theme.surface, borderBottom: `1px solid ${theme.border}` }}>
+        <div style={{ color: theme.muted, fontSize: 12 }}>COMUNICACIÓN</div>
+        <div style={{ fontSize: 20, fontWeight: 800, color: theme.text }}>Mensajes 💬</div>
+      </div>
+      <div style={{ flex: 1, overflowY: "auto", padding: "12px 16px" }}>
+        {loading ? (
+          <div style={{ textAlign: "center", color: theme.muted, marginTop: 40 }}>Cargando...</div>
+        ) : mensajes.length === 0 ? (
+          <div style={{ textAlign: "center", padding: 40 }}>
+            <div style={{ fontSize: 32, marginBottom: 12 }}>💬</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: theme.text, marginBottom: 6 }}>Sin mensajes aún</div>
+            <div style={{ fontSize: 12, color: theme.muted }}>Escribe un mensaje a tu coach</div>
+          </div>
+        ) : (
+          mensajes.map((m, i) => (
+            <div key={i} style={{ display: "flex", justifyContent: m.de === "coach" ? "flex-start" : "flex-end", marginBottom: 10 }}>
+              {m.de === "coach" && (
+                <div style={{ width: 28, height: 28, borderRadius: 14, background: theme.accent, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 800, marginRight: 8, flexShrink: 0 }}>C</div>
+              )}
+              <div style={{ background: m.de === "coach" ? theme.card : theme.accent, border: `1px solid ${m.de === "coach" ? theme.border : theme.accent}`, borderRadius: 12, padding: "10px 14px", maxWidth: "75%" }}>
+                <div style={{ fontSize: 13, color: theme.text, lineHeight: 1.5 }}>{m.texto}</div>
+                <div style={{ fontSize: 10, color: m.de === "coach" ? theme.muted : "rgba(255,255,255,0.6)", marginTop: 4 }}>
+                  {new Date(m.created_at).toLocaleDateString("es-CL", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                </div>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+      <div style={{ padding: "10px 16px 20px", background: theme.surface, borderTop: `1px solid ${theme.border}`, display: "flex", gap: 8 }}>
+        <input value={texto} onChange={e => setTexto(e.target.value)} onKeyDown={e => e.key === "Enter" && enviar()}
+          placeholder="Escribe un mensaje..."
+          style={{ flex: 1, background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 10, padding: "10px 14px", color: theme.text, fontSize: 13, outline: "none" }} />
+        <button onClick={enviar} style={{ background: theme.accent, border: "none", borderRadius: 10, padding: "10px 16px", color: "#fff", fontWeight: 700, fontSize: 14, cursor: "pointer" }}>→</button>
+      </div>
+    </div>
+  );
+}
 function ProgresoScreen({ onNav }) {
   const semanas = ["S1","S2","S3","S4","S5","S6"];
   const pesos = [90.5,90.0,89.5,89.0,89.2,88.8];
@@ -1524,6 +1623,7 @@ function ProgresoScreen({ onNav }) {
 function CoachPanel({ onNav, onVerAlumno }) {
   const [alumnos, setAlumnos] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [mensajesPendientes, setMensajesPendientes] = useState(0);
 
   useEffect(() => {
     const cargarAlumnos = async () => {
@@ -1531,8 +1631,15 @@ function CoachPanel({ onNav, onVerAlumno }) {
         .from("usuarios")
         .select("id, nombre, email, objetivo, peso_actual, edad, sexo, estatura, created_at")
         .order("created_at", { ascending: false });
-      if (data) setAlumnos(data.filter(a => a.email !== "coach.claudiomiquel@gmail.com"));
-      setLoading(false);
+      if (data) {
+          const alumnosFiltrados = data.filter(a => a.email !== "coach.claudiomiquel@gmail.com");
+          const { data: msjs } = await supabase.from("mensajes").select("usuario_id").eq("de", "alumno").eq("leido", false);
+          const idsConMensaje = new Set((msjs || []).map(m => m.usuario_id));
+          setAlumnos(alumnosFiltrados.map(a => ({ ...a, tieneMensaje: idsConMensaje.has(a.id) })));
+        }
+        setLoading(false);
+      const { data: pendientes } = await supabase.from("mensajes").select("id, usuario_id, texto, created_at").eq("de", "alumno").eq("leido", false).order("created_at", { ascending: false });
+      if (pendientes) setMensajesPendientes(pendientes.length);
     };
     cargarAlumnos();
   }, []);
@@ -1562,7 +1669,7 @@ function CoachPanel({ onNav, onVerAlumno }) {
       <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:16 }}>
         {[
           { label:"Alumnos", value: String(alumnos.length), icon:"👥", color:theme.accentLight },
-          { label:"Check-ins", value:"0", icon:"📋", color:theme.warning },
+          { label:"Check-ins", value:"0", icon:"📋", color:theme.warning }, { label:"Msj nuevos", value:String(mensajesPendientes), icon:"💬", color:theme.danger },
           { label:"Sin pago", value:String(pagosList.length), icon:"💳", color:theme.danger },
         ].map(m=>(
           <Card key={m.label} style={{ textAlign:"center",padding:14 }}>
@@ -1574,6 +1681,21 @@ function CoachPanel({ onNav, onVerAlumno }) {
       </div>
 
       {/* Lista alumnos reales */}
+      {mensajesPendientes > 0 && (
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 12, color: theme.danger, fontWeight: 700, marginBottom: 10 }}>💬 MENSAJES SIN LEER</div>
+          {alumnos.filter(a => a.tieneMensaje).map(a => (
+            <div key={a.id} onClick={() => { onVerAlumno({...a, tabInicial: "Mensajes"}); }}
+              style={{ background:`${theme.danger}10`, border:`1px solid ${theme.danger}33`, borderRadius:12, padding:"12px 14px", marginBottom:8, cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+              <div>
+                <div style={{ fontSize:14, fontWeight:700, color:theme.text }}>{a.nombre}</div>
+                <div style={{ fontSize:12, color:theme.muted }}>Tiene mensajes sin leer</div>
+              </div>
+              <div style={{ background:theme.danger, borderRadius:8, padding:"4px 10px", fontSize:12, fontWeight:800, color:"#fff" }}>Ver →</div>
+            </div>
+          ))}
+        </div>
+      )}
       <div style={{ fontSize:12,color:theme.muted,marginBottom:10 }}>ALUMNOS REGISTRADOS</div>
       {loading ? (
         <Card style={{ textAlign:"center",padding:20 }}>
@@ -1866,7 +1988,80 @@ function RutinaCoach({ alumno }) {
   );
 }
 
-function CheckinsCoach({ alumno }) {
+function MensajesCoach({ alumno }) {
+  const [mensajes, setMensajes] = useState([]);
+  const [texto, setTexto] = useState("");
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    cargarMensajes();
+  }, [alumno]);
+
+  const cargarMensajes = async () => {
+    if (!alumno?.id) return;
+    const { data } = await supabase
+      .from("mensajes")
+      .select("*")
+      .eq("usuario_id", alumno.id)
+      .order("created_at", { ascending: true });
+    if (data) setMensajes(data);
+    setLoading(false);
+  };
+
+  const responder = async () => {
+    if (!texto.trim()) return;
+    await supabase.from("mensajes").insert({
+      usuario_id: alumno.id,
+      de: "coach",
+      texto: texto.trim(),
+    });
+    setTexto("");
+    cargarMensajes();
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: 500 }}>
+      <div style={{ flex: 1, overflowY: "auto", marginBottom: 10 }}>
+        {loading ? (
+          <div style={{ color: theme.muted, textAlign: "center", padding: 20 }}>Cargando...</div>
+        ) : mensajes.length === 0 ? (
+          <Card style={{ textAlign: "center", padding: 30 }}>
+            <div style={{ fontSize: 24, marginBottom: 8 }}>💬</div>
+            <div style={{ color: theme.muted, fontSize: 13 }}>Sin mensajes de {alumno?.nombre}</div>
+          </Card>
+        ) : (
+          mensajes.map((m, i) => (
+            <div key={i} style={{ display: "flex", justifyContent: m.de === "coach" ? "flex-end" : "flex-start", marginBottom: 10 }}>
+              <div style={{
+                background: m.de === "coach" ? theme.accent : theme.card,
+                border: `1px solid ${m.de === "coach" ? theme.accent : theme.border}`,
+                borderRadius: 12, padding: "10px 14px", maxWidth: "75%",
+              }}>
+                <div style={{ fontSize: 11, color: m.de === "coach" ? "rgba(255,255,255,0.7)" : theme.muted, marginBottom: 3 }}>
+                  {m.de === "coach" ? "Tú (coach)" : alumno?.nombre}
+                </div>
+                <div style={{ fontSize: 13, color: theme.text, lineHeight: 1.5 }}>{m.texto}</div>
+                <div style={{ fontSize: 10, color: m.de === "coach" ? "rgba(255,255,255,0.5)" : theme.muted, marginTop: 4 }}>
+                  {new Date(m.created_at).toLocaleDateString("es-CL", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                </div>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <input
+          value={texto}
+          onChange={e => setTexto(e.target.value)}
+          onKeyDown={e => e.key === "Enter" && responder()}
+          placeholder="Responder..."
+          style={{ flex: 1, background: theme.surface, border: `1px solid ${theme.border}`, borderRadius: 10, padding: "10px 14px", color: theme.text, fontSize: 13, outline: "none" }}
+        />
+        <button onClick={responder} style={{ background: theme.accent, border: "none", borderRadius: 10, padding: "10px 16px", color: "#fff", fontWeight: 700, fontSize: 14, cursor: "pointer" }}>→</button>
+      </div>
+    </div>
+  );
+}function CheckinsCoach({ alumno }) {
   const [checkins, setCheckins] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -1920,7 +2115,7 @@ function CheckinsCoach({ alumno }) {
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:6 }}>
                 {[["Frente", c.foto_frente], ["Espalda", c.foto_espalda], ["P. Der", c.foto_perf_der], ["P. Izq", c.foto_perf_izq]].map(([label, url]) => url && (
                   <div key={label} style={{ borderRadius:8, overflow:"hidden", border:`1px solid ${theme.border}` }}>
-                    <img src={url} alt={label} style={{ width:"100%", height:80, objectFit:"cover" }} />
+                    <img src={url} alt={label} onClick={() => { const w = window.open("", "_blank"); w.document.write('<img src="' + url + '" style="max-width:100%;height:auto">'); }} style={{ width:"100%", height:80, objectFit:"cover", cursor:"pointer" }} />
                     <div style={{ fontSize:9, color:theme.muted, textAlign:"center", padding:3 }}>{label}</div>
                   </div>
                 ))}
@@ -2042,13 +2237,7 @@ function CoachAlumno({ onNav, alumno }) {
           </Card>
         </div>)}
         {tab==="Check-ins"&&(<CheckinsCoach alumno={alumno}/>)}
-        {tab==="Mensajes"&&(<div style={{ display:"flex",flexDirection:"column",gap:10 }}>
-          <Card style={{ textAlign:"center",padding:30 }}>
-            <div style={{ fontSize:24,marginBottom:8 }}>💬</div>
-            <div style={{ color:theme.muted,fontSize:13 }}>Mensajes próximamente</div>
-          </Card>
-          <div style={{ display:"flex",gap:8,marginTop:8 }}><input placeholder="Escribe un mensaje..." style={{ flex:1,background:theme.surface,border:`1px solid ${theme.border}`,borderRadius:10,padding:"10px 14px",color:theme.text,fontSize:13,outline:"none" }}/><Btn style={{ width:"auto",padding:"10px 16px" }}>→</Btn></div>
-        </div>)}
+{tab==="Mensajes"&&(<MensajesCoach alumno={alumno}/>)}
         {tab==="Rutina"&&(<RutinaCoach alumno={alumno}/>)}
         {tab==="Dieta"&&(<DietaCoach alumno={alumno}/>)}
         {tab==="Progreso"&&(
@@ -2082,6 +2271,7 @@ export default function App() {
       case "nutricion": return <NutricionScreen onNav={setScreen}/>;
       case "diario": return <DiarioScreen onNav={setScreen}/>;
       case "checkin": return <CheckinScreen onNav={setScreen}/>;
+      case "mensajes": return <MensajesScreen onNav={setScreen}/>;
       case "progreso": return <ProgresoScreen onNav={setScreen}/>;
       case "coach_panel": return <CoachPanel onNav={setScreen} onVerAlumno={navCoachAlumno}/>;
       case "coach_alumno": return <CoachAlumno onNav={setScreen} alumno={alumnoSeleccionado}/>;
