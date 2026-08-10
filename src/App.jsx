@@ -486,6 +486,7 @@ function AlumnoHome({ onNav }) {
   const [pagoReportado, setPagoReportado] = useState(false);
   const [nombre, setNombre] = useState("Alumno");
 const [rutina, setRutina] = useState(null);
+const [estadoPago, setEstadoPago] = useState(null);
   const [checkin, setCheckin] = useState(null);
   const [dieta, setDieta] = useState(null);
   const [semana, setSemana] = useState(null); const [mensajesNoLeidos, setMensajesNoLeidos] = useState(0); const pagoVencido = false;
@@ -509,6 +510,16 @@ const [rutina, setRutina] = useState(null);
         if (checkins && checkins.length > 0) setCheckin(checkins[0]);
         const { data: dietas } = await supabase.from("dietas").select("calorias").eq("usuario_id", user.id).order("created_at", { ascending: false }).limit(1);
         if (dietas && dietas.length > 0) setDieta(dietas[0]);
+        const { data: pagoData } = await supabase.from("pagos").select("*").eq("usuario_id", user.id).order("created_at", { ascending: false }).limit(1);
+        if (pagoData && pagoData.length > 0) {
+          const pago = pagoData[0];
+          const hoy = new Date();
+          const vence = new Date(pago.fecha_vencimiento);
+          const diasRestantes = Math.ceil((vence - hoy) / (1000 * 60 * 60 * 24));
+          if (pago.estado === "bloqueado") setEstadoPago({ tipo: "bloqueado", dias: 0 });
+          else if (diasRestantes <= 3 && diasRestantes >= 0) setEstadoPago({ tipo: "por_vencer", dias: diasRestantes });
+          else if (diasRestantes < 0) setEstadoPago({ tipo: "vencido", dias: Math.abs(diasRestantes) });
+        }
         const { data: usr } = await supabase.from("usuarios").select("created_at").eq("id", user.id).single();
         if (usr?.created_at) { const inicio = new Date(usr.created_at); const dias = Math.floor((new Date() - inicio) / 86400000); setSemana(Math.floor(dias / 7) + 1); }
         const { data: noLeidos } = await supabase.from("mensajes").select("id").eq("usuario_id", user.id).eq("de", "coach").eq("leido", false);
@@ -520,6 +531,34 @@ const [rutina, setRutina] = useState(null);
 
   return (
     <div style={{ padding: "20px 16px 90px", overflowY: "auto", height: "100%", boxSizing: "border-box" }}>
+      {estadoPago?.tipo === "bloqueado" && (
+        <div style={{ background:`${theme.danger}15`, border:`1px solid ${theme.danger}55`, borderRadius:14, padding:"14px 16px", marginBottom:16 }}>
+          <div style={{ fontSize:14, fontWeight:800, color:theme.danger, marginBottom:4 }}>🔒 Acceso bloqueado</div>
+          <div style={{ fontSize:12, color:theme.muted }}>Tu plan está bloqueado por pago pendiente. Contacta a tu coach.</div>
+        </div>
+      )}
+      {estadoPago?.tipo === "por_vencer" && (
+        <div style={{ background:`${theme.warning}15`, border:`1px solid ${theme.warning}55`, borderRadius:14, padding:"14px 16px", marginBottom:16 }}>
+          <div style={{ fontSize:14, fontWeight:800, color:theme.warning, marginBottom:4 }}>⚠️ Pago vence en {estadoPago.dias} días</div>
+          <div style={{ fontSize:12, color:theme.muted, marginBottom:10 }}>Realiza tu transferencia y avísale a tu coach para mantener el acceso.</div>
+          <button onClick={async () => {
+            const { data:{ user } } = await supabase.auth.getUser();
+            if (user) {
+              const { data: p } = await supabase.from("pagos").select("id").eq("usuario_id", user.id).order("created_at", { ascending: false }).limit(1);
+              if (p && p.length > 0) await supabase.from("pagos").update({ reportado_por_alumno: true }).eq("id", p[0].id);
+              setEstadoPago({ ...estadoPago, reportado: true });
+            }
+          }} style={{ background: estadoPago.reportado ? `${theme.success}22` : theme.accent, border:"none", borderRadius:10, padding:"10px 16px", color:"#fff", fontWeight:700, fontSize:13, cursor:"pointer", width:"100%" }}>
+            {estadoPago.reportado ? "✅ Aviso enviado al coach" : "✓ Ya realicé la transferencia"}
+          </button>
+        </div>
+      )}
+      {estadoPago?.tipo === "vencido" && (
+        <div style={{ background:`${theme.danger}15`, border:`1px solid ${theme.danger}55`, borderRadius:14, padding:"14px 16px", marginBottom:16 }}>
+          <div style={{ fontSize:14, fontWeight:800, color:theme.danger, marginBottom:4 }}>❌ Pago vencido hace {estadoPago.dias} días</div>
+          <div style={{ fontSize:12, color:theme.muted }}>Contacta a tu coach para regularizar tu situación.</div>
+        </div>
+      )}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
         <div>
           <div style={{ color: theme.muted, fontSize: 12 }}>BUENOS DÍAS</div>
@@ -1624,6 +1663,8 @@ function CoachPanel({ onNav, onVerAlumno }) {
   const [alumnos, setAlumnos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [mensajesPendientes, setMensajesPendientes] = useState(0);
+  const [alumnosPorVencer, setAlumnosPorVencer] = useState([]);
+  const [checkinsPendientes, setCheckinsPendientes] = useState(0);
 
   useEffect(() => {
     const cargarAlumnos = async () => {
@@ -1640,6 +1681,21 @@ function CoachPanel({ onNav, onVerAlumno }) {
         setLoading(false);
       const { data: pendientes } = await supabase.from("mensajes").select("id, usuario_id, texto, created_at").eq("de", "alumno").eq("leido", false).order("created_at", { ascending: false });
       if (pendientes) setMensajesPendientes(pendientes.length);
+      const { data: pagosData } = await supabase.from("pagos").select("*, usuarios(nombre, id)").eq("estado", "activo").order("fecha_vencimiento", { ascending: true });
+      if (pagosData) {
+        const hoy = new Date();
+        const porVencer = pagosData.filter(p => {
+          const vence = new Date(p.fecha_vencimiento);
+          const dias = Math.ceil((vence - hoy) / (1000 * 60 * 60 * 24));
+          return dias <= 3 && dias >= 0;
+        }).map(p => ({
+          ...p.usuarios,
+          diasRestantes: Math.ceil((new Date(p.fecha_vencimiento) - hoy) / (1000 * 60 * 60 * 24))
+        }));
+        setAlumnosPorVencer(porVencer);
+      }
+      const { data: chks } = await supabase.from("checkins").select("id").order("created_at", { ascending: false });
+      if (chks) setCheckinsPendientes(chks.length);
     };
     cargarAlumnos();
   }, []);
@@ -1669,7 +1725,6 @@ function CoachPanel({ onNav, onVerAlumno }) {
       <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:16 }}>
         {[
           { label:"Alumnos", value: String(alumnos.length), icon:"👥", color:theme.accentLight },
-          { label:"Check-ins", value:"0", icon:"📋", color:theme.warning }, { label:"Msj nuevos", value:String(mensajesPendientes), icon:"💬", color:theme.danger },
           { label:"Sin pago", value:String(pagosList.length), icon:"💳", color:theme.danger },
         ].map(m=>(
           <Card key={m.label} style={{ textAlign:"center",padding:14 }}>
@@ -1683,6 +1738,20 @@ function CoachPanel({ onNav, onVerAlumno }) {
       {/* Lista alumnos reales */}
       {mensajesPendientes > 0 && (
         <div style={{ marginBottom: 16 }}>
+          {alumnosPorVencer.length > 0 && (
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 12, color: theme.warning, fontWeight: 700, marginBottom: 10 }}>⚠️ PAGOS POR VENCER</div>
+          {alumnosPorVencer.map(a => (
+            <div key={a.id} style={{ background:`${theme.warning}10`, border:`1px solid ${theme.warning}33`, borderRadius:12, padding:"12px 14px", marginBottom:8, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+              <div>
+                <div style={{ fontSize:14, fontWeight:700, color:theme.text }}>{a.nombre}</div>
+                <div style={{ fontSize:12, color:theme.muted }}>{a.diasRestantes === 0 ? "Vence hoy" : `Vence en ${a.diasRestantes} días`}</div>
+              </div>
+              <button onClick={() => onVerAlumno({...a, tabInicial: "Pagos"})} style={{ background:`${theme.warning}22`, border:`1px solid ${theme.warning}55`, borderRadius:8, padding:"5px 10px", color:theme.warning, fontSize:11, fontWeight:700, cursor:"pointer" }}>Ver →</button>
+            </div>
+          ))}
+        </div>
+      )}
           <div style={{ fontSize: 12, color: theme.danger, fontWeight: 700, marginBottom: 10 }}>💬 MENSAJES SIN LEER</div>
           {alumnos.filter(a => a.tieneMensaje).map(a => (
             <div key={a.id} onClick={() => { onVerAlumno({...a, tabInicial: "Mensajes"}); }}
@@ -1746,6 +1815,112 @@ function CoachPanel({ onNav, onVerAlumno }) {
   );
 }
 
+function PagosCoach({ alumno }) {
+  const [pago, setPago] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [fechaVencimiento, setFechaVencimiento] = useState("");
+  const [monto, setMonto] = useState("");
+  const [guardando, setGuardando] = useState(false);
+  const [exito, setExito] = useState("");
+
+  useEffect(() => { cargarPago(); }, [alumno]);
+
+  const cargarPago = async () => {
+    if (!alumno?.id) return;
+    const { data } = await supabase.from("pagos").select("*").eq("usuario_id", alumno.id).order("created_at", { ascending: false }).limit(1);
+    if (data && data.length > 0) setPago(data[0]);
+    setLoading(false);
+  };
+
+  const asignarPago = async () => {
+    if (!fechaVencimiento) return;
+    setGuardando(true);
+    await supabase.from("pagos").insert({
+      usuario_id: alumno.id,
+      fecha_vencimiento: fechaVencimiento,
+      monto: parseInt(monto) || null,
+      estado: "activo",
+    });
+    setExito("Pago asignado correctamente");
+    setFechaVencimiento("");
+    setMonto("");
+    cargarPago();
+    setGuardando(false);
+    setTimeout(() => setExito(""), 3000);
+  };
+
+  const confirmarPago = async () => {
+    if (!pago) return;
+    setGuardando(true);
+    const nuevaFecha = new Date();
+    nuevaFecha.setDate(nuevaFecha.getDate() + 28);
+    await supabase.from("pagos").update({
+      estado: "activo",
+      fecha_pago: new Date().toISOString().split("T")[0],
+      reportado_por_alumno: false,
+      fecha_vencimiento: nuevaFecha.toISOString().split("T")[0],
+    }).eq("id", pago.id);
+    setExito("✅ Pago confirmado — renovado 4 semanas");
+    cargarPago();
+    setGuardando(false);
+    setTimeout(() => setExito(""), 3000);
+  };
+
+  const bloquear = async () => {
+    if (!pago) return;
+    await supabase.from("pagos").update({ estado: pago.estado === "bloqueado" ? "activo" : "bloqueado" }).eq("id", pago.id);
+    cargarPago();
+  };
+
+  const inputStyle = { background: theme.surface, border: `1px solid ${theme.border}`, borderRadius: 8, padding: "8px 10px", color: theme.text, fontSize: 13, outline: "none", width: "100%", boxSizing: "border-box" };
+
+  if (loading) return <Card style={{ textAlign: "center", padding: 20 }}><div style={{ color: theme.muted }}>Cargando...</div></Card>;
+
+  return (
+    <div>
+      {exito && <Card style={{ textAlign: "center", padding: 14, marginBottom: 14, background: `${theme.success}18`, border: `1px solid ${theme.success}44` }}><div style={{ fontSize: 13, fontWeight: 700, color: theme.success }}>{exito}</div></Card>}
+
+      {/* Estado actual */}
+      {pago && (
+        <Card style={{ marginBottom: 14, border: `1px solid ${pago.estado === "bloqueado" ? theme.danger + "55" : pago.reportado_por_alumno ? theme.warning + "55" : theme.success + "55"}` }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: theme.text }}>Estado de pago</div>
+            <Tag color={pago.estado === "bloqueado" ? theme.danger : pago.reportado_por_alumno ? theme.warning : theme.success}>
+              {pago.estado === "bloqueado" ? "🔒 Bloqueado" : pago.reportado_por_alumno ? "⚠️ Reportó pago" : "✅ Activo"}
+            </Tag>
+          </div>
+          <div style={{ fontSize: 13, color: theme.muted, marginBottom: 4 }}>Vence: <span style={{ color: theme.text, fontWeight: 600 }}>{pago.fecha_vencimiento}</span></div>
+          {pago.monto && <div style={{ fontSize: 13, color: theme.muted, marginBottom: 10 }}>Monto: <span style={{ color: theme.text, fontWeight: 600 }}>${pago.monto.toLocaleString()}</span></div>}
+
+          <div style={{ display: "flex", gap: 8 }}>
+            {pago.reportado_por_alumno && (
+              <button onClick={confirmarPago} style={{ flex: 1, background: `${theme.success}22`, border: `1px solid ${theme.success}55`, borderRadius: 8, padding: "8px", color: theme.success, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                ✓ Confirmar pago
+              </button>
+            )}
+            <button onClick={bloquear} style={{ flex: 1, background: pago.estado === "bloqueado" ? `${theme.success}22` : `${theme.danger}22`, border: `1px solid ${pago.estado === "bloqueado" ? theme.success + "55" : theme.danger + "55"}`, borderRadius: 8, padding: "8px", color: pago.estado === "bloqueado" ? theme.success : theme.danger, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+              {pago.estado === "bloqueado" ? "🔓 Desbloquear" : "🔒 Bloquear"}
+            </button>
+          </div>
+        </Card>
+      )}
+
+      {/* Asignar nuevo pago */}
+      <Card>
+        <div style={{ fontSize: 12, color: theme.muted, marginBottom: 12 }}>{pago ? "RENOVAR PAGO" : "ASIGNAR PRIMER PAGO"}</div>
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 11, color: theme.muted, marginBottom: 4 }}>Fecha de vencimiento</div>
+          <input type="date" style={inputStyle} value={fechaVencimiento} onChange={e => setFechaVencimiento(e.target.value)} />
+        </div>
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 11, color: theme.muted, marginBottom: 4 }}>Monto (opcional)</div>
+          <input type="number" style={inputStyle} placeholder="Ej: 50000" value={monto} onChange={e => setMonto(e.target.value)} />
+        </div>
+        <Btn onClick={asignarPago} style={{ background: theme.success }}>{guardando ? "Guardando..." : "Asignar pago"}</Btn>
+      </Card>
+    </div>
+  );
+}
 function RutinaCoach({ alumno }) {
   const [rutinas, setRutinas] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1994,8 +2169,7 @@ function MensajesCoach({ alumno }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    cargarMensajes();
-  }, [alumno]);
+cargarMensajes();  }, [alumno]);
 
   const cargarMensajes = async () => {
     if (!alumno?.id) return;
@@ -2005,9 +2179,14 @@ function MensajesCoach({ alumno }) {
       .eq("usuario_id", alumno.id)
       .order("created_at", { ascending: true });
     if (data) setMensajes(data);
+    marcarLeidos();
     setLoading(false);
   };
 
+  const marcarLeidos = async () => {
+    if (!alumno?.id) return;
+    await supabase.from("mensajes").update({ leido: true }).eq("usuario_id", alumno.id).eq("de", "alumno").eq("leido", false);
+  };
   const responder = async () => {
     if (!texto.trim()) return;
     await supabase.from("mensajes").insert({
@@ -2129,8 +2308,8 @@ function MensajesCoach({ alumno }) {
 }
 
 function CoachAlumno({ onNav, alumno }) {
-  const tabs=["Datos","Rutina","Dieta","Check-ins","Progreso","Mensajes"];
-  const [tab,setTab]=useState("Datos");
+  const tabs=["Datos","Rutina","Dieta","Check-ins","Pagos","Progreso","Mensajes"];
+  const [tab,setTab]=useState(alumno?.tabInicial || "Datos");
   const [datosCompletos, setDatosCompletos] = useState(null);
 
   useEffect(() => {
@@ -2240,6 +2419,7 @@ function CoachAlumno({ onNav, alumno }) {
 {tab==="Mensajes"&&(<MensajesCoach alumno={alumno}/>)}
         {tab==="Rutina"&&(<RutinaCoach alumno={alumno}/>)}
         {tab==="Dieta"&&(<DietaCoach alumno={alumno}/>)}
+        {tab==="Pagos"&&(<PagosCoach alumno={alumno}/>)}
         {tab==="Progreso"&&(
           <Card style={{ textAlign:"center",padding:40 }}>
             <div style={{ fontSize:32,marginBottom:10 }}>📈</div>
