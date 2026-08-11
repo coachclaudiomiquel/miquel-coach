@@ -1700,13 +1700,6 @@ function CoachPanel({ onNav, onVerAlumno }) {
     cargarAlumnos();
   }, []);
 
-  const pagos = [
-    { nombre: "Valentina S.", estado: "vencido", diasText: "Vencido hace 5 días", bloqueado: false },
-    { nombre: "Matías C.", estado: "por_vencer", diasText: "Vence en 3 días", bloqueado: false },
-  ];
-  const [pagosList, setPagosList] = useState(pagos);
-  const confirmarPago = (i) => { const upd=[...pagosList]; upd.splice(i,1); setPagosList(upd); };
-  const bloquear = (i) => { const upd=[...pagosList]; upd[i].bloqueado=!upd[i].bloqueado; setPagosList(upd); };
 
   return (
     <div style={{ padding:"20px 16px 24px",overflowY:"auto",height:"100%",boxSizing:"border-box" }}>
@@ -1725,7 +1718,7 @@ function CoachPanel({ onNav, onVerAlumno }) {
       <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:16 }}>
         {[
           { label:"Alumnos", value: String(alumnos.length), icon:"👥", color:theme.accentLight },
-          { label:"Sin pago", value:String(pagosList.length), icon:"💳", color:theme.danger },
+          { label:"Sin pago", value:String(alumnosPorVencer.length), icon:"💳", color:theme.danger },
         ].map(m=>(
           <Card key={m.label} style={{ textAlign:"center",padding:14 }}>
             <div style={{ fontSize:20 }}>{m.icon}</div>
@@ -1793,24 +1786,6 @@ function CoachPanel({ onNav, onVerAlumno }) {
           </div>
         ))
       )}
-
-      {/* Pagos pendientes */}
-      {pagosList.length > 0 && (<>
-        <div style={{ fontSize:12,color:theme.muted,marginBottom:10,marginTop:16 }}>💳 PAGOS PENDIENTES</div>
-        {pagosList.map((p,i)=>(
-          <div key={i} style={{ background:p.estado==="vencido"?`${theme.danger}10`:`${theme.warning}10`,border:`1px solid ${p.estado==="vencido"?theme.danger+"44":theme.warning+"44"}`,borderRadius:12,padding:"12px 14px",marginBottom:10 }}>
-            <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10 }}>
-              <div><div style={{ fontSize:14,fontWeight:700,color:theme.text }}>{p.nombre}</div><div style={{ fontSize:12,color:theme.muted,marginTop:2 }}>{p.diasText}</div></div>
-              <Tag color={p.estado==="vencido"?theme.danger:theme.warning}>{p.estado==="vencido"?"Vencido":"Por vencer"}</Tag>
-            </div>
-            <div style={{ display:"flex",gap:8 }}>
-              <button onClick={()=>bloquear(i)} style={{ flex:1,background:p.bloqueado?`${theme.success}22`:`${theme.danger}22`,border:`1px solid ${p.bloqueado?theme.success+"55":theme.danger+"55"}`,borderRadius:8,padding:"7px",color:p.bloqueado?theme.success:theme.danger,fontSize:12,fontWeight:700,cursor:"pointer" }}>
-                {p.bloqueado?"🔓 Desbloquear":"🔒 Bloquear acceso"}
-              </button>
-            </div>
-          </div>
-        ))}
-      </>)}
     </div>
   );
 }
