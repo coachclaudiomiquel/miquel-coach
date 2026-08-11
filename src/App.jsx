@@ -181,6 +181,44 @@ function AnamnesisScreen({ onNav }) {
 
   const set = (k, v) => setForm(prev => ({ ...prev, [k]: v }));
 
+  const [fotosArchivos, setFotosArchivos] = useState({ fotoFrente: null, fotoEspalda: null, fotoPerfDer: null, fotoPerfIzq: null });
+  const [enviandoAnamnesis, setEnviandoAnamnesis] = useState(false);
+
+  const comprimirFoto = (file) => {
+    return new Promise((resolve) => {
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
+      const img = new Image();
+      img.onload = () => {
+        const MAX = 800;
+        let w = img.width, h = img.height;
+        if (w > h && w > MAX) { h = h * MAX / w; w = MAX; }
+        else if (h > MAX) { w = w * MAX / h; h = MAX; }
+        canvas.width = w; canvas.height = h;
+        ctx.drawImage(img, 0, 0, w, h);
+        canvas.toBlob(resolve, "image/jpeg", 0.7);
+      };
+      img.src = URL.createObjectURL(file);
+    });
+  };
+
+  const handleFoto = async (key, file) => {
+    if (!file) return;
+    set(key, file.name);
+    const compressed = await comprimirFoto(file);
+    setFotosArchivos(prev => ({ ...prev, [key]: compressed }));
+  };
+
+  const subirFoto = async (userId, key, blob) => {
+    if (!blob) return null;
+    const path = `${userId}/anamnesis/${key}.jpg`;
+    const { error } = await supabase.storage
+      .from("fotos-alumnos")
+      .upload(path, blob, { contentType: "image/jpeg", upsert: true });
+    if (error) return null;
+    return `https://srlucwsakjuivogvunzx.supabase.co/storage/v1/object/public/fotos-alumnos/${path}`;
+  };
+
   const inputStyle = {
     background: theme.surface, border: `1px solid ${theme.border}`,
     borderRadius: 10, padding: "11px 14px", color: theme.text,
@@ -286,7 +324,7 @@ function AnamnesisScreen({ onNav }) {
             </select>
 
             <span style={labelStyle}>¿En qué horario pretendes entrenar? *</span>
-            <input style={inputStyle} placeholder="Ej: 07:00 o Entre 18:00 y 20:00" value={form.horarioEntreno} onChange={e => set("horarioEntreno", e.target.value)} />
+            <input type="time" style={inputStyle} value={form.horarioEntreno} onChange={e => set("horarioEntreno", e.target.value)} />
 
             <span style={labelStyle}>¿Tiene alguna enfermedad o lesión? *</span>
             <select style={selectStyle} value={form.enfermedadLesion} onChange={e => set("enfermedadLesion", e.target.value)}>
@@ -348,10 +386,10 @@ function AnamnesisScreen({ onNav }) {
             <input style={inputStyle} placeholder="Ej: Pollo, arroz, frutas..." value={form.favoritos} onChange={e => set("favoritos", e.target.value)} />
 
             <span style={labelStyle}>¿A qué hora se levanta?</span>
-            <input style={inputStyle} placeholder="Ej: 07:00" value={form.horaLevanta} onChange={e => set("horaLevanta", e.target.value)} />
+            <input type="time" style={inputStyle} value={form.horaLevanta} onChange={e => set("horaLevanta", e.target.value)} />
 
             <span style={labelStyle}>¿A qué hora se duerme?</span>
-            <input style={inputStyle} placeholder="Ej: 23:00" value={form.horaDuerme} onChange={e => set("horaDuerme", e.target.value)} />
+            <input type="time" style={inputStyle} value={form.horaDuerme} onChange={e => set("horaDuerme", e.target.value)} />
 
             <span style={labelStyle}>¿Cuántas comidas y/o colaciones haces al día?</span>
             <select style={selectStyle} value={form.comidasDia} onChange={e => set("comidasDia", e.target.value)}>
@@ -401,7 +439,7 @@ function AnamnesisScreen({ onNav }) {
                     {form[f.key] ? "Foto cargada" : f.label}
                   </span>
                   <input type="file" accept="image/*" style={{ display: "none" }}
-                    onChange={e => { if (e.target.files[0]) set(f.key, e.target.files[0].name); }} />
+                    onChange={e => handleFoto(f.key, e.target.files[0])} />
                 </label>
               ))}
             </div>
@@ -425,11 +463,17 @@ function AnamnesisScreen({ onNav }) {
             fontSize: 14, fontWeight: 700, cursor: "pointer"
           }}>Siguiente →</button>
         ) : (
-          <button onClick={async () => {
+          <button disabled={enviandoAnamnesis} onClick={async () => {
+            if (enviandoAnamnesis) return;
+            setEnviandoAnamnesis(true);
             try {
               const { data: { user } } = await supabase.auth.getUser();
               if (user) {
-await supabase.from("usuarios").insert({                  id: user.id,
+                const urlFrente = fotosArchivos.fotoFrente ? await subirFoto(user.id, "frente", fotosArchivos.fotoFrente) : null;
+                const urlEspalda = fotosArchivos.fotoEspalda ? await subirFoto(user.id, "espalda", fotosArchivos.fotoEspalda) : null;
+                const urlPerfDer = fotosArchivos.fotoPerfDer ? await subirFoto(user.id, "perfDer", fotosArchivos.fotoPerfDer) : null;
+                const urlPerfIzq = fotosArchivos.fotoPerfIzq ? await subirFoto(user.id, "perfIzq", fotosArchivos.fotoPerfIzq) : null;
+const { error } = await supabase.from("usuarios").upsert({                  id: user.id,
                   nombre: form.nombre,
                   email: user.email,
                   edad: parseInt(form.edad) || null,
@@ -464,18 +508,26 @@ await supabase.from("usuarios").insert({                  id: user.id,
                   resumen_almuerzo: form.almuerzo,
                   resumen_once: form.once,
                   resumen_cena: form.cena,
-                });
-                if (error) console.error("Error guardando anamnesis:", error.message);
+                  foto_frente: urlFrente,
+                  foto_espalda: urlEspalda,
+                  foto_perf_der: urlPerfDer,
+                  foto_perf_izq: urlPerfIzq,
+                }, { onConflict: "id" });
+                if (error) { console.error("Error guardando anamnesis:", error.message, error); alert("Error al guardar: " + error.message); setEnviandoAnamnesis(false); return; }
               }
             } catch(e) {
               console.error("Error:", e);
+              alert("Error inesperado: " + e.message);
+              setEnviandoAnamnesis(false);
+              return;
             }
+            setEnviandoAnamnesis(false);
             onNav("alumno_home");
           }} style={{
             flex: 2, background: theme.success, border: "none",
             borderRadius: 10, padding: "12px", color: "#fff",
             fontSize: 14, fontWeight: 800, cursor: "pointer"
-          }}>✓ Enviar y comenzar</button>
+          }}>{enviandoAnamnesis ? "Guardando..." : "✓ Enviar y comenzar"}</button>
         )}
       </div>
     </div>
@@ -2355,6 +2407,19 @@ function CoachAlumno({ onNav, alumno }) {
               </div>
             ))}
           </Card>
+          {(datosCompletos?.foto_frente || datosCompletos?.foto_espalda || datosCompletos?.foto_perf_der || datosCompletos?.foto_perf_izq) && (
+            <Card>
+              <div style={{ fontSize:12,color:theme.muted,marginBottom:10 }}>📸 FOTOS INICIALES (ANAMNESIS)</div>
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:6 }}>
+                {[["Frente", datosCompletos.foto_frente], ["Espalda", datosCompletos.foto_espalda], ["P. Der", datosCompletos.foto_perf_der], ["P. Izq", datosCompletos.foto_perf_izq]].map(([label, url]) => url && (
+                  <div key={label} style={{ borderRadius:8, overflow:"hidden", border:`1px solid ${theme.border}` }}>
+                    <img src={url} alt={label} onClick={() => { const w = window.open("", "_blank"); w.document.write('<img src="' + url + '" style="max-width:100%;height:auto">'); }} style={{ width:"100%", height:80, objectFit:"cover", cursor:"pointer" }} />
+                    <div style={{ fontSize:9, color:theme.muted, textAlign:"center", padding:3 }}>{label}</div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
           <Card>
             <div style={{ fontSize:12,color:theme.muted,marginBottom:10 }}>ALIMENTACIÓN</div>
             {[
