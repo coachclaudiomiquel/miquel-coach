@@ -45,6 +45,17 @@ const Btn = ({ children, onClick, variant = "primary", style = {} }) => (
 const Input = ({ placeholder, type = "text", value, onChange }) => (
   <input type={type} placeholder={placeholder} value={value} onChange={onChange} style={{ background: theme.surface, border: `1px solid ${theme.border}`, borderRadius: 10, padding: "13px 16px", color: theme.text, fontSize: 14, width: "100%", outline: "none", boxSizing: "border-box" }} />
 );
+// Visor de imagen dentro de la app: click para agrandar, click en X o "Volver" para regresar sin salir de la app.
+const ImageLightbox = ({ src, onClose }) => {
+  if (!src) return null;
+  return (
+    <div onClick={onClose} style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(5,5,10,0.92)", backdropFilter: "blur(4px)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 24, boxSizing: "border-box" }}>
+      <button onClick={onClose} style={{ position: "absolute", top: 18, right: 18, width: 40, height: 40, borderRadius: "50%", background: theme.card, border: `1px solid ${theme.accent}66`, color: theme.text, fontSize: 20, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: `0 0 16px ${theme.accent}55` }}>×</button>
+      <span onClick={onClose} style={{ position: "absolute", top: 22, left: 18, color: theme.accentLight, fontSize: 14, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>← Volver</span>
+      <img src={src} alt="Vista ampliada" onClick={e => e.stopPropagation()} style={{ maxWidth: "100%", maxHeight: "85vh", borderRadius: 14, border: `1px solid ${theme.accent}44`, boxShadow: `0 0 30px ${theme.accent}33`, objectFit: "contain" }} />
+    </div>
+  );
+};
 const NavBar = ({ active, onNav, mensajesNoLeidos = 0 }) => {
   const items = [{ id: "alumno_home", icon: "home", label: "Inicio" }, { id: "rutina", icon: "dumbbell", label: "Entreno" }, { id: "nutricion", icon: "fork_knife", label: "Dieta" }, { id: "checkin", icon: "chart", label: "Check-in" }, { id: "progreso", icon: "calendar_check", label: "Progreso" }];
   return (
@@ -191,6 +202,7 @@ function RegistroScreen({ onNav }) {
 
 function AnamnesisScreen({ onNav }) {
   const [paso, setPaso] = useState(1);
+  const [lightbox, setLightbox] = useState(null);
   const totalPasos = 4;
   const [form, setForm] = useState({
     nombre: "", edad: "", sexo: "", ocupacion: "", actividadLaboral: "",
@@ -319,7 +331,7 @@ function AnamnesisScreen({ onNav }) {
             <div style={{ marginTop: 8, marginBottom: 4, background: "rgba(167,139,250,0.08)", borderRadius: 10, padding: 10 }}>
               <div style={{ fontSize: 11, color: "#B0C4DE", fontWeight: 700, marginBottom: 6 }}>📊 Referencia % grasa corporal</div>
               <div style={{ fontSize: 10, color: "#888", marginBottom: 6 }}>Compárate con la imagen y estima tu porcentaje</div>
-              <img src={GRASA_IMG} alt="Referencia % grasa" onClick={() => { const w = window.open("", "_blank"); w.document.write('<img src="' + GRASA_IMG + '" style="max-width:100%;height:auto">'); }} style={{ width: "100%", borderRadius: 6, cursor: "pointer", display: "block" }} />
+              <img src={GRASA_IMG} alt="Referencia % grasa" onClick={() => setLightbox(GRASA_IMG)} style={{ width: "100%", borderRadius: 6, cursor: "pointer", display: "block" }} />
             </div>
             <div style={{ fontSize: 11, color: theme.muted, marginTop: 4 }}>Si no lo sabes, deja en blanco</div>
 
@@ -560,6 +572,7 @@ const { error } = await supabase.from("usuarios").upsert({                  id: 
           }}>{enviandoAnamnesis ? "Guardando..." : "✓ Enviar y comenzar"}</button>
         )}
       </div>
+      <ImageLightbox src={lightbox} onClose={() => setLightbox(null)} />
     </div>
   );
 }
@@ -941,12 +954,8 @@ function RutinaScreen({ onNav }) {
                     ) : (
                       <div style={{ textAlign: "center", fontSize: 10, color: theme.muted }}>—</div>
                     )}
-                    {tipo === "efectiva" ? (
-                      <div onClick={() => setSeriesHechas({ ...seriesHechas, [key]: !seriesHechas[key] })}
-                        style={{ width: 20, height: 20, borderRadius: 6, border: `2px solid ${seriesHechas[key] ? theme.success : theme.border}`, background: seriesHechas[key] ? theme.success : "transparent", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 11, color: "#fff", fontWeight: 800 }}>{seriesHechas[key] ? "✓" : ""}</div>
-                    ) : (
-                      <div />
-                    )}
+                    <div onClick={() => setSeriesHechas({ ...seriesHechas, [key]: !seriesHechas[key] })}
+                      style={{ width: 20, height: 20, borderRadius: 6, border: `2px solid ${seriesHechas[key] ? theme.success : theme.border}`, background: seriesHechas[key] ? theme.success : "transparent", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 11, color: "#fff", fontWeight: 800 }}>{seriesHechas[key] ? "✓" : ""}</div>
                   </div>
                   {anterior && (
                     <div style={{ fontSize: 10, color: theme.muted, paddingLeft: 6, marginBottom: 8 }}>
@@ -1072,6 +1081,11 @@ function NutricionScreen({ onNav }) {
   const [loading, setLoading] = useState(true);
   const [bloqueado, setBloqueado] = useState(false);
   const [userId, setUserId] = useState(null);
+  const [comidasEstado, setComidasEstado] = useState({});
+  const [modalCambio, setModalCambio] = useState(false);
+  const [modalComidaIndex, setModalComidaIndex] = useState(null);
+  const [modalDescripcion, setModalDescripcion] = useState("");
+  const hoyStr = new Date().toISOString().split("T")[0];
 
   useEffect(() => {
     const cargar = async () => {
@@ -1090,6 +1104,18 @@ function NutricionScreen({ onNav }) {
           .order("created_at", { ascending: false });
         if (data && data.length > 0) { setDietas(data); setDieta(data[0]); }
         setUserId(user.id);
+
+        // Carga el registro de cumplimiento de hoy (si ya marcó algo antes)
+        const { data: regs } = await supabase
+          .from("dieta_registros")
+          .select("*")
+          .eq("usuario_id", user.id)
+          .eq("fecha", hoyStr);
+        if (regs && regs.length > 0) {
+          const estadoMap = {};
+          regs.forEach(r => { estadoMap[r.comida_index] = r.estado; });
+          setComidasEstado(estadoMap);
+        }
       }
       setLoading(false);
     };
@@ -1135,6 +1161,44 @@ function NutricionScreen({ onNav }) {
   const suplementos = Array.isArray(dieta.suplementos) ? dieta.suplementos : [];
   const equivalencias = Array.isArray(dieta.equivalencias) ? dieta.equivalencias : [];
 
+  const guardarRegistro = async (index, estado, descripcion = null) => {
+    if (!userId) return;
+    await supabase.from("dieta_registros").upsert({
+      usuario_id: userId,
+      fecha: hoyStr,
+      comida_index: index,
+      comida_nombre: comidas[index]?.nombre || null,
+      estado,
+      descripcion,
+    }, { onConflict: "usuario_id,fecha,comida_index" });
+  };
+
+  const handleComidaEstado = (index, estado) => {
+    if (estado === "cambio") {
+      setModalComidaIndex(index);
+      setModalDescripcion("");
+      setModalCambio(true);
+    } else {
+      setComidasEstado(prev => ({ ...prev, [index]: estado }));
+      guardarRegistro(index, estado);
+    }
+  };
+
+  const handleGuardarCambio = () => {
+    setComidasEstado(prev => ({ ...prev, [modalComidaIndex]: "cambio" }));
+    guardarRegistro(modalComidaIndex, "cambio", modalDescripcion);
+    setModalCambio(false);
+    setModalComidaIndex(null);
+    setModalDescripcion("");
+  };
+
+  const getEstadoColor = (estado) => {
+    if (estado === "completada") return theme.success;
+    if (estado === "no_hecha") return theme.danger;
+    if (estado === "cambio") return theme.accent;
+    return theme.surface;
+  };
+
   return (
     <div style={{ padding:"20px 16px 90px", overflowY:"auto", height:"100%", boxSizing:"border-box" }}>
       <div style={{ marginBottom:20 }}>
@@ -1173,23 +1237,81 @@ function NutricionScreen({ onNav }) {
         </div>
       </Card>
 
-      {/* Comidas */}
-      {comidas.map((c, i) => (
-        <Card key={i} style={{ marginBottom:10 }}>
-          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
-            <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-              <div style={{ width:28, height:28, borderRadius:8, background:theme.accent, display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, fontWeight:800 }}>{i+1}</div>
-              <div style={{ fontSize:14, fontWeight:700, color:theme.text }}>{c.nombre}</div>
+      {/* Comidas con checkboxes */}
+      {comidas.map((c, i) => {
+        const estado = comidasEstado[i];
+        const estados = [
+          { key: "completada", icon: "✅", color: theme.success },
+          { key: "no_hecha", icon: "❌", color: theme.danger },
+          { key: "cambio", icon: "🔄", color: theme.accentLight },
+        ];
+        return (
+          <Card key={i} style={{ marginBottom:10, border: estado ? `1px solid ${getEstadoColor(estado)}55` : `1px solid ${theme.border}`, boxShadow: estado ? `0 0 16px ${getEstadoColor(estado)}22` : "none" }}>
+            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12 }}>
+              <div style={{ width:28, height:28, borderRadius:8, background:theme.accent, display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, fontWeight:800, flexShrink:0, boxShadow:`0 0 10px ${theme.accent}55` }}>{i+1}</div>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontSize:14, fontWeight:700, color:theme.text }}>{c.nombre}</div>
+                {c.hora && <div style={{ fontSize:11, color:theme.muted }}>{c.hora}</div>}
+              </div>
             </div>
-            {c.hora && <span style={{ fontSize:12, color:theme.muted }}>{c.hora}</span>}
+
+            {c.alimentos?.map((a, ai) => (
+              <div key={ai} style={{ fontSize:13, color:theme.muted, paddingLeft:38, lineHeight:1.8 }}>
+                · {a.gramos ? `${a.gramos}${a.unidad === "und" ? " und " : "g "}` : ""}{a.nombre}
+              </div>
+            ))}
+
+            {/* Botones checkbox solo iconos, simétricos y con brillo futurista */}
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:8, marginTop:12, paddingTop:10, borderTop:`1px solid ${theme.border}` }}>
+              {estados.map(e => {
+                const activo = estado === e.key;
+                return (
+                  <button key={e.key} onClick={() => handleComidaEstado(i, e.key)}
+                    style={{
+                      height:30, borderRadius:9,
+                      background: activo ? `linear-gradient(135deg, ${e.color}33, ${e.color}11)` : theme.surface,
+                      border: `1.5px solid ${activo ? e.color : theme.border}`,
+                      boxShadow: activo ? `0 0 10px ${e.color}55, inset 0 0 6px ${e.color}22` : "none",
+                      display:"flex", alignItems:"center", justifyContent:"center",
+                      fontSize:14, cursor:"pointer", transition:"all 0.2s",
+                      filter: activo ? "none" : "grayscale(0.6) opacity(0.55)",
+                    }}>
+                    {e.icon}
+                  </button>
+                );
+              })}
+            </div>
+          </Card>
+        );
+      })}
+
+      {/* Modal para cambios de comida */}
+      {modalCambio && (
+        <div style={{ position:"fixed", top:0, left:0, right:0, bottom:0, background:"rgba(5,5,10,0.85)", backdropFilter:"blur(3px)", display:"flex", alignItems:"flex-end", zIndex:1000 }}>
+          <div style={{ background:theme.card, borderRadius:"18px 18px 0 0", padding:20, width:"100%", maxHeight:"70vh", overflowY:"auto", border:`1px solid ${theme.accent}44`, borderBottom:"none", boxShadow:`0 -6px 30px ${theme.accent}33` }}>
+            <div style={{ width:36, height:4, borderRadius:2, background:theme.border, margin:"0 auto 14px" }} />
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
+              <div style={{ fontSize:16, fontWeight:800, color:theme.text }}>🔄 ¿Qué cambiaste?</div>
+              <button onClick={() => setModalCambio(false)} style={{ background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:"50%", width:30, height:30, fontSize:18, cursor:"pointer", color:theme.muted, display:"flex", alignItems:"center", justifyContent:"center" }}>×</button>
+            </div>
+
+            <textarea placeholder="Describe qué cambios hiciste en esta comida..."
+              value={modalDescripcion} onChange={e => setModalDescripcion(e.target.value)}
+              style={{ background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:10, padding:12, width:"100%", boxSizing:"border-box", color:theme.text, fontSize:14, resize:"none", minHeight:80, outline:"none", marginBottom:14 }} />
+
+            <div style={{ display:"flex", gap:8 }}>
+              <button onClick={handleGuardarCambio}
+                style={{ flex:1, background:`linear-gradient(135deg, ${theme.accentLight}, ${theme.accent})`, border:"none", borderRadius:10, padding:12, color:"#fff", fontSize:14, fontWeight:700, cursor:"pointer", boxShadow:`0 0 14px ${theme.accent}55` }}>
+                Guardar
+              </button>
+              <button onClick={() => setModalCambio(false)}
+                style={{ flex:1, background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:10, padding:12, color:theme.text, fontSize:14, fontWeight:700, cursor:"pointer" }}>
+                Cancelar
+              </button>
+            </div>
           </div>
-          {c.alimentos?.map((a, ai) => (
-            <div key={ai} style={{ fontSize:13, color:theme.muted, paddingLeft:36, lineHeight:1.8 }}>
-              · {a.gramos ? `${a.gramos}${a.unidad === "und" ? " und " : "g "}` : ""}{a.nombre}
-            </div>
-          ))}
-        </Card>
-      ))}
+        </div>
+      )}
 
       {/* Equivalencias */}
       {equivalencias.length > 0 && (
@@ -1739,6 +1861,7 @@ function DiarioScreen({ onNav }) {
 }
 
 function CheckinScreen({ onNav }) {
+  const [lightbox, setLightbox] = useState(null);
   const [peso, setPeso] = useState("");
   const [porcGrasa, setPorcGrasa] = useState("");
   const [cintura, setCintura] = useState("");
@@ -1885,7 +2008,7 @@ function CheckinScreen({ onNav }) {
             <div style={{ marginTop: 12, background: theme.surface, borderRadius: 10, padding: 10 }}>
               <div style={{ fontSize: 11, color: "#B0C4DE", fontWeight: 700, marginBottom: 6 }}>📊 Referencia % grasa corporal</div>
               <div style={{ fontSize: 10, color: theme.muted, marginBottom: 6 }}>Compárate con la imagen y estima tu porcentaje</div>
-              <img src={GRASA_IMG} alt="Referencia % grasa" onClick={() => { const w = window.open("", "_blank"); w.document.write('<img src="' + GRASA_IMG + '" style="max-width:100%;height:auto">'); }} style={{ width: "100%", borderRadius: 6, cursor: "pointer", display: "block" }} />
+              <img src={GRASA_IMG} alt="Referencia % grasa" onClick={() => setLightbox(GRASA_IMG)} style={{ width: "100%", borderRadius: 6, cursor: "pointer", display: "block" }} />
             </div>
           </Card>
 
@@ -1966,6 +2089,7 @@ function CheckinScreen({ onNav }) {
         </Card>
       )}
       <NavBar active="checkin" onNav={onNav} />
+      <ImageLightbox src={lightbox} onClose={() => setLightbox(null)} />
     </div>
   );
 }
@@ -2070,6 +2194,7 @@ function ProgresoScreen({ onNav }) {
   const [fotoAntes, setFotoAntes] = useState(null);
   const [fotoActual, setFotoActual] = useState(null);
   const [prs, setPrs] = useState([]);
+  const [lightbox, setLightbox] = useState(null);
 
   useEffect(() => {
     const cargar = async () => {
@@ -2234,7 +2359,7 @@ function ProgresoScreen({ onNav }) {
             {[{label:"Antes (Anamnesis)", url: fotoAntes, actual:false},{label:"Actual (Check-in)", url: fotoActual, actual:true}].map(({label,url,actual})=>(
               <div key={label} style={{ background: theme.surface, borderRadius: 10, overflow:"hidden", border: `1px solid ${actual?theme.accent+"44":theme.border}` }}>
                 {url ? (
-                  <img src={url} alt={label} onClick={() => { const w = window.open("", "_blank"); w.document.write('<img src="' + url + '" style="max-width:100%;height:auto">'); }} style={{ width:"100%", height:120, objectFit:"cover", cursor:"pointer" }} />
+                  <img src={url} alt={label} onClick={() => setLightbox(url)} style={{ width:"100%", height:120, objectFit:"cover", cursor:"pointer" }} />
                 ) : (
                   <div style={{ height:120, display:"flex", alignItems:"center", justifyContent:"center" }}><span style={{ fontSize: 24, opacity:0.3 }}>📷</span></div>
                 )}
@@ -2271,6 +2396,7 @@ function ProgresoScreen({ onNav }) {
         )}
       </Card>
       <NavBar active="progreso" onNav={onNav} />
+      <ImageLightbox src={lightbox} onClose={() => setLightbox(null)} />
     </div>
   );
 }
@@ -3137,6 +3263,9 @@ cargarMensajes();  }, [alumno]);
 }function DiarioCoach({ alumno }) {
   const [dias, setDias] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [entrenosDetalle, setEntrenosDetalle] = useState([]);
+  const [dietaRegs, setDietaRegs] = useState([]);
+  const [diaExpandido, setDiaExpandido] = useState(null);
   const diasNombre = ["Dom","Lun","Mar","Mié","Jue","Vie","Sáb"];
 
   useEffect(() => {
@@ -3155,10 +3284,20 @@ cargarMensajes();  }, [alumno]);
 
       const { data: entrenos } = await supabase
         .from("registros_entreno")
-        .select("fecha")
+        .select("*, ejercicios(nombre)")
         .eq("usuario_id", alumno.id)
-        .gte("fecha", fechaDesde);
+        .gte("fecha", fechaDesde)
+        .order("creado_en", { ascending: true });
+      setEntrenosDetalle(entrenos || []);
       const fechasEntreno = new Set((entrenos || []).map(e => e.fecha));
+
+      const { data: dietaR } = await supabase
+        .from("dieta_registros")
+        .select("*")
+        .eq("usuario_id", alumno.id)
+        .gte("fecha", fechaDesde)
+        .order("comida_index", { ascending: true });
+      setDietaRegs(dietaR || []);
 
       const arr = [];
       for (let i = 29; i >= 0; i--) {
@@ -3169,6 +3308,7 @@ cargarMensajes();  }, [alumno]);
         arr.push({
           dia: i === 0 ? "Hoy" : diasNombre[d.getDay()],
           fecha: d.toLocaleDateString("es-CL", { day: "numeric", month: "short" }),
+          fechaStr,
           energia: reg?.energia ?? null,
           sueno: reg?.sueno ?? null,
           horas: reg?.horas ?? null,
@@ -3194,9 +3334,17 @@ cargarMensajes();  }, [alumno]);
   const promedioEnergia = (conDatos.reduce((a,b) => a + b.energia, 0) / conDatos.length).toFixed(1);
   const promedioSueno = (conDatos.reduce((a,b) => a + b.sueno, 0) / conDatos.length).toFixed(1);
 
+  const Barra = ({ value, color }) => (
+    <div style={{ background: theme.surface, borderRadius: 6, height: 7, overflow: "hidden", border: `1px solid ${theme.border}` }}>
+      <div style={{ width: `${Math.min(100, (value / 10) * 100)}%`, height: "100%", background: color, borderRadius: 6, boxShadow: `0 0 8px ${color}88` }} />
+    </div>
+  );
+
+  const iconEstado = (estado) => estado === "completada" ? "✅" : estado === "no_hecha" ? "❌" : estado === "cambio" ? "🔄" : "⬜";
+
   return (
     <div>
-      <div style={{ fontSize:11, color:theme.muted, marginBottom:10 }}>Lo que el alumno cuenta al terminar cada entrenamiento: intensidad percibida, horas dormidas y calidad del sueño.</div>
+      <div style={{ fontSize:11, color:theme.muted, marginBottom:10 }}>Lo que el alumno cuenta al terminar cada entrenamiento: intensidad percibida, horas dormidas y calidad del sueño. Toca un día para ver el detalle completo.</div>
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:14 }}>
         <Card style={{ padding:12, textAlign:"center" }}>
           <div style={{ fontSize:16 }}>⚡</div>
@@ -3211,46 +3359,129 @@ cargarMensajes();  }, [alumno]);
       </div>
       <Card>
         <div style={{ fontSize:12, color:theme.muted, marginBottom:12 }}>ÚLTIMOS 30 DÍAS</div>
-        {dias.map((d, i) => (
-          <div key={i} style={{
-            display:"grid", gridTemplateColumns:"40px 1fr 1fr 44px",
-            gap:8, alignItems:"center", marginBottom:10,
-            background: d.dia === "Hoy" ? `${theme.accent}15` : theme.surface,
-            border: `1px solid ${d.dia === "Hoy" ? theme.accent+"44" : theme.border}`,
-            borderRadius:10, padding:"8px 10px"
-          }}>
-            <div style={{ textAlign:"center" }}>
-              <div style={{ fontSize:11, fontWeight:800, color: d.dia === "Hoy" ? theme.accent : theme.text }}>{d.dia}</div>
-              <div style={{ fontSize:9, color:theme.muted }}>{d.fecha}</div>
-            </div>
-            {d.energia !== null ? (
-              <>
+        {dias.map((d, i) => {
+          const dietaDia = dietaRegs.filter(r => r.fecha === d.fechaStr);
+          const entrenoDia = entrenosDetalle.filter(r => r.fecha === d.fechaStr);
+          const tieneDatos = d.energia !== null || d.entreno || dietaDia.length > 0;
+          const expandido = diaExpandido === d.fechaStr;
+
+          // Agrupar ejercicios por nombre, en orden de serie
+          const ejerciciosAgrupados = {};
+          entrenoDia.forEach(r => {
+            const nombre = r.ejercicios?.nombre || "Ejercicio";
+            if (!ejerciciosAgrupados[nombre]) ejerciciosAgrupados[nombre] = [];
+            ejerciciosAgrupados[nombre].push(r);
+          });
+          Object.values(ejerciciosAgrupados).forEach(arr => arr.sort((a,b) => (a.serie||0) - (b.serie||0)));
+
+          return (
+            <div key={i} style={{ marginBottom:10 }}>
+              <div onClick={() => tieneDatos && setDiaExpandido(expandido ? null : d.fechaStr)} style={{
+                display:"grid", gridTemplateColumns:"40px 1fr 1fr 44px",
+                gap:8, alignItems:"center",
+                background: d.dia === "Hoy" ? `${theme.accent}15` : theme.surface,
+                border: `1px solid ${expandido ? theme.accent+"88" : d.dia === "Hoy" ? theme.accent+"44" : theme.border}`,
+                borderRadius: expandido ? "10px 10px 0 0" : 10, padding:"8px 10px",
+                cursor: tieneDatos ? "pointer" : "default",
+                boxShadow: expandido ? `0 0 14px ${theme.accent}33` : "none",
+              }}>
                 <div style={{ textAlign:"center" }}>
-                  <div style={{ fontSize:10, color:theme.muted, marginBottom:2 }}>💥 Intensidad</div>
-                  <div style={{ fontSize:12, fontWeight:700, color:theme.text }}>{d.energia}/10</div>
+                  <div style={{ fontSize:11, fontWeight:800, color: d.dia === "Hoy" ? theme.accent : theme.text }}>{d.dia}</div>
+                  <div style={{ fontSize:9, color:theme.muted }}>{d.fecha}</div>
                 </div>
-                <div style={{ textAlign:"center" }}>
-                  <div style={{ fontSize:10, color:theme.muted, marginBottom:2 }}>😴 Sueño</div>
-                  <div style={{ fontSize:12, fontWeight:700, color:theme.text }}>{d.horas || "—"}h · {d.sueno}/10</div>
-                </div>
-                <div style={{ textAlign:"center" }}>
+                {d.energia !== null ? (
+                  <>
+                    <div style={{ textAlign:"center" }}>
+                      <div style={{ fontSize:10, color:theme.muted, marginBottom:2 }}>💥 Intensidad</div>
+                      <div style={{ fontSize:12, fontWeight:700, color:theme.text }}>{d.energia}/10</div>
+                    </div>
+                    <div style={{ textAlign:"center" }}>
+                      <div style={{ fontSize:10, color:theme.muted, marginBottom:2 }}>😴 Sueño</div>
+                      <div style={{ fontSize:12, fontWeight:700, color:theme.text }}>{d.horas || "—"}h · {d.sueno}/10</div>
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ gridColumn:"2/3", fontSize:11, color:theme.muted }}>Sin registro</div>
+                )}
+                <div style={{ textAlign:"center", display:"flex", alignItems:"center", justifyContent:"center", gap:4 }}>
                   {d.entreno
                     ? <div style={{ background:`${theme.success}22`, border:`1px solid ${theme.success}44`, borderRadius:6, padding:"3px 4px", fontSize:9, fontWeight:700, color:theme.success }}>💪</div>
                     : <div style={{ background:`${theme.muted}22`, borderRadius:6, padding:"3px 4px", fontSize:9, color:theme.muted }}>—</div>
                   }
+                  {tieneDatos && <span style={{ fontSize:10, color:theme.accentLight }}>{expandido ? "▲" : "▼"}</span>}
                 </div>
-              </>
-            ) : (
-              <div style={{ gridColumn:"2/5", fontSize:11, color:theme.muted }}>Sin registro</div>
-            )}
-          </div>
-        ))}
+              </div>
+
+              {/* Detalle expandido del día */}
+              {expandido && (
+                <div style={{ background:theme.card, border:`1px solid ${theme.accent}44`, borderTop:"none", borderRadius:"0 0 10px 10px", padding:12 }}>
+                  {d.energia !== null && (
+                    <div style={{ marginBottom:14 }}>
+                      <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
+                        <span style={{ fontSize:11, color:theme.text }}>💥 Intensidad / RPE</span>
+                        <span style={{ fontSize:11, fontWeight:700, color:theme.accentLight }}>{d.energia}/10</span>
+                      </div>
+                      <Barra value={d.energia} color={theme.accentLight} />
+                      <div style={{ display:"flex", justifyContent:"space-between", marginTop:10, marginBottom:4 }}>
+                        <span style={{ fontSize:11, color:theme.text }}>😴 Calidad del sueño ({d.horas || "—"}h)</span>
+                        <span style={{ fontSize:11, fontWeight:700, color:"#A78BFA" }}>{d.sueno}/10</span>
+                      </div>
+                      <Barra value={d.sueno} color="#A78BFA" />
+                    </div>
+                  )}
+
+                  {Object.keys(ejerciciosAgrupados).length > 0 && (
+                    <div style={{ marginBottom:14 }}>
+                      <div style={{ fontSize:11, fontWeight:800, color:theme.muted, marginBottom:8, letterSpacing:0.5 }}>🏋️ ENTRENAMIENTO</div>
+                      {Object.entries(ejerciciosAgrupados).map(([nombre, series]) => (
+                        <div key={nombre} style={{ marginBottom:8 }}>
+                          <div style={{ fontSize:12, fontWeight:700, color:theme.text, marginBottom:4 }}>{nombre}</div>
+                          <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+                            {series.map((s, si) => (
+                              <div key={si} style={{ background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:6, padding:"3px 8px", fontSize:11, color:theme.muted }}>
+                                S{s.serie}: <span style={{ color:theme.text, fontWeight:700 }}>{s.kg || "—"}kg × {s.reps || "—"}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {dietaDia.length > 0 ? (
+                    <div>
+                      <div style={{ fontSize:11, fontWeight:800, color:theme.muted, marginBottom:8, letterSpacing:0.5 }}>🥗 DIETA</div>
+                      {dietaDia.map((r, ri) => (
+                        <div key={ri} style={{ marginBottom:6 }}>
+                          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                            <span style={{ fontSize:14 }}>{iconEstado(r.estado)}</span>
+                            <span style={{ fontSize:12, color:theme.text, fontWeight:600 }}>{r.comida_nombre || `Comida ${r.comida_index + 1}`}</span>
+                          </div>
+                          {r.estado === "cambio" && r.descripcion && (
+                            <div style={{ fontSize:11, color:theme.muted, fontStyle:"italic", paddingLeft:22, marginTop:2 }}>"{r.descripcion}"</div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    d.entreno || d.energia !== null ? <div style={{ fontSize:11, color:theme.muted }}>Sin registro de dieta ese día</div> : null
+                  )}
+
+                  {!d.entreno && d.energia === null && dietaDia.length === 0 && (
+                    <div style={{ fontSize:11, color:theme.muted }}>Sin registros ese día</div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </Card>
     </div>
   );
 }function CheckinsCoach({ alumno }) {
   const [checkins, setCheckins] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [lightbox, setLightbox] = useState(null);
 
   useEffect(() => {
     const cargar = async () => {
@@ -3305,7 +3536,7 @@ cargarMensajes();  }, [alumno]);
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:6 }}>
                 {[["Frente", c.foto_frente], ["Espalda", c.foto_espalda], ["P. Der", c.foto_perf_der], ["P. Izq", c.foto_perf_izq]].map(([label, url]) => url && (
                   <div key={label} style={{ borderRadius:8, overflow:"hidden", border:`1px solid ${theme.border}` }}>
-                    <img src={url} alt={label} onClick={() => { const w = window.open("", "_blank"); w.document.write('<img src="' + url + '" style="max-width:100%;height:auto">'); }} style={{ width:"100%", height:80, objectFit:"cover", cursor:"pointer" }} />
+                    <img src={url} alt={label} onClick={() => setLightbox(url)} style={{ width:"100%", height:80, objectFit:"cover", cursor:"pointer" }} />
                     <div style={{ fontSize:9, color:theme.muted, textAlign:"center", padding:3 }}>{label}</div>
                   </div>
                 ))}
@@ -3314,6 +3545,7 @@ cargarMensajes();  }, [alumno]);
           )}
         </Card>
       ))}
+      <ImageLightbox src={lightbox} onClose={() => setLightbox(null)} />
     </div>
   );
 }
@@ -3322,6 +3554,7 @@ function CoachAlumno({ onNav, alumno }) {
   const tabs=["Datos","Rutina","Dieta","Check-ins","Diario","Pagos","Progreso","Mensajes"];
   const [tab,setTab]=useState(alumno?.tabInicial || "Datos");
   const [datosCompletos, setDatosCompletos] = useState(null);
+  const [lightbox, setLightbox] = useState(null);
 
   useEffect(() => {
     if (alumno?.id) {
@@ -3397,7 +3630,7 @@ function CoachAlumno({ onNav, alumno }) {
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:6 }}>
                 {[["Frente", datosCompletos.foto_frente], ["Espalda", datosCompletos.foto_espalda], ["P. Der", datosCompletos.foto_perf_der], ["P. Izq", datosCompletos.foto_perf_izq]].map(([label, url]) => url && (
                   <div key={label} style={{ borderRadius:8, overflow:"hidden", border:`1px solid ${theme.border}` }}>
-                    <img src={url} alt={label} onClick={() => { const w = window.open("", "_blank"); w.document.write('<img src="' + url + '" style="max-width:100%;height:auto">'); }} style={{ width:"100%", height:80, objectFit:"cover", cursor:"pointer" }} />
+                    <img src={url} alt={label} onClick={() => setLightbox(url)} style={{ width:"100%", height:80, objectFit:"cover", cursor:"pointer" }} />
                     <div style={{ fontSize:9, color:theme.muted, textAlign:"center", padding:3 }}>{label}</div>
                   </div>
                 ))}
@@ -3453,6 +3686,7 @@ function CoachAlumno({ onNav, alumno }) {
           </Card>
         )}
       </div>
+      <ImageLightbox src={lightbox} onClose={() => setLightbox(null)} />
     </div>
   );
 }
