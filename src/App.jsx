@@ -153,9 +153,6 @@ function LoginScreen({ onNav }) {
           <span style={{ color: theme.muted, fontSize: 13 }}>¿Sin cuenta? </span>
           <span onClick={() => onNav("registro")} style={{ color: theme.accentLight, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Crear cuenta</span>
         </div>
-        <Btn variant="ghost" onClick={() => onNav("coach_panel")} style={{ marginTop: 2, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-          <IconLine name="user" size={15} color={theme.accentLight} /> Entrar como Coach
-        </Btn>
       </div>
     </div>
   );
@@ -185,7 +182,14 @@ function RegistroScreen({ onNav }) {
     setError("");
     const { error } = await supabase.auth.signUp({ email, password });
     if (error) {
-      setError("Error al crear cuenta. Intenta de nuevo.");
+      // Se muestra el motivo real que da Supabase (ej: "correo ya registrado",
+      // "contraseña muy débil", etc.) en vez de un mensaje genérico. Si el
+      // error no trae un mensaje de texto (ej: falla de red o de
+      // configuración), se muestra el código/nombre y se deja el detalle
+      // completo en la consola del navegador (F12) para poder diagnosticarlo.
+      console.error("Error al crear cuenta:", error);
+      const detalle = error.message || error.error_description || error.name || JSON.stringify(error);
+      setError(`Error al crear cuenta${error.status ? ` (${error.status})` : ""}: ${detalle}`);
     } else {
       onNav("anamnesis");
     }
@@ -4079,7 +4083,7 @@ export default function App() {
           <div style={{ width:375,height:720,background:theme.bg,borderRadius:36,overflow:"auto",position:"relative" }}>{renderScreen()}</div>
         </div>
         <div style={{ marginTop:20,display:"flex",gap:8,flexWrap:"wrap",justifyContent:"center",maxWidth:420 }}>
-          {[["login","Login"],["registro","Registro"],["anamnesis","Anamnesis"],["alumno_home","Inicio"],["rutina","Rutina"],["nutricion","Dieta"],["diario","Diario"],["checkin","Check-in"],["progreso","Progreso"],["coach_panel","Coach Panel"],["coach_alumno","Perfil Alumno"]].map(([id,label])=>(<button key={id} onClick={()=>setScreen(id)} style={{ background:screen===id?"#2563EB":"#13131a",border:`1px solid ${screen===id?"#2563EB":"#2a2a38"}`,color:screen===id?"#fff":"#666",borderRadius:8,padding:"6px 12px",fontSize:11,cursor:"pointer",fontWeight:600 }}>{label}</button>))}
+          {[["login","Login"],["registro","Registro"],["anamnesis","Anamnesis"],["alumno_home","Inicio"],["rutina","Rutina"],["nutricion","Dieta"],["checkin","Check-in"],["progreso","Progreso"],["coach_panel","Coach Panel"],["coach_alumno","Perfil Alumno"]].map(([id,label])=>(<button key={id} onClick={()=>setScreen(id)} style={{ background:screen===id?"#2563EB":"#13131a",border:`1px solid ${screen===id?"#2563EB":"#2a2a38"}`,color:screen===id?"#fff":"#666",borderRadius:8,padding:"6px 12px",fontSize:11,cursor:"pointer",fontWeight:600 }}>{label}</button>))}
         </div>
       </div>
     </div>
