@@ -12,6 +12,37 @@ const theme = {
   text: "#F0F0F5", muted: "#8888A0", success: "#10B981", warning: "#F59E0B", danger: "#EF4444",
 };
 
+// --- Fechas: "día operativo" (hora de Chile, con corte a las 4:00 AM) ---
+// Antes se usaba new Date().toISOString() para guardar "la fecha de hoy", pero
+// eso devuelve la fecha en UTC, no en hora de Chile: desde ~las 21:00-20:00
+// (según horario de verano/invierno) ya se registraba como el día siguiente.
+// Además, para que la última comida/serie de la noche (ej: cena a las 00:30)
+// no quede contada como del día siguiente, el "día operativo" no cambia a la
+// medianoche exacta sino a las 4:00 AM: todo lo registrado entre 00:00 y 03:59
+// sigue contando como el día anterior. Se usa la hora local del dispositivo
+// (que para alumnos y coach en Chile ya es la hora de Chile).
+const CORTE_DIA_HORA = 4;
+const DIAS_SEMANA_NOMBRES = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
+function fechaOperativa(base = new Date()) {
+  const d = new Date(base);
+  if (d.getHours() < CORTE_DIA_HORA) d.setDate(d.getDate() - 1);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+function aFechaStr(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+// Fecha (YYYY-MM-DD) del día operativo actual, considerando el corte de las 4 AM.
+function fechaOperativaStr(base = new Date()) { return aFechaStr(fechaOperativa(base)); }
+// Nombre del día de la semana operativo actual (ej: "Lunes"), considerando el corte de las 4 AM.
+function nombreDiaOperativo(base = new Date()) { return DIAS_SEMANA_NOMBRES[fechaOperativa(base).getDay()]; }
+// Fecha calendario real de hoy en hora local, sin el corte de las 4 AM (para fechas
+// administrativas como pagos, que no dependen de la rutina de sueño del alumno).
+function fechaLocalStr(base = new Date()) { return aFechaStr(base); }
+
 const Tag = ({ children, color = theme.accent }) => (
   <span style={{ background: `${color}22`, color, border: `1px solid ${color}44`, borderRadius: 6, padding: "2px 8px", fontSize: 11, fontWeight: 700, letterSpacing: 0.3, whiteSpace: "nowrap" }}>{children}</span>
 );
@@ -603,8 +634,7 @@ const [estadoPago, setEstadoPago] = useState(null);
           .order("created_at", { ascending: false });
         if (rutinas && rutinas.length > 0) {
           setTieneRutinas(true);
-          const diasSemana = ["Domingo","Lunes","Martes","Miércoles","Jueves","Viernes","Sábado"];
-          const nombreHoy = diasSemana[new Date().getDay()];
+          const nombreHoy = nombreDiaOperativo();
           const rutinaHoy = rutinas.find(r => r.dia === nombreHoy);
           setRutina(rutinaHoy || null);
         }
@@ -804,8 +834,7 @@ function RutinaScreen({ onNav }) {
           .order("created_at", { ascending: false });
         if (data && data.length > 0) {
           setRutinas(data);
-          const diasSemana = ["Domingo","Lunes","Martes","Miércoles","Jueves","Viernes","Sábado"];
-          const nombreHoy = diasSemana[new Date().getDay()];
+          const nombreHoy = nombreDiaOperativo();
           const rutinaHoy = data.find(r => r.dia === nombreHoy);
           setRutinaActiva(rutinaHoy || data[0]);
         }
@@ -933,7 +962,10 @@ function RutinaScreen({ onNav }) {
                 seccionAnterior = tipo;
                 const rir = typeof s.rir === "number" ? s.rir : parseInt(s.rir) || 2;
                 const rc = getRirColor(rir);
-                const anterior = ultimasCargas[`${ej.id}-${idx + 1}`];
+                // La carga "semana anterior" se compara por posición entre series
+                // EFECTIVAS únicamente (contEfect), no por posición en el arreglo
+                // completo, para que calentamiento/aproximación no la desordenen.
+                const anterior = tipo === "efectiva" ? ultimasCargas[`${ej.id}-${contEfect}`] : null;
                 const placeholderKg = tipo === "efectiva"
                   ? (anterior?.kg || "kg")
                   : (s.kgSugerido || "kg");
@@ -975,30 +1007,44 @@ function RutinaScreen({ onNav }) {
             const { data: { user } } = await supabase.auth.getUser();
             if (user && rutinaActiva) {
               const inserts = [];
+              const hoyStr = fechaOperativaStr();
               ejercicios.forEach(ej => {
                 const series = Array.isArray(ej.series) ? ej.series : [];
+                let serieEfectiva = 0; // numeración independiente del calentamiento/aproximación
                 series.forEach((s, idx) => {
                   const key = `${ej.id}-${idx}`;
                   const reg = registros[key] || {};
                   const tipo = s.tipo || "efectiva";
+                  if (tipo === "efectiva") serieEfectiva++;
                   const sugerido = tipo === "efectiva"
-                    ? ultimasCargas[`${ej.id}-${idx + 1}`]?.kg
+                    ? ultimasCargas[`${ej.id}-${serieEfectiva}`]?.kg
                     : s.kgSugerido;
                   const kgFinal = reg.kg || sugerido || null;
                   const repsFinal = reg.reps || s.reps || null;
-                  if (kgFinal || repsFinal) {
+                  // Solo se guardan las series efectivas. Calentamiento y aproximación
+                  // no se registran para no distorsionar las cargas reales de trabajo.
+                  // La numeración de "serie" arranca en 1 para las efectivas, sin
+                  // contar las de calentamiento/aproximación que las preceden.
+                  if (tipo === "efectiva" && (kgFinal || repsFinal)) {
                     inserts.push({
                       usuario_id: user.id,
                       ejercicio_id: ej.id,
                       rutina_id: rutinaActiva.id,
-                      serie: idx + 1,
+                      serie: serieEfectiva,
                       kg: parseFloat(kgFinal) || null,
                       reps: parseInt(repsFinal) || null,
+                      fecha: hoyStr,
                     });
                   }
                 });
               });
               if (inserts.length > 0) {
+                // Si el alumno ya había completado este entrenamiento hoy, se
+                // reemplazan sus registros de hoy en vez de duplicarlos.
+                await supabase.from("registros_entreno").delete()
+                  .eq("usuario_id", user.id)
+                  .eq("rutina_id", rutinaActiva.id)
+                  .eq("fecha", hoyStr);
                 const { error } = await supabase.from("registros_entreno").insert(inserts);
                 if (error) {
                   alert("No se pudieron guardar tus cargas: " + error.message);
@@ -1047,7 +1093,7 @@ function RutinaScreen({ onNav }) {
                   setGuardandoDiario(true);
                   const { data: { user } } = await supabase.auth.getUser();
                   if (user) {
-                    const hoyStr = new Date().toISOString().split("T")[0];
+                    const hoyStr = fechaOperativaStr();
                     await supabase.from("diario_registros").upsert({
                       usuario_id: user.id,
                       fecha: hoyStr,
@@ -1085,7 +1131,7 @@ function NutricionScreen({ onNav }) {
   const [modalCambio, setModalCambio] = useState(false);
   const [modalComidaIndex, setModalComidaIndex] = useState(null);
   const [modalDescripcion, setModalDescripcion] = useState("");
-  const hoyStr = new Date().toISOString().split("T")[0];
+  const hoyStr = fechaOperativaStr();
 
   useEffect(() => {
     const cargar = async () => {
@@ -1102,7 +1148,16 @@ function NutricionScreen({ onNav }) {
           .select("*")
           .eq("usuario_id", user.id)
           .order("created_at", { ascending: false });
-        if (data && data.length > 0) { setDietas(data); setDieta(data[0]); }
+        if (data && data.length > 0) {
+          setDietas(data);
+          // Se acopla automáticamente al plan asignado al día de hoy (según la
+          // rutina que le toca ese día), sin depender de que el alumno elija
+          // manualmente ni de que guarde algo antes. Si ningún plan está
+          // asignado a hoy, se usa el más reciente como respaldo general.
+          const nombreHoy = nombreDiaOperativo();
+          const dietaHoy = data.find(d => Array.isArray(d.dias) && d.dias.includes(nombreHoy));
+          setDieta(dietaHoy || data[0]);
+        }
         setUserId(user.id);
 
         // Carga el registro de cumplimiento de hoy (si ya marcó algo antes)
@@ -1203,7 +1258,9 @@ function NutricionScreen({ onNav }) {
     <div style={{ padding:"20px 16px 90px", overflowY:"auto", height:"100%", boxSizing:"border-box" }}>
       <div style={{ marginBottom:20 }}>
         <span onClick={() => onNav("alumno_home")} style={{ fontSize: 16, cursor: "pointer", color: theme.text, marginBottom: 6, display: "inline-block" }}>← Inicio</span>
-        <div style={{ color:theme.muted, fontSize:12, marginTop:4 }}>PLAN NUTRICIONAL</div>
+        <div style={{ color:theme.muted, fontSize:12, marginTop:4 }}>
+          PLAN NUTRICIONAL{Array.isArray(dieta.dias) && dieta.dias.length > 0 ? ` · ${dieta.dias.join(" Y ").toUpperCase()}` : ""}
+        </div>
         <div style={{ fontSize:22, fontWeight:800, color:theme.text }}>{dieta.nombre || "Tu Dieta"} 🥗</div>
       </div>
 
@@ -1368,6 +1425,7 @@ function DietaCoach({ alumno }) {
   const formRef = useRef(null);
 
   const [nombrePlan, setNombrePlan] = useState("");
+  const [diasDieta, setDiasDieta] = useState([]);
   const [calorias, setCalorias] = useState("");
   const [proteinas, setProteinas] = useState("");
   const [carbos, setCarbos] = useState("");
@@ -1428,11 +1486,16 @@ function DietaCoach({ alumno }) {
   };
 
   const inputStyle = { background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:8, padding:"8px 10px", color:theme.text, fontSize:13, outline:"none", width:"100%", boxSizing:"border-box" };
+  const DIAS_SEMANA = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"];
+  const toggleDiaDieta = (dia) => {
+    setDiasDieta(prev => prev.includes(dia) ? prev.filter(d => d !== dia) : [...prev, dia]);
+  };
 
   const guardar = async () => {
     setGuardando(true);
     const datos = {
       nombre: nombrePlan,
+      dias: diasDieta,
       calorias: parseInt(calorias) || null,
       proteinas: parseInt(proteinas) || null,
       carbos: parseInt(carbos) || null,
@@ -1461,6 +1524,7 @@ function DietaCoach({ alumno }) {
 
   const resetForm = () => {
     setNombrePlan("");
+    setDiasDieta([]);
     setCalorias(""); setProteinas(""); setCarbos(""); setGrasas(""); setNotas("");
     setComidas([
       { nombre: "Desayuno", hora: "07:00", alimentos: [{ nombre: "", gramos: "" }] },
@@ -1473,6 +1537,7 @@ function DietaCoach({ alumno }) {
 
   const cargarParaEditar = (dieta, modo) => {
     setNombrePlan(modo === "editar" ? (dieta.nombre || "") : (dieta.nombre ? dieta.nombre + " (copia)" : ""));
+    setDiasDieta(Array.isArray(dieta.dias) ? [...dieta.dias] : []);
     setCalorias(dieta.calorias || "");
     setProteinas(dieta.proteinas || "");
     setCarbos(dieta.carbos || "");
@@ -1523,6 +1588,9 @@ function DietaCoach({ alumno }) {
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
             <div style={{ fontSize:14, fontWeight:700, color:theme.text }}>🥗 {d.nombre || "Plan Nutricional"}</div>
             <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+              {Array.isArray(d.dias) && d.dias.length > 0
+                ? d.dias.map(dia => <Tag key={dia} color={theme.gold}>{dia}</Tag>)
+                : <Tag color={theme.muted}>Sin día asignado</Tag>}
               <Tag color={theme.accentLight}>{d.calorias} kcal</Tag>
               <button onClick={() => cargarParaEditar(d, "editar")} style={{ background:`${theme.success}22`, border:`1px solid ${theme.success}44`, borderRadius:6, padding:"4px 8px", color:theme.success, fontSize:11, cursor:"pointer", fontWeight:700 }}>✏️ Editar</button>
               <button onClick={() => cargarParaEditar(d, "duplicar")} style={{ background:`${theme.accent}22`, border:`1px solid ${theme.accent}44`, borderRadius:6, padding:"4px 8px", color:theme.accentLight, fontSize:11, cursor:"pointer", fontWeight:700 }}>⧉ Duplicar</button>
@@ -1557,6 +1625,27 @@ function DietaCoach({ alumno }) {
           <div style={{ marginBottom:14 }}>
             <div style={{ fontSize:10, color:theme.muted, marginBottom:3 }}>Nombre del plan (ej: Tren superior - Lunes y Jueves)</div>
             <input style={inputStyle} placeholder="Ej: Días de entreno" value={nombrePlan} onChange={e => setNombrePlan(e.target.value)} />
+          </div>
+
+          <div style={{ marginBottom:14 }}>
+            <div style={{ fontSize:10, color:theme.muted, marginBottom:6 }}>¿Qué días de la semana se usa este plan? (aparecerá automático esos días en la app del alumno)</div>
+            <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+              {DIAS_SEMANA.map(dia => {
+                const activo = diasDieta.includes(dia);
+                return (
+                  <button key={dia} type="button" onClick={() => toggleDiaDieta(dia)}
+                    style={{
+                      background: activo ? theme.accent : theme.surface,
+                      border: `1px solid ${activo ? theme.accent : theme.border}`,
+                      borderRadius: 8, padding: "6px 10px", color: activo ? "#fff" : theme.muted,
+                      fontSize: 12, fontWeight: 700, cursor: "pointer",
+                      boxShadow: activo ? `0 0 8px ${theme.accent}55` : "none",
+                    }}>
+                    {dia.slice(0, 3)}
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           {/* Macros */}
@@ -1650,9 +1739,9 @@ function DiarioScreen({ onNav }) {
     if (!user) { setLoading(false); return; }
     setUserId(user.id);
 
-    const hoy = new Date();
-    const hace6 = new Date(); hace6.setDate(hoy.getDate() - 29);
-    const fechaDesde = hace6.toISOString().split("T")[0];
+    const hoy = fechaOperativa();
+    const hace6 = new Date(hoy); hace6.setDate(hoy.getDate() - 29);
+    const fechaDesde = aFechaStr(hace6);
 
     const { data: registros } = await supabase
       .from("diario_registros")
@@ -1670,9 +1759,9 @@ function DiarioScreen({ onNav }) {
 
     const arr = [];
     for (let i = 29; i >= 0; i--) {
-      const d = new Date();
+      const d = new Date(hoy);
       d.setDate(hoy.getDate() - i);
-      const fechaStr = d.toISOString().split("T")[0];
+      const fechaStr = aFechaStr(d);
       const esHoy = i === 0;
       const reg = (registros || []).find(r => r.fecha === fechaStr);
       arr.push({
@@ -1687,7 +1776,7 @@ function DiarioScreen({ onNav }) {
     }
     setDias(arr);
 
-    const regHoy = (registros || []).find(r => r.fecha === hoy.toISOString().split("T")[0]);
+    const regHoy = (registros || []).find(r => r.fecha === aFechaStr(hoy));
     if (regHoy) {
       setEnergia(regHoy.energia || 7);
       setSueno(regHoy.sueno || 7);
@@ -1703,7 +1792,7 @@ function DiarioScreen({ onNav }) {
 
   const guardarHoy = async () => {
     if (!userId) return;
-    const hoyStr = new Date().toISOString().split("T")[0];
+    const hoyStr = fechaOperativaStr();
     const { error } = await supabase.from("diario_registros").upsert({
       usuario_id: userId,
       fecha: hoyStr,
@@ -1920,7 +2009,7 @@ function CheckinScreen({ onNav }) {
 
   const subirFoto = async (userId, key, blob) => {
     if (!blob) return null;
-    const fecha = new Date().toISOString().split("T")[0];
+    const fecha = fechaOperativaStr();
     const path = `${userId}/${fecha}/${key}.jpg`;
     const { error } = await supabase.storage
       .from("fotos-alumnos")
@@ -2658,9 +2747,9 @@ function PagosCoach({ alumno }) {
     nuevaFecha.setDate(nuevaFecha.getDate() + 28);
     await supabase.from("pagos").update({
       estado: "activo",
-      fecha_pago: new Date().toISOString().split("T")[0],
+      fecha_pago: fechaLocalStr(),
       reportado_por_alumno: false,
-      fecha_vencimiento: nuevaFecha.toISOString().split("T")[0],
+      fecha_vencimiento: fechaLocalStr(nuevaFecha),
     }).eq("id", pago.id);
     setExito("✅ Pago confirmado — renovado 4 semanas");
     cargarPago();
@@ -3261,19 +3350,81 @@ cargarMensajes();  }, [alumno]);
     </div>
   );
 }function DiarioCoach({ alumno }) {
-  const [dias, setDias] = useState([]);
+  const [ciclos, setCiclos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [entrenosDetalle, setEntrenosDetalle] = useState([]);
   const [dietaRegs, setDietaRegs] = useState([]);
+  const [diasPlanificados, setDiasPlanificados] = useState(0);
+  const [semanaExpandida, setSemanaExpandida] = useState(null);
   const [diaExpandido, setDiaExpandido] = useState(null);
+  const [cicloExpandido, setCicloExpandido] = useState(null);
+  const [edicionSerie, setEdicionSerie] = useState(null);
+  const [edicionKg, setEdicionKg] = useState("");
+  const [edicionReps, setEdicionReps] = useState("");
+  const [edicionComida, setEdicionComida] = useState(null);
+  const [edicionEstado, setEdicionEstado] = useState("");
+  const [edicionDescripcion, setEdicionDescripcion] = useState("");
   const diasNombre = ["Dom","Lun","Mar","Mié","Jue","Vie","Sáb"];
+  const SEMANAS_POR_CICLO = 4;
+  const COLOR_RPE = "#B0C4DE";
+  const COLOR_SUENO = "#39FF88";
+
+  const iniciarEdicionSerie = (s) => { setEdicionSerie(s.id); setEdicionKg(s.kg ?? ""); setEdicionReps(s.reps ?? ""); };
+  const cancelarEdicionSerie = () => setEdicionSerie(null);
+  const guardarEdicionSerie = async (id) => {
+    const kgNum = edicionKg === "" ? null : parseFloat(edicionKg);
+    const repsNum = edicionReps === "" ? null : parseInt(edicionReps);
+    const { error } = await supabase.from("registros_entreno").update({ kg: kgNum, reps: repsNum }).eq("id", id);
+    if (error) { alert("No se pudo actualizar la serie: " + error.message); return; }
+    setEntrenosDetalle(prev => prev.map(r => r.id === id ? { ...r, kg: kgNum, reps: repsNum } : r));
+    setEdicionSerie(null);
+  };
+  const iniciarEdicionComida = (r) => { setEdicionComida(r.id); setEdicionEstado(r.estado); setEdicionDescripcion(r.descripcion || ""); };
+  const cancelarEdicionComida = () => setEdicionComida(null);
+  const guardarEdicionComida = async (id) => {
+    const descripcionFinal = edicionEstado === "cambio" ? edicionDescripcion : null;
+    const { error } = await supabase.from("dieta_registros").update({ estado: edicionEstado, descripcion: descripcionFinal }).eq("id", id);
+    if (error) { alert("No se pudo actualizar la comida: " + error.message); return; }
+    setDietaRegs(prev => prev.map(r => r.id === id ? { ...r, estado: edicionEstado, descripcion: descripcionFinal } : r));
+    setEdicionComida(null);
+  };
+  const getMonday = (d) => {
+    const date = new Date(d);
+    const day = date.getDay();
+    const diff = day === 0 ? -6 : 1 - day;
+    date.setDate(date.getDate() + diff);
+    date.setHours(0, 0, 0, 0);
+    return date;
+  };
 
   useEffect(() => {
     const cargar = async () => {
       if (!alumno?.id) return;
-      const hoy = new Date();
-      const hace13 = new Date(); hace13.setDate(hoy.getDate() - 29);
-      const fechaDesde = hace13.toISOString().split("T")[0];
+      const hoy = fechaOperativa();
+
+      // Busca la fecha del primer registro del alumno (en cualquiera de las 3 fuentes)
+      // para que los ciclos arranquen desde que empezó, y no se pierda historial.
+      const [{ data: eDiario }, { data: eEntreno }, { data: eDieta }, { data: rutinasAlumno }] = await Promise.all([
+        supabase.from("diario_registros").select("fecha").eq("usuario_id", alumno.id).order("fecha", { ascending: true }).limit(1),
+        supabase.from("registros_entreno").select("fecha").eq("usuario_id", alumno.id).order("fecha", { ascending: true }).limit(1),
+        supabase.from("dieta_registros").select("fecha").eq("usuario_id", alumno.id).order("fecha", { ascending: true }).limit(1),
+        supabase.from("rutinas").select("dia").eq("usuario_id", alumno.id),
+      ]);
+      // Cantidad de días distintos de la semana que tienen una rutina asignada
+      // (el "split" real del alumno: 3, 4, 5, 6 días, etc). Los días sin rutina
+      // son descanso y no cuentan como incumplimiento.
+      const diasConRutina = new Set((rutinasAlumno || []).map(r => r.dia).filter(Boolean));
+      setDiasPlanificados(diasConRutina.size);
+      const fechasIniciales = [eDiario?.[0]?.fecha, eEntreno?.[0]?.fecha, eDieta?.[0]?.fecha].filter(Boolean).sort();
+      if (fechasIniciales.length === 0) { setLoading(false); return; }
+
+      let inicioRango = getMonday(new Date(fechasIniciales[0] + "T00:00:00"));
+      // Salvaguarda: si por algún registro viejo (guardado antes de corregir el
+      // huso horario) quedó una fecha "futura" respecto a hoy, no se calcula un
+      // rango invertido (que dejaría todo el diario vacío) — se arranca como
+      // máximo desde la semana actual.
+      if (inicioRango > hoy) inicioRango = getMonday(hoy);
+      const fechaDesde = aFechaStr(inicioRango);
 
       const { data: registros } = await supabase
         .from("diario_registros")
@@ -3299,14 +3450,18 @@ cargarMensajes();  }, [alumno]);
         .order("comida_index", { ascending: true });
       setDietaRegs(dietaR || []);
 
-      const arr = [];
-      for (let i = 29; i >= 0; i--) {
-        const d = new Date();
-        d.setDate(hoy.getDate() - i);
-        const fechaStr = d.toISOString().split("T")[0];
+      // Construye todos los días desde el inicio del rango hasta hoy
+      const hoyStr = aFechaStr(hoy);
+      const totalDias = Math.max(1, Math.floor((hoy - inicioRango) / 86400000) + 1);
+      const diasArr = [];
+      for (let i = 0; i < totalDias; i++) {
+        const d = new Date(inicioRango);
+        d.setDate(d.getDate() + i);
+        const fechaStr = aFechaStr(d);
         const reg = (registros || []).find(r => r.fecha === fechaStr);
-        arr.push({
-          dia: i === 0 ? "Hoy" : diasNombre[d.getDay()],
+        const esHoy = fechaStr === hoyStr;
+        diasArr.push({
+          dia: esHoy ? "Hoy" : diasNombre[d.getDay()],
           fecha: d.toLocaleDateString("es-CL", { day: "numeric", month: "short" }),
           fechaStr,
           energia: reg?.energia ?? null,
@@ -3315,7 +3470,38 @@ cargarMensajes();  }, [alumno]);
           entreno: fechasEntreno.has(fechaStr),
         });
       }
-      setDias(arr);
+
+      // Agrupa los días en semanas de lunes a domingo (orden cronológico)
+      const semanasArr = [];
+      for (let w = 0; w < diasArr.length; w += 7) {
+        const diasSemana = diasArr.slice(w, w + 7);
+        const inicio = diasSemana[0];
+        const fin = diasSemana[diasSemana.length - 1];
+        semanasArr.push({
+          key: inicio.fechaStr,
+          rango: `${inicio.fecha} – ${fin.fecha}`,
+          esActual: diasSemana.some(d => d.dia === "Hoy"),
+          dias: diasSemana,
+        });
+      }
+
+      // Agrupa las semanas en ciclos de 4 (mesociclos), numerando cada semana
+      // según su posición cronológica dentro del ciclo (1 a 4)
+      const ciclosArr = [];
+      for (let c = 0; c < semanasArr.length; c += SEMANAS_POR_CICLO) {
+        const semanasCiclo = semanasArr.slice(c, c + SEMANAS_POR_CICLO).map((s, idx) => ({ ...s, numero: idx + 1 }));
+        const inicio = semanasCiclo[0];
+        const fin = semanasCiclo[semanasCiclo.length - 1];
+        ciclosArr.push({
+          key: inicio.key,
+          numeroCiclo: Math.floor(c / SEMANAS_POR_CICLO) + 1,
+          rango: `${inicio.rango.split(" – ")[0]} – ${fin.rango.split(" – ")[1]}`,
+          semanas: semanasCiclo,
+        });
+      }
+      ciclosArr.forEach((c, i) => { c.esActivo = i === ciclosArr.length - 1; });
+
+      setCiclos(ciclosArr);
       setLoading(false);
     };
     cargar();
@@ -3323,7 +3509,8 @@ cargarMensajes();  }, [alumno]);
 
   if (loading) return <Card style={{ textAlign:"center", padding:20 }}><div style={{ color:theme.muted }}>Cargando...</div></Card>;
 
-  const conDatos = dias.filter(d => d.energia !== null);
+  const todosDias = ciclos.flatMap(c => c.semanas.flatMap(s => s.dias));
+  const conDatos = todosDias.filter(d => d.energia !== null);
   if (conDatos.length === 0) return (
     <Card style={{ textAlign:"center", padding:30 }}>
       <div style={{ fontSize:24, marginBottom:8 }}>🌙</div>
@@ -3331,8 +3518,12 @@ cargarMensajes();  }, [alumno]);
     </Card>
   );
 
-  const promedioEnergia = (conDatos.reduce((a,b) => a + b.energia, 0) / conDatos.length).toFixed(1);
-  const promedioSueno = (conDatos.reduce((a,b) => a + b.sueno, 0) / conDatos.length).toFixed(1);
+  const cicloActivo = ciclos.find(c => c.esActivo);
+  const diasCicloActivo = cicloActivo ? cicloActivo.semanas.flatMap(s => s.dias) : [];
+  const conDatosActivo = diasCicloActivo.filter(d => d.energia !== null);
+  const promedioEnergia = conDatosActivo.length ? (conDatosActivo.reduce((a,b) => a + b.energia, 0) / conDatosActivo.length).toFixed(1) : "—";
+  const promedioSueno = conDatosActivo.length ? (conDatosActivo.reduce((a,b) => a + b.sueno, 0) / conDatosActivo.length).toFixed(1) : "—";
+  const semanasConDatosActivo = cicloActivo ? cicloActivo.semanas.filter(s => s.dias.some(d => d.energia !== null)).length : 0;
 
   const Barra = ({ value, color }) => (
     <div style={{ background: theme.surface, borderRadius: 6, height: 7, overflow: "hidden", border: `1px solid ${theme.border}` }}>
@@ -3342,140 +3533,299 @@ cargarMensajes();  }, [alumno]);
 
   const iconEstado = (estado) => estado === "completada" ? "✅" : estado === "no_hecha" ? "❌" : estado === "cambio" ? "🔄" : "⬜";
 
+  // Calcula el resumen (RPE, sueño, cargas, adherencia dieta) de una semana
+  const resumenSemana = (semana) => {
+    const diasConDatos = semana.dias.filter(d => d.energia !== null);
+    const fechasSemana = new Set(semana.dias.map(d => d.fechaStr));
+    const entrenosSemana = entrenosDetalle.filter(r => fechasSemana.has(r.fecha));
+    const dietaSemana = dietaRegs.filter(r => fechasSemana.has(r.fecha));
+
+    const rpeValues = diasConDatos.map(d => d.energia);
+    const suenoValues = diasConDatos.map(d => d.sueno);
+    const diasEntrenados = semana.dias.filter(d => d.entreno).length;
+
+    const dietaCompletadas = dietaSemana.filter(r => r.estado === "completada").length;
+    const adherenciaDieta = dietaSemana.length > 0 ? Math.round((dietaCompletadas / dietaSemana.length) * 100) : null;
+
+    const ejerciciosSemana = {};
+    entrenosSemana.forEach(r => {
+      const nombre = r.ejercicios?.nombre || "Ejercicio";
+      if (!ejerciciosSemana[nombre]) ejerciciosSemana[nombre] = { kgs: [], repsMax: 0 };
+      if (r.kg) ejerciciosSemana[nombre].kgs.push(r.kg);
+      if (r.reps) ejerciciosSemana[nombre].repsMax = Math.max(ejerciciosSemana[nombre].repsMax, r.reps);
+    });
+
+    return {
+      rpeProm: rpeValues.length ? (rpeValues.reduce((a,b)=>a+b,0)/rpeValues.length).toFixed(1) : null,
+      rpeMin: rpeValues.length ? Math.min(...rpeValues) : null,
+      rpeMax: rpeValues.length ? Math.max(...rpeValues) : null,
+      suenoProm: suenoValues.length ? (suenoValues.reduce((a,b)=>a+b,0)/suenoValues.length).toFixed(1) : null,
+      diasEntrenados,
+      adherenciaDieta,
+      ejerciciosSemana,
+    };
+  };
+
+  // Tarjeta de una semana individual (usada tanto en el ciclo activo como en ciclos pasados expandidos)
+  const SemanaCard = ({ semana }) => {
+    const resumen = resumenSemana(semana);
+    const expandida = semanaExpandida === semana.key;
+    const tieneDatos = semana.dias.some(d => d.energia !== null || d.entreno) || Object.keys(resumen.ejerciciosSemana).length > 0;
+
+    return (
+      <Card style={{ marginBottom:10, padding:0, overflow:"hidden", border: expandida ? `1px solid ${theme.accent}66` : `1px solid ${theme.border}`, boxShadow: expandida ? `0 0 16px ${theme.accent}22` : "none" }}>
+        <div onClick={() => tieneDatos && setSemanaExpandida(expandida ? null : semana.key)}
+          style={{ padding:14, cursor: tieneDatos ? "pointer" : "default", display:"flex", justifyContent:"space-between", alignItems:"center", background: semana.esActual ? `${theme.accent}12` : "transparent" }}>
+          <div>
+            <div style={{ fontSize:13, fontWeight:800, color:theme.text, display:"flex", alignItems:"center", gap:8 }}>
+              Semana {semana.numero}
+              {semana.esActual && <Tag color={theme.accent}>Actual</Tag>}
+            </div>
+            <div style={{ fontSize:11, color:theme.muted, marginTop:2 }}>{semana.rango}</div>
+          </div>
+          <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+            {resumen.rpeProm && (
+              <div style={{ textAlign:"center" }}>
+                <div style={{ fontSize:13, fontWeight:800, color:COLOR_RPE }}>{resumen.rpeProm}</div>
+                <div style={{ fontSize:8, color:theme.muted }}>RPE</div>
+              </div>
+            )}
+            <div style={{ textAlign:"center" }}>
+              <div style={{ fontSize:13, fontWeight:800, color:theme.success }}>{resumen.diasEntrenados}</div>
+              <div style={{ fontSize:8, color:theme.muted }}>días</div>
+            </div>
+            {tieneDatos && <span style={{ fontSize:11, color:theme.accentLight }}>{expandida ? "▲" : "▼"}</span>}
+          </div>
+        </div>
+
+        {expandida && (
+          <div style={{ padding:14, borderTop:`1px solid ${theme.border}`, background:theme.bg }}>
+            {/* Resumen de la semana */}
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:14 }}>
+              <div style={{ background:theme.surface, borderRadius:10, padding:10, textAlign:"center" }}>
+                <div style={{ fontSize:10, color:theme.muted, marginBottom:2 }}>💥 Rango RPE</div>
+                <div style={{ fontSize:14, fontWeight:800, color:COLOR_RPE }}>{resumen.rpeMin !== null ? `${resumen.rpeMin}–${resumen.rpeMax}` : "—"}</div>
+              </div>
+              <div style={{ background:theme.surface, borderRadius:10, padding:10, textAlign:"center" }}>
+                <div style={{ fontSize:10, color:theme.muted, marginBottom:2 }}>😴 Sueño prom.</div>
+                <div style={{ fontSize:14, fontWeight:800, color:COLOR_SUENO }}>{resumen.suenoProm !== null ? `${resumen.suenoProm}/10` : "—"}</div>
+              </div>
+              <div style={{ background:theme.surface, borderRadius:10, padding:10, textAlign:"center" }}>
+                <div style={{ fontSize:10, color:theme.muted, marginBottom:2 }}>💪 Días entrenados</div>
+                <div style={{ fontSize:14, fontWeight:800, color:theme.success }}>{resumen.diasEntrenados}/{diasPlanificados || 7}</div>
+              </div>
+              <div style={{ background:theme.surface, borderRadius:10, padding:10, textAlign:"center" }}>
+                <div style={{ fontSize:10, color:theme.muted, marginBottom:2 }}>🥗 Cumplim. dieta</div>
+                <div style={{ fontSize:14, fontWeight:800, color: resumen.adherenciaDieta !== null ? (resumen.adherenciaDieta >= 70 ? theme.success : resumen.adherenciaDieta >= 40 ? theme.warning : theme.danger) : theme.muted }}>{resumen.adherenciaDieta !== null ? `${resumen.adherenciaDieta}%` : "—"}</div>
+              </div>
+            </div>
+
+            {/* Días de la semana, cada uno expandible por separado */}
+            <div style={{ fontSize:11, fontWeight:800, color:theme.muted, marginBottom:8, letterSpacing:0.5 }}>📅 DÍA A DÍA</div>
+            {semana.dias.map((d, i) => {
+              const dietaDia = dietaRegs.filter(r => r.fecha === d.fechaStr);
+              const entrenoDia = entrenosDetalle.filter(r => r.fecha === d.fechaStr);
+              const tieneDatosDia = d.energia !== null || d.entreno || dietaDia.length > 0;
+              const diaExp = diaExpandido === d.fechaStr;
+
+              const ejerciciosAgrupados = {};
+              entrenoDia.forEach(r => {
+                const nombre = r.ejercicios?.nombre || "Ejercicio";
+                if (!ejerciciosAgrupados[nombre]) ejerciciosAgrupados[nombre] = [];
+                ejerciciosAgrupados[nombre].push(r);
+              });
+              Object.values(ejerciciosAgrupados).forEach(arr => arr.sort((a,b) => (a.serie||0) - (b.serie||0)));
+
+              return (
+                <div key={i} style={{ marginBottom:8 }}>
+                  <div onClick={() => tieneDatosDia && setDiaExpandido(diaExp ? null : d.fechaStr)} style={{
+                    display:"grid", gridTemplateColumns:"40px 1fr 1fr 30px",
+                    gap:8, alignItems:"center",
+                    background: d.dia === "Hoy" ? `${theme.accent}15` : theme.card,
+                    border: `1px solid ${diaExp ? theme.accent+"88" : theme.border}`,
+                    borderRadius: diaExp ? "10px 10px 0 0" : 10, padding:"7px 10px",
+                    cursor: tieneDatosDia ? "pointer" : "default",
+                  }}>
+                    <div style={{ textAlign:"center" }}>
+                      <div style={{ fontSize:10, fontWeight:800, color: d.dia === "Hoy" ? theme.accent : theme.text }}>{d.dia}</div>
+                      <div style={{ fontSize:8, color:theme.muted }}>{d.fecha}</div>
+                    </div>
+                    {d.energia !== null ? (
+                      <>
+                        <div style={{ textAlign:"center", fontSize:9, color:theme.muted }}>💥 {d.energia}/10</div>
+                        <div style={{ textAlign:"center", fontSize:9, color:theme.muted }}>😴 {d.horas || "—"}h · {d.sueno}/10</div>
+                      </>
+                    ) : (
+                      <div style={{ gridColumn:"2/4", fontSize:10, color:theme.muted }}>Sin registro</div>
+                    )}
+                    <div style={{ textAlign:"center" }}>
+                      {d.entreno ? <span style={{ fontSize:11 }}>💪</span> : <span style={{ fontSize:11, opacity:0.3 }}>—</span>}
+                    </div>
+                  </div>
+
+                  {diaExp && (
+                    <div style={{ background:theme.card, border:`1px solid ${theme.accent}44`, borderTop:"none", borderRadius:"0 0 10px 10px", padding:12 }}>
+                      {d.energia !== null && (
+                        <div style={{ marginBottom:14 }}>
+                          <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
+                            <span style={{ fontSize:11, color:theme.text }}>💥 Intensidad / RPE</span>
+                            <span style={{ fontSize:11, fontWeight:700, color:COLOR_RPE }}>{d.energia}/10</span>
+                          </div>
+                          <Barra value={d.energia} color={COLOR_RPE} />
+                          <div style={{ display:"flex", justifyContent:"space-between", marginTop:10, marginBottom:4 }}>
+                            <span style={{ fontSize:11, color:theme.text }}>😴 Calidad del sueño ({d.horas || "—"}h)</span>
+                            <span style={{ fontSize:11, fontWeight:700, color:COLOR_SUENO }}>{d.sueno}/10</span>
+                          </div>
+                          <Barra value={d.sueno} color={COLOR_SUENO} />
+                        </div>
+                      )}
+
+                      {Object.keys(ejerciciosAgrupados).length > 0 && (
+                        <div style={{ marginBottom:14 }}>
+                          <div style={{ fontSize:11, fontWeight:800, color:theme.muted, marginBottom:8, letterSpacing:0.5 }}>🏋️ ENTRENAMIENTO</div>
+                          {Object.entries(ejerciciosAgrupados).map(([nombre, series]) => (
+                            <div key={nombre} style={{ marginBottom:8 }}>
+                              <div style={{ fontSize:12, fontWeight:700, color:theme.text, marginBottom:4 }}>{nombre}</div>
+                              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:6 }}>
+                                {series.map((s, si) => (
+                                  edicionSerie === s.id ? (
+                                    <div key={si} style={{ display:"flex", alignItems:"center", gap:3, background:theme.surface, border:`1px solid ${theme.accent}66`, borderRadius:6, padding:"3px 4px", flexWrap:"wrap" }}>
+                                      <span style={{ fontSize:10, color:theme.muted }}>S{s.serie}</span>
+                                      <input type="number" value={edicionKg} onChange={e => setEdicionKg(e.target.value)} placeholder="kg"
+                                        style={{ width:44, background:theme.card, border:`1px solid ${theme.border}`, borderRadius:4, color:theme.text, fontSize:11, padding:"3px 4px", outline:"none" }} />
+                                      <span style={{ fontSize:10, color:theme.muted }}>×</span>
+                                      <input type="number" value={edicionReps} onChange={e => setEdicionReps(e.target.value)} placeholder="reps"
+                                        style={{ width:38, background:theme.card, border:`1px solid ${theme.border}`, borderRadius:4, color:theme.text, fontSize:11, padding:"3px 4px", outline:"none" }} />
+                                      <button onClick={() => guardarEdicionSerie(s.id)} style={{ background:theme.success, border:"none", borderRadius:4, color:"#fff", fontSize:11, fontWeight:800, cursor:"pointer", padding:"3px 7px" }}>✓</button>
+                                      <button onClick={cancelarEdicionSerie} style={{ background:"transparent", border:`1px solid ${theme.border}`, borderRadius:4, color:theme.muted, fontSize:11, cursor:"pointer", padding:"3px 7px" }}>×</button>
+                                    </div>
+                                  ) : (
+                                    <div key={si} style={{ position:"relative", display:"flex", alignItems:"center", justifyContent:"center", background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:6, padding:"6px 4px", fontSize:11, color:theme.muted, textAlign:"center" }}>
+                                      <button onClick={() => iniciarEdicionSerie(s)} title="Editar"
+                                        style={{ position:"absolute", top:-5, left:-5, width:15, height:15, borderRadius:"50%", background:theme.card, border:`1px solid ${theme.border}`, color:theme.text, fontSize:8, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", padding:0, lineHeight:1 }}>✏️</button>
+                                      S{s.serie}: <span style={{ color:theme.text, fontWeight:700 }}>{s.kg || "—"}kg × {s.reps || "—"}</span>
+                                    </div>
+                                  )
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {dietaDia.length > 0 ? (
+                        <div>
+                          <div style={{ fontSize:11, fontWeight:800, color:theme.muted, marginBottom:8, letterSpacing:0.5 }}>🥗 DIETA</div>
+                          {dietaDia.map((r, ri) => (
+                            <div key={ri} style={{ marginBottom:8, background: edicionComida === r.id ? theme.surface : "transparent", border: edicionComida === r.id ? `1px solid ${theme.accent}66` : "none", borderRadius:8, padding: edicionComida === r.id ? 10 : 0 }}>
+                              {edicionComida === r.id ? (
+                                <div>
+                                  <div style={{ fontSize:12, color:theme.text, fontWeight:700, marginBottom:8 }}>{r.comida_nombre || `Comida ${r.comida_index + 1}`}</div>
+                                  <div style={{ display:"flex", gap:6, marginBottom:8 }}>
+                                    {[["completada","✅"],["no_hecha","❌"],["cambio","🔄"]].map(([val, icon]) => (
+                                      <button key={val} onClick={() => setEdicionEstado(val)}
+                                        style={{ width:34, height:34, borderRadius:8, background: edicionEstado === val ? theme.accent : theme.card, border:`1.5px solid ${edicionEstado === val ? theme.accent : theme.border}`, fontSize:15, cursor:"pointer" }}>
+                                        {icon}
+                                      </button>
+                                    ))}
+                                  </div>
+                                  {edicionEstado === "cambio" && (
+                                    <textarea value={edicionDescripcion} onChange={e => setEdicionDescripcion(e.target.value)} placeholder="Descripción del cambio..."
+                                      style={{ width:"100%", boxSizing:"border-box", background:theme.card, border:`1px solid ${theme.border}`, borderRadius:6, padding:8, color:theme.text, fontSize:11, minHeight:50, resize:"none", marginBottom:8, outline:"none" }} />
+                                  )}
+                                  <div style={{ display:"flex", gap:6 }}>
+                                    <button onClick={() => guardarEdicionComida(r.id)} style={{ flex:1, background:theme.success, border:"none", borderRadius:6, color:"#fff", fontSize:11, fontWeight:700, cursor:"pointer", padding:"6px 0" }}>Guardar</button>
+                                    <button onClick={cancelarEdicionComida} style={{ flex:1, background:theme.card, border:`1px solid ${theme.border}`, borderRadius:6, color:theme.muted, fontSize:11, fontWeight:700, cursor:"pointer", padding:"6px 0" }}>Cancelar</button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div style={{ position:"relative", background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:8, padding:"7px 10px" }}>
+                                  <button onClick={() => iniciarEdicionComida(r)} title="Editar"
+                                    style={{ position:"absolute", top:-5, left:-5, width:15, height:15, borderRadius:"50%", background:theme.card, border:`1px solid ${theme.border}`, color:theme.text, fontSize:8, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", padding:0, lineHeight:1 }}>✏️</button>
+                                  <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                                    <span style={{ fontSize:14 }}>{iconEstado(r.estado)}</span>
+                                    <span style={{ fontSize:12, color:theme.text, fontWeight:600 }}>{r.comida_nombre || `Comida ${r.comida_index + 1}`}</span>
+                                  </div>
+                                  {r.estado === "cambio" && r.descripcion && (
+                                    <div style={{ fontSize:11, color:theme.muted, fontStyle:"italic", paddingLeft:22, marginTop:2 }}>"{r.descripcion}"</div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        (d.entreno || d.energia !== null) ? <div style={{ fontSize:11, color:theme.muted }}>Sin registro de dieta ese día</div> : null
+                      )}
+
+                      {!d.entreno && d.energia === null && dietaDia.length === 0 && (
+                        <div style={{ fontSize:11, color:theme.muted }}>Sin registros ese día</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Card>
+    );
+  };
+
+  const ciclosOrdenados = [...ciclos].reverse(); // el ciclo activo (más reciente) primero
+
   return (
     <div>
-      <div style={{ fontSize:11, color:theme.muted, marginBottom:10 }}>Lo que el alumno cuenta al terminar cada entrenamiento: intensidad percibida, horas dormidas y calidad del sueño. Toca un día para ver el detalle completo.</div>
+      <div style={{ fontSize:11, color:theme.muted, marginBottom:10 }}>El ciclo actual (4 semanas) queda siempre arriba. Toca una semana para ver su resumen, y un día puntual para el detalle completo. Los ciclos anteriores quedan guardados abajo, colapsados.</div>
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:14 }}>
         <Card style={{ padding:12, textAlign:"center" }}>
           <div style={{ fontSize:16 }}>⚡</div>
-          <div style={{ fontSize:20, fontWeight:900, color:theme.accent, marginTop:4 }}>{promedioEnergia}/10</div>
-          <div style={{ fontSize:9, color:theme.muted }}>Intensidad prom. (30 días)</div>
+          <div style={{ fontSize:20, fontWeight:900, color:COLOR_RPE, marginTop:4 }}>{promedioEnergia}/10</div>
+          <div style={{ fontSize:9, color:theme.muted }}>Intensidad prom. (ciclo actual{semanasConDatosActivo ? ` · ${semanasConDatosActivo}/${SEMANAS_POR_CICLO} sem.` : ""})</div>
         </Card>
         <Card style={{ padding:12, textAlign:"center" }}>
           <div style={{ fontSize:16 }}>😴</div>
-          <div style={{ fontSize:20, fontWeight:900, color:"#A78BFA", marginTop:4 }}>{promedioSueno}/10</div>
-          <div style={{ fontSize:9, color:theme.muted }}>Sueño prom. (30 días)</div>
+          <div style={{ fontSize:20, fontWeight:900, color:COLOR_SUENO, marginTop:4 }}>{promedioSueno}/10</div>
+          <div style={{ fontSize:9, color:theme.muted }}>Sueño prom. (ciclo actual{semanasConDatosActivo ? ` · ${semanasConDatosActivo}/${SEMANAS_POR_CICLO} sem.` : ""})</div>
         </Card>
       </div>
-      <Card>
-        <div style={{ fontSize:12, color:theme.muted, marginBottom:12 }}>ÚLTIMOS 30 DÍAS</div>
-        {dias.map((d, i) => {
-          const dietaDia = dietaRegs.filter(r => r.fecha === d.fechaStr);
-          const entrenoDia = entrenosDetalle.filter(r => r.fecha === d.fechaStr);
-          const tieneDatos = d.energia !== null || d.entreno || dietaDia.length > 0;
-          const expandido = diaExpandido === d.fechaStr;
 
-          // Agrupar ejercicios por nombre, en orden de serie
-          const ejerciciosAgrupados = {};
-          entrenoDia.forEach(r => {
-            const nombre = r.ejercicios?.nombre || "Ejercicio";
-            if (!ejerciciosAgrupados[nombre]) ejerciciosAgrupados[nombre] = [];
-            ejerciciosAgrupados[nombre].push(r);
-          });
-          Object.values(ejerciciosAgrupados).forEach(arr => arr.sort((a,b) => (a.serie||0) - (b.serie||0)));
-
+      {ciclosOrdenados.map((ciclo) => {
+        if (ciclo.esActivo) {
+          // El ciclo activo se muestra siempre desplegado, semana actual arriba
+          const semanasOrden = [...ciclo.semanas].reverse();
           return (
-            <div key={i} style={{ marginBottom:10 }}>
-              <div onClick={() => tieneDatos && setDiaExpandido(expandido ? null : d.fechaStr)} style={{
-                display:"grid", gridTemplateColumns:"40px 1fr 1fr 44px",
-                gap:8, alignItems:"center",
-                background: d.dia === "Hoy" ? `${theme.accent}15` : theme.surface,
-                border: `1px solid ${expandido ? theme.accent+"88" : d.dia === "Hoy" ? theme.accent+"44" : theme.border}`,
-                borderRadius: expandido ? "10px 10px 0 0" : 10, padding:"8px 10px",
-                cursor: tieneDatos ? "pointer" : "default",
-                boxShadow: expandido ? `0 0 14px ${theme.accent}33` : "none",
-              }}>
-                <div style={{ textAlign:"center" }}>
-                  <div style={{ fontSize:11, fontWeight:800, color: d.dia === "Hoy" ? theme.accent : theme.text }}>{d.dia}</div>
-                  <div style={{ fontSize:9, color:theme.muted }}>{d.fecha}</div>
-                </div>
-                {d.energia !== null ? (
-                  <>
-                    <div style={{ textAlign:"center" }}>
-                      <div style={{ fontSize:10, color:theme.muted, marginBottom:2 }}>💥 Intensidad</div>
-                      <div style={{ fontSize:12, fontWeight:700, color:theme.text }}>{d.energia}/10</div>
-                    </div>
-                    <div style={{ textAlign:"center" }}>
-                      <div style={{ fontSize:10, color:theme.muted, marginBottom:2 }}>😴 Sueño</div>
-                      <div style={{ fontSize:12, fontWeight:700, color:theme.text }}>{d.horas || "—"}h · {d.sueno}/10</div>
-                    </div>
-                  </>
-                ) : (
-                  <div style={{ gridColumn:"2/3", fontSize:11, color:theme.muted }}>Sin registro</div>
-                )}
-                <div style={{ textAlign:"center", display:"flex", alignItems:"center", justifyContent:"center", gap:4 }}>
-                  {d.entreno
-                    ? <div style={{ background:`${theme.success}22`, border:`1px solid ${theme.success}44`, borderRadius:6, padding:"3px 4px", fontSize:9, fontWeight:700, color:theme.success }}>💪</div>
-                    : <div style={{ background:`${theme.muted}22`, borderRadius:6, padding:"3px 4px", fontSize:9, color:theme.muted }}>—</div>
-                  }
-                  {tieneDatos && <span style={{ fontSize:10, color:theme.accentLight }}>{expandido ? "▲" : "▼"}</span>}
-                </div>
+            <div key={ciclo.key} style={{ marginBottom:16 }}>
+              <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
+                <div style={{ fontSize:12, fontWeight:800, color:theme.accentLight, letterSpacing:0.5 }}>🔵 CICLO ACTUAL</div>
+                <div style={{ fontSize:11, color:theme.muted }}>{ciclo.rango}</div>
               </div>
-
-              {/* Detalle expandido del día */}
-              {expandido && (
-                <div style={{ background:theme.card, border:`1px solid ${theme.accent}44`, borderTop:"none", borderRadius:"0 0 10px 10px", padding:12 }}>
-                  {d.energia !== null && (
-                    <div style={{ marginBottom:14 }}>
-                      <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
-                        <span style={{ fontSize:11, color:theme.text }}>💥 Intensidad / RPE</span>
-                        <span style={{ fontSize:11, fontWeight:700, color:theme.accentLight }}>{d.energia}/10</span>
-                      </div>
-                      <Barra value={d.energia} color={theme.accentLight} />
-                      <div style={{ display:"flex", justifyContent:"space-between", marginTop:10, marginBottom:4 }}>
-                        <span style={{ fontSize:11, color:theme.text }}>😴 Calidad del sueño ({d.horas || "—"}h)</span>
-                        <span style={{ fontSize:11, fontWeight:700, color:"#A78BFA" }}>{d.sueno}/10</span>
-                      </div>
-                      <Barra value={d.sueno} color="#A78BFA" />
-                    </div>
-                  )}
-
-                  {Object.keys(ejerciciosAgrupados).length > 0 && (
-                    <div style={{ marginBottom:14 }}>
-                      <div style={{ fontSize:11, fontWeight:800, color:theme.muted, marginBottom:8, letterSpacing:0.5 }}>🏋️ ENTRENAMIENTO</div>
-                      {Object.entries(ejerciciosAgrupados).map(([nombre, series]) => (
-                        <div key={nombre} style={{ marginBottom:8 }}>
-                          <div style={{ fontSize:12, fontWeight:700, color:theme.text, marginBottom:4 }}>{nombre}</div>
-                          <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
-                            {series.map((s, si) => (
-                              <div key={si} style={{ background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:6, padding:"3px 8px", fontSize:11, color:theme.muted }}>
-                                S{s.serie}: <span style={{ color:theme.text, fontWeight:700 }}>{s.kg || "—"}kg × {s.reps || "—"}</span>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {dietaDia.length > 0 ? (
-                    <div>
-                      <div style={{ fontSize:11, fontWeight:800, color:theme.muted, marginBottom:8, letterSpacing:0.5 }}>🥗 DIETA</div>
-                      {dietaDia.map((r, ri) => (
-                        <div key={ri} style={{ marginBottom:6 }}>
-                          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                            <span style={{ fontSize:14 }}>{iconEstado(r.estado)}</span>
-                            <span style={{ fontSize:12, color:theme.text, fontWeight:600 }}>{r.comida_nombre || `Comida ${r.comida_index + 1}`}</span>
-                          </div>
-                          {r.estado === "cambio" && r.descripcion && (
-                            <div style={{ fontSize:11, color:theme.muted, fontStyle:"italic", paddingLeft:22, marginTop:2 }}>"{r.descripcion}"</div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    d.entreno || d.energia !== null ? <div style={{ fontSize:11, color:theme.muted }}>Sin registro de dieta ese día</div> : null
-                  )}
-
-                  {!d.entreno && d.energia === null && dietaDia.length === 0 && (
-                    <div style={{ fontSize:11, color:theme.muted }}>Sin registros ese día</div>
-                  )}
-                </div>
-              )}
+              {semanasOrden.map(semana => <SemanaCard key={semana.key} semana={semana} />)}
             </div>
           );
-        })}
-      </Card>
+        }
+
+        // Ciclos anteriores: colapsados, se agrupan y no se pierden
+        const cicloExp = cicloExpandido === ciclo.key;
+        const semanasOrden = [...ciclo.semanas].reverse();
+        return (
+          <Card key={ciclo.key} style={{ marginBottom:10, padding:0, overflow:"hidden", border:`1px solid ${theme.border}` }}>
+            <div onClick={() => setCicloExpandido(cicloExp ? null : ciclo.key)}
+              style={{ padding:14, cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+              <div>
+                <div style={{ fontSize:12, fontWeight:800, color:theme.muted }}>Ciclo {ciclo.numeroCiclo}</div>
+                <div style={{ fontSize:11, color:theme.muted, marginTop:2 }}>{ciclo.rango}</div>
+              </div>
+              <span style={{ fontSize:11, color:theme.accentLight }}>{cicloExp ? "▲ ocultar" : "▼ ver detalle"}</span>
+            </div>
+            {cicloExp && (
+              <div style={{ padding:"0 14px 14px" }}>
+                {semanasOrden.map(semana => <SemanaCard key={semana.key} semana={semana} />)}
+              </div>
+            )}
+          </Card>
+        );
+      })}
     </div>
   );
 }function CheckinsCoach({ alumno }) {
