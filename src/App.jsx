@@ -122,13 +122,15 @@ function LoginScreen({ onNav }) {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) {
       setError("Correo o contraseña incorrectos");
+    } else if (data.user.email === COACH_EMAIL) {
+      onNav("coach_panel");
     } else {
-      const COACH_EMAIL = "coach.claudiomiquel@gmail.com";
-      if (data.user.email === COACH_EMAIL) {
-        onNav("coach_panel");
-      } else {
-        onNav("alumno_home");
-      }
+      // Si un alumno inicia sesión manualmente sin haber terminado la
+      // anamnesis (por ejemplo, confirmó el correo y volvió a esta pantalla
+      // en vez de esperar la redirección automática), lo mandamos igual a
+      // completarla en vez de dejarlo entrar directo a Inicio.
+      const completa = await anamnesisCompleta(data.user.id);
+      onNav(completa ? "alumno_home" : "anamnesis");
     }
     setLoading(false);
   };
@@ -158,7 +160,7 @@ function LoginScreen({ onNav }) {
   );
 }
 
-function RegistroScreen({ onNav }) {
+function RegistroScreen({ onNav, onRegistroExitoso }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmar, setConfirmar] = useState("");
@@ -191,7 +193,14 @@ function RegistroScreen({ onNav }) {
       const detalle = error.message || error.error_description || error.name || JSON.stringify(error);
       setError(`Error al crear cuenta${error.status ? ` (${error.status})` : ""}: ${detalle}`);
     } else {
-      onNav("anamnesis");
+      // No mandamos al alumno directo a la anamnesis: primero tiene que
+      // confirmar su correo. Si entrara de una a la anamnesis sin confirmar,
+      // supabase.auth.getUser() no tendría sesión activa y el envío final
+      // fallaría en silencio. Mostramos una pantalla de espera y recién
+      // cuando confirme desde el correo (evento SIGNED_IN, ver App()) lo
+      // mandamos a la anamnesis.
+      onRegistroExitoso?.(email);
+      onNav("confirmar_correo");
     }
     setLoading(false);
   };
@@ -230,6 +239,28 @@ function RegistroScreen({ onNav }) {
       <div style={{ textAlign: "center" }}>
         <span style={{ color: theme.muted, fontSize: 13 }}>¿Ya tienes cuenta? </span>
         <span onClick={() => onNav("login")} style={{ color: theme.accentLight, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Iniciar sesión</span>
+      </div>
+    </div>
+  );
+}
+
+function ConfirmarCorreoScreen({ onNav, email }) {
+  return (
+    <div style={{ padding: "28px 32px", display: "flex", flexDirection: "column", gap: 20, justifyContent: "center", alignItems: "center", height: "100%", boxSizing: "border-box", textAlign: "center" }}>
+      <img src={ICON} alt="Miquel Coach Performance" style={{ width: 100, height: 90, objectFit: "contain" }} />
+      <div style={{ fontSize: 40 }}>📩</div>
+      <div style={{ fontSize: 20, fontWeight: 900, color: theme.text }}>Revisa tu correo</div>
+      <div style={{ fontSize: 13, color: theme.muted, lineHeight: 1.5 }}>
+        Te enviamos un correo de confirmación{email ? <> a <b style={{ color: theme.text }}>{email}</b></> : ""}.
+        Ábrelo y haz clic en el enlace para activar tu cuenta — apenas confirmes, esta pantalla te va a llevar directo a completar tus datos.
+      </div>
+      <div style={{ fontSize: 12, color: theme.muted, marginTop: 8 }}>
+        ¿No te llegó? Revisa la carpeta de spam, o
+        <span onClick={() => onNav("registro")} style={{ color: theme.accentLight, fontWeight: 700, cursor: "pointer" }}> vuelve a intentar el registro</span>.
+      </div>
+      <div style={{ borderTop: `1px solid ${theme.border}`, paddingTop: 14, marginTop: 6, width: "100%" }}>
+        <span style={{ color: theme.muted, fontSize: 13 }}>¿Ya confirmaste? </span>
+        <span onClick={() => onNav("login")} style={{ color: theme.accentLight, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Inicia sesión</span>
       </div>
     </div>
   );
@@ -4045,19 +4076,60 @@ function CoachAlumno({ onNav, alumno }) {
   );
 }
 
+const COACH_EMAIL = "coach.claudiomiquel@gmail.com";
+
+// Un alumno ya completó la anamnesis si su fila en "usuarios" tiene nombre
+// guardado — esa fila solo se crea/actualiza al final del formulario de
+// anamnesis (ver AnamnesisScreen), así que sirve como bandera confiable.
+async function anamnesisCompleta(userId) {
+  const { data } = await supabase.from("usuarios").select("nombre").eq("id", userId).maybeSingle();
+  return !!data?.nombre;
+}
+
 export default function App() {
   const [screen, setScreen] = useState("login");
   const [alumnoSeleccionado, setAlumnoSeleccionado] = useState(null);
+  const [emailPendiente, setEmailPendiente] = useState("");
 
   const navCoachAlumno = (alumno) => {
     setAlumnoSeleccionado(alumno);
     setScreen("coach_alumno");
   };
 
+  // Detecta cuándo hay una sesión activa (al cargar la app si ya había una
+  // guardada, o justo después de que el alumno confirma su correo — Supabase
+  // procesa el enlace del correo, guarda la sesión y dispara "SIGNED_IN")
+  // y enruta según corresponda, en vez de dejarlo tirado en la pantalla de
+  // "revisa tu correo" o en el login.
+  useEffect(() => {
+    let activo = true;
+    const enrutarSesion = async (session) => {
+      if (!session?.user || !activo) return;
+      if (session.user.email === COACH_EMAIL) {
+        setScreen("coach_panel");
+        return;
+      }
+      const completa = await anamnesisCompleta(session.user.id);
+      if (!activo) return;
+      setScreen(completa ? "alumno_home" : "anamnesis");
+    };
+
+    supabase.auth.getSession().then(({ data }) => {
+      if (data?.session) enrutarSesion(data.session);
+    });
+
+    const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "SIGNED_IN") enrutarSesion(session);
+    });
+
+    return () => { activo = false; listener?.subscription?.unsubscribe(); };
+  }, []);
+
   const renderScreen = () => {
     switch(screen) {
       case "login": return <LoginScreen onNav={setScreen}/>;
-      case "registro": return <RegistroScreen onNav={setScreen}/>;
+      case "registro": return <RegistroScreen onNav={setScreen} onRegistroExitoso={setEmailPendiente}/>;
+      case "confirmar_correo": return <ConfirmarCorreoScreen onNav={setScreen} email={emailPendiente}/>;
       case "anamnesis": return <AnamnesisScreen onNav={setScreen}/>;
       case "alumno_home": return <AlumnoHome onNav={setScreen}/>;
       case "rutina": return <RutinaScreen onNav={setScreen}/>;
@@ -4083,7 +4155,7 @@ export default function App() {
           <div style={{ width:375,height:720,background:theme.bg,borderRadius:36,overflow:"auto",position:"relative" }}>{renderScreen()}</div>
         </div>
         <div style={{ marginTop:20,display:"flex",gap:8,flexWrap:"wrap",justifyContent:"center",maxWidth:420 }}>
-          {[["login","Login"],["registro","Registro"],["anamnesis","Anamnesis"],["alumno_home","Inicio"],["rutina","Rutina"],["nutricion","Dieta"],["checkin","Check-in"],["progreso","Progreso"],["coach_panel","Coach Panel"],["coach_alumno","Perfil Alumno"]].map(([id,label])=>(<button key={id} onClick={()=>setScreen(id)} style={{ background:screen===id?"#2563EB":"#13131a",border:`1px solid ${screen===id?"#2563EB":"#2a2a38"}`,color:screen===id?"#fff":"#666",borderRadius:8,padding:"6px 12px",fontSize:11,cursor:"pointer",fontWeight:600 }}>{label}</button>))}
+          {[["login","Login"],["registro","Registro"],["confirmar_correo","Confirmar correo"],["anamnesis","Anamnesis"],["alumno_home","Inicio"],["rutina","Rutina"],["nutricion","Dieta"],["checkin","Check-in"],["progreso","Progreso"],["coach_panel","Coach Panel"],["coach_alumno","Perfil Alumno"]].map(([id,label])=>(<button key={id} onClick={()=>setScreen(id)} style={{ background:screen===id?"#2563EB":"#13131a",border:`1px solid ${screen===id?"#2563EB":"#2a2a38"}`,color:screen===id?"#fff":"#666",borderRadius:8,padding:"6px 12px",fontSize:11,cursor:"pointer",fontWeight:600 }}>{label}</button>))}
         </div>
       </div>
     </div>
