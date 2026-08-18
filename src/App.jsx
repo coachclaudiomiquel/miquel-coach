@@ -87,6 +87,525 @@ const ImageLightbox = ({ src, onClose }) => {
     </div>
   );
 };
+// Helpers compartidos de fotos (comprimir + subir a Supabase Storage).
+// Usados por AnamnesisScreen (fotos iniciales) y también por la edición
+// posterior de fotos (alumno en Progreso, coach en Datos del alumno).
+function comprimirFotoGlobal(file) {
+  return new Promise((resolve) => {
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+    const img = new Image();
+    img.onload = () => {
+      const MAX = 800;
+      let w = img.width, h = img.height;
+      if (w > h && w > MAX) { h = h * MAX / w; w = MAX; }
+      else if (h > MAX) { w = w * MAX / h; h = MAX; }
+      canvas.width = w; canvas.height = h;
+      ctx.drawImage(img, 0, 0, w, h);
+      canvas.toBlob(resolve, "image/jpeg", 0.7);
+    };
+    img.src = URL.createObjectURL(file);
+  });
+}
+async function subirFotoGlobal(userId, key, blob) {
+  if (!blob) return null;
+  const path = `${userId}/anamnesis/${key}.jpg`;
+  const { error } = await supabase.storage
+    .from("fotos-alumnos")
+    .upload(path, blob, { contentType: "image/jpeg", upsert: true });
+  if (error) return null;
+  return `https://srlucwsakjuivogvunzx.supabase.co/storage/v1/object/public/fotos-alumnos/${path}`;
+}
+// Tarjeta reutilizable para reemplazar una foto puntual (anamnesis) ya guardada.
+// userId: dueño de la foto (el alumno, aunque quien sube sea el coach).
+// campoKey: "frente" | "espalda" | "perfDer" | "perfIzq" (debe calzar con subirFotoGlobal).
+// urlActual: url actual (o null); onSubida: callback(nuevaUrl) tras subir con éxito.
+const FotoEditable = ({ userId, campoKey, label, urlActual, onSubida }) => {
+  const [subiendo, setSubiendo] = useState(false);
+  const handleChange = async (file) => {
+    if (!file || !userId) return;
+    setSubiendo(true);
+    const comprimida = await comprimirFotoGlobal(file);
+    const url = await subirFotoGlobal(userId, campoKey, comprimida);
+    setSubiendo(false);
+    // Se agrega un parámetro de caché al final para forzar que la imagen se
+    // vea actualizada de inmediato (la URL base no cambia al reemplazar la foto).
+    if (url) onSubida?.(`${url}?t=${new Date().getTime()}`);
+    else alert("No se pudo subir la foto. Intenta de nuevo.");
+  };
+  return (
+    <div style={{ borderRadius: 8, overflow: "hidden", border: `1px solid ${theme.border}`, position: "relative" }}>
+      {urlActual ? (
+        <img src={urlActual} alt={label} style={{ width: "100%", height: 80, objectFit: "cover", display: "block" }} />
+      ) : (
+        <div style={{ width: "100%", height: 80, display: "flex", alignItems: "center", justifyContent: "center", background: theme.surface, color: theme.muted, fontSize: 20 }}>📷</div>
+      )}
+      <label style={{ display: "block", textAlign: "center", padding: 3, fontSize: 9, color: theme.accentLight, background: `${theme.accent}18`, cursor: "pointer" }}>
+        {subiendo ? "Subiendo..." : `✏️ Cambiar ${label}`}
+        <input type="file" accept="image/*" style={{ display: "none" }} disabled={subiendo} onChange={e => handleChange(e.target.files[0])} />
+      </label>
+    </div>
+  );
+};
+// Estilos y componente reutilizable para editar un campo de la anamnesis
+// (usado por CoachAlumno). Se definen a nivel de módulo -- y no dentro del
+// componente que los usa -- para que React no los trate como un tipo de
+// componente nuevo en cada render (eso causaba que el input perdiera el
+// foco y la pantalla saltara arriba en cada letra tecleada).
+const editInputStyle = {
+  background: theme.bg, border: `1px solid ${theme.border}`,
+  borderRadius: 8, padding: "9px 11px", color: theme.text,
+  fontSize: 13, width: "100%", outline: "none", boxSizing: "border-box",
+};
+const editLabelStyle = { fontSize: 11, color: theme.muted, fontWeight: 600, marginBottom: 4, display: "block" };
+const opcionesEdit = (arr) => arr.map(o => <option key={o} value={o}>{o}</option>);
+const CampoEditable = ({ campo, label, tipo = "text", opciones, formDatos, setCampo }) => (
+  <div style={{ marginBottom: 10 }}>
+    <span style={editLabelStyle}>{label}</span>
+    {tipo === "select" ? (
+      <select style={editInputStyle} value={formDatos?.[campo] ?? ""} onChange={e => setCampo(campo, e.target.value)}>
+        <option value="">Selecciona...</option>
+        {opcionesEdit(opciones)}
+      </select>
+    ) : tipo === "textarea" ? (
+      <textarea style={{ ...editInputStyle, minHeight: 60, resize: "none" }} value={formDatos?.[campo] ?? ""} onChange={e => setCampo(campo, e.target.value)} />
+    ) : (
+      <input style={editInputStyle} type={tipo} value={formDatos?.[campo] ?? ""} onChange={e => setCampo(campo, e.target.value)} />
+    )}
+  </div>
+);
+// Barra de progreso simple (RPE/sueño), usada dentro de SemanaCard.
+// Definida a nivel de módulo por el mismo motivo que CampoEditable arriba.
+const Barra = ({ value, color }) => (
+  <div style={{ background: theme.surface, borderRadius: 6, height: 7, overflow: "hidden", border: `1px solid ${theme.border}` }}>
+    <div style={{ width: `${Math.min(100, (value / 10) * 100)}%`, height: "100%", background: color, borderRadius: 6, boxShadow: `0 0 8px ${color}88` }} />
+  </div>
+);
+// Tarjeta de una semana individual del Diario del coach (ciclo activo o pasado).
+// Se recibe todo el estado/handlers necesarios en "ctx" para no tener que
+// definir este componente dentro de DiarioCoach (eso causaba que perdiera el
+// foco y la pantalla saltara arriba en cada letra tecleada al editar).
+const SemanaCard = ({ semana, ctx }) => {
+  const {
+    resumenSemana, semanaExpandida, setSemanaExpandida, diaExpandido, setDiaExpandido,
+    diasPlanificados, entrenosDetalle, dietaRegs,
+    edicionSerie, edicionKg, setEdicionKg, edicionReps, setEdicionReps,
+    guardarEdicionSerie, cancelarEdicionSerie, iniciarEdicionSerie,
+    edicionComida, edicionEstado, setEdicionEstado, edicionDescripcion, setEdicionDescripcion,
+    guardarEdicionComida, cancelarEdicionComida, iniciarEdicionComida,
+    COLOR_RPE, COLOR_SUENO, iconEstado, readOnly,
+  } = ctx;
+  const resumen = resumenSemana(semana);
+  const expandida = semanaExpandida === semana.key;
+  const tieneDatos = semana.dias.some(d => d.energia !== null || d.entreno) || Object.keys(resumen.ejerciciosSemana).length > 0;
+
+  return (
+    <Card style={{ marginBottom:10, padding:0, overflow:"hidden", border: expandida ? `1px solid ${theme.accent}66` : `1px solid ${theme.border}`, boxShadow: expandida ? `0 0 16px ${theme.accent}22` : "none" }}>
+      <div onClick={() => tieneDatos && setSemanaExpandida(expandida ? null : semana.key)}
+        style={{ padding:14, cursor: tieneDatos ? "pointer" : "default", display:"flex", justifyContent:"space-between", alignItems:"center", background: semana.esActual ? `${theme.accent}12` : "transparent" }}>
+        <div>
+          <div style={{ fontSize:13, fontWeight:800, color:theme.text, display:"flex", alignItems:"center", gap:8 }}>
+            Semana {semana.numero}
+            {semana.esActual && <Tag color={theme.accent}>Actual</Tag>}
+          </div>
+          <div style={{ fontSize:11, color:theme.muted, marginTop:2 }}>{semana.rango}</div>
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+          {resumen.rpeProm && (
+            <div style={{ textAlign:"center" }}>
+              <div style={{ fontSize:13, fontWeight:800, color:COLOR_RPE }}>{resumen.rpeProm}</div>
+              <div style={{ fontSize:8, color:theme.muted }}>RPE</div>
+            </div>
+          )}
+          <div style={{ textAlign:"center" }}>
+            <div style={{ fontSize:13, fontWeight:800, color:theme.success }}>{resumen.diasEntrenados}</div>
+            <div style={{ fontSize:8, color:theme.muted }}>días</div>
+          </div>
+          {tieneDatos && <span style={{ fontSize:11, color:theme.accentLight }}>{expandida ? "▲" : "▼"}</span>}
+        </div>
+      </div>
+
+      {expandida && (
+        <div style={{ padding:14, borderTop:`1px solid ${theme.border}`, background:theme.bg }}>
+          {/* Resumen de la semana */}
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:14 }}>
+            <div style={{ background:theme.surface, borderRadius:10, padding:10, textAlign:"center" }}>
+              <div style={{ fontSize:10, color:theme.muted, marginBottom:2 }}>💥 Rango RPE</div>
+              <div style={{ fontSize:14, fontWeight:800, color:COLOR_RPE }}>{resumen.rpeMin !== null ? `${resumen.rpeMin}–${resumen.rpeMax}` : "—"}</div>
+            </div>
+            <div style={{ background:theme.surface, borderRadius:10, padding:10, textAlign:"center" }}>
+              <div style={{ fontSize:10, color:theme.muted, marginBottom:2 }}>😴 Sueño prom.</div>
+              <div style={{ fontSize:14, fontWeight:800, color:COLOR_SUENO }}>{resumen.suenoProm !== null ? `${resumen.suenoProm}/10` : "—"}</div>
+            </div>
+            <div style={{ background:theme.surface, borderRadius:10, padding:10, textAlign:"center" }}>
+              <div style={{ fontSize:10, color:theme.muted, marginBottom:2 }}>💪 Días entrenados</div>
+              <div style={{ fontSize:14, fontWeight:800, color:theme.success }}>{resumen.diasEntrenados}/{diasPlanificados || 7}</div>
+            </div>
+            <div style={{ background:theme.surface, borderRadius:10, padding:10, textAlign:"center" }}>
+              <div style={{ fontSize:10, color:theme.muted, marginBottom:2 }}>🥗 Cumplim. dieta</div>
+              <div style={{ fontSize:14, fontWeight:800, color: resumen.adherenciaDieta !== null ? (resumen.adherenciaDieta >= 70 ? theme.success : resumen.adherenciaDieta >= 40 ? theme.warning : theme.danger) : theme.muted }}>{resumen.adherenciaDieta !== null ? `${resumen.adherenciaDieta}%` : "—"}</div>
+            </div>
+          </div>
+
+          {/* Días de la semana, cada uno expandible por separado */}
+          <div style={{ fontSize:11, fontWeight:800, color:theme.muted, marginBottom:8, letterSpacing:0.5 }}>📅 DÍA A DÍA</div>
+          {semana.dias.map((d, i) => {
+            const dietaDia = dietaRegs.filter(r => r.fecha === d.fechaStr);
+            const entrenoDia = entrenosDetalle.filter(r => r.fecha === d.fechaStr);
+            const tieneDatosDia = d.energia !== null || d.entreno || dietaDia.length > 0;
+            const diaExp = diaExpandido === d.fechaStr;
+
+            const ejerciciosAgrupados = {};
+            entrenoDia.forEach(r => {
+              const nombre = r.ejercicios?.nombre || "Ejercicio";
+              if (!ejerciciosAgrupados[nombre]) ejerciciosAgrupados[nombre] = [];
+              ejerciciosAgrupados[nombre].push(r);
+            });
+            Object.values(ejerciciosAgrupados).forEach(arr => arr.sort((a,b) => (a.serie||0) - (b.serie||0)));
+
+            return (
+              <div key={i} style={{ marginBottom:8 }}>
+                <div onClick={() => tieneDatosDia && setDiaExpandido(diaExp ? null : d.fechaStr)} style={{
+                  display:"grid", gridTemplateColumns:"40px 1fr 1fr 30px",
+                  gap:8, alignItems:"center",
+                  background: d.dia === "Hoy" ? `${theme.accent}15` : theme.card,
+                  border: `1px solid ${diaExp ? theme.accent+"88" : theme.border}`,
+                  borderRadius: diaExp ? "10px 10px 0 0" : 10, padding:"7px 10px",
+                  cursor: tieneDatosDia ? "pointer" : "default",
+                }}>
+                  <div style={{ textAlign:"center" }}>
+                    <div style={{ fontSize:10, fontWeight:800, color: d.dia === "Hoy" ? theme.accent : theme.text }}>{d.dia}</div>
+                    <div style={{ fontSize:8, color:theme.muted }}>{d.fecha}</div>
+                  </div>
+                  {d.energia !== null ? (
+                    <>
+                      <div style={{ textAlign:"center", fontSize:9, color:theme.muted }}>💥 {d.energia}/10</div>
+                      <div style={{ textAlign:"center", fontSize:9, color:theme.muted }}>😴 {d.horas || "—"}h · {d.sueno}/10</div>
+                    </>
+                  ) : (
+                    <div style={{ gridColumn:"2/4", fontSize:10, color:theme.muted }}>Sin registro</div>
+                  )}
+                  <div style={{ textAlign:"center" }}>
+                    {d.entreno ? <span style={{ fontSize:11 }}>💪</span> : <span style={{ fontSize:11, opacity:0.3 }}>—</span>}
+                  </div>
+                </div>
+
+                {diaExp && (
+                  <div style={{ background:theme.card, border:`1px solid ${theme.accent}44`, borderTop:"none", borderRadius:"0 0 10px 10px", padding:12 }}>
+                    {d.energia !== null && (
+                      <div style={{ marginBottom:14 }}>
+                        <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
+                          <span style={{ fontSize:11, color:theme.text }}>💥 Intensidad / RPE</span>
+                          <span style={{ fontSize:11, fontWeight:700, color:COLOR_RPE }}>{d.energia}/10</span>
+                        </div>
+                        <Barra value={d.energia} color={COLOR_RPE} />
+                        <div style={{ display:"flex", justifyContent:"space-between", marginTop:10, marginBottom:4 }}>
+                          <span style={{ fontSize:11, color:theme.text }}>😴 Calidad del sueño ({d.horas || "—"}h)</span>
+                          <span style={{ fontSize:11, fontWeight:700, color:COLOR_SUENO }}>{d.sueno}/10</span>
+                        </div>
+                        <Barra value={d.sueno} color={COLOR_SUENO} />
+                      </div>
+                    )}
+
+                    {Object.keys(ejerciciosAgrupados).length > 0 && (
+                      <div style={{ marginBottom:14 }}>
+                        <div style={{ fontSize:11, fontWeight:800, color:theme.muted, marginBottom:8, letterSpacing:0.5 }}>🏋️ ENTRENAMIENTO</div>
+                        {Object.entries(ejerciciosAgrupados).map(([nombre, series]) => (
+                          <div key={nombre} style={{ marginBottom:8 }}>
+                            <div style={{ fontSize:12, fontWeight:700, color:theme.text, marginBottom:4 }}>{nombre}</div>
+                            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:6 }}>
+                              {series.map((s, si) => (
+                                edicionSerie === s.id ? (
+                                  <div key={si} style={{ display:"flex", alignItems:"center", gap:3, background:theme.surface, border:`1px solid ${theme.accent}66`, borderRadius:6, padding:"3px 4px", flexWrap:"wrap" }}>
+                                    <span style={{ fontSize:10, color:theme.muted }}>S{s.serie}</span>
+                                    <input type="number" value={edicionKg} onChange={e => setEdicionKg(e.target.value)} placeholder="kg"
+                                      style={{ width:44, background:theme.card, border:`1px solid ${theme.border}`, borderRadius:4, color:theme.text, fontSize:11, padding:"3px 4px", outline:"none" }} />
+                                    <span style={{ fontSize:10, color:theme.muted }}>×</span>
+                                    <input type="number" value={edicionReps} onChange={e => setEdicionReps(e.target.value)} placeholder="reps"
+                                      style={{ width:38, background:theme.card, border:`1px solid ${theme.border}`, borderRadius:4, color:theme.text, fontSize:11, padding:"3px 4px", outline:"none" }} />
+                                    <button onClick={() => guardarEdicionSerie(s.id)} style={{ background:theme.success, border:"none", borderRadius:4, color:"#fff", fontSize:11, fontWeight:800, cursor:"pointer", padding:"3px 7px" }}>✓</button>
+                                    <button onClick={cancelarEdicionSerie} style={{ background:"transparent", border:`1px solid ${theme.border}`, borderRadius:4, color:theme.muted, fontSize:11, cursor:"pointer", padding:"3px 7px" }}>×</button>
+                                  </div>
+                                ) : (
+                                  <div key={si} style={{ position:"relative", display:"flex", alignItems:"center", justifyContent:"center", background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:6, padding:"6px 4px", fontSize:11, color:theme.muted, textAlign:"center" }}>
+                                    {!readOnly && (
+                                      <button onClick={() => iniciarEdicionSerie(s)} title="Editar"
+                                        style={{ position:"absolute", top:-5, left:-5, width:15, height:15, borderRadius:"50%", background:theme.card, border:`1px solid ${theme.border}`, color:theme.text, fontSize:8, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", padding:0, lineHeight:1 }}>✏️</button>
+                                    )}
+                                    S{s.serie}: <span style={{ color:theme.text, fontWeight:700 }}>{s.kg || "—"}kg × {s.reps || "—"}</span>
+                                  </div>
+                                )
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {dietaDia.length > 0 ? (
+                      <div>
+                        <div style={{ fontSize:11, fontWeight:800, color:theme.muted, marginBottom:8, letterSpacing:0.5 }}>🥗 DIETA</div>
+                        {dietaDia.map((r, ri) => (
+                          <div key={ri} style={{ marginBottom:8, background: edicionComida === r.id ? theme.surface : "transparent", border: edicionComida === r.id ? `1px solid ${theme.accent}66` : "none", borderRadius:8, padding: edicionComida === r.id ? 10 : 0 }}>
+                            {edicionComida === r.id ? (
+                              <div>
+                                <div style={{ fontSize:12, color:theme.text, fontWeight:700, marginBottom:8 }}>{r.comida_nombre || `Comida ${r.comida_index + 1}`}</div>
+                                <div style={{ display:"flex", gap:6, marginBottom:8 }}>
+                                  {[["completada","✅"],["no_hecha","❌"],["cambio","🔄"]].map(([val, icon]) => (
+                                    <button key={val} onClick={() => setEdicionEstado(val)}
+                                      style={{ width:34, height:34, borderRadius:8, background: edicionEstado === val ? theme.accent : theme.card, border:`1.5px solid ${edicionEstado === val ? theme.accent : theme.border}`, fontSize:15, cursor:"pointer" }}>
+                                      {icon}
+                                    </button>
+                                  ))}
+                                </div>
+                                {edicionEstado === "cambio" && (
+                                  <textarea value={edicionDescripcion} onChange={e => setEdicionDescripcion(e.target.value)} placeholder="Descripción del cambio..."
+                                    style={{ width:"100%", boxSizing:"border-box", background:theme.card, border:`1px solid ${theme.border}`, borderRadius:6, padding:8, color:theme.text, fontSize:11, minHeight:50, resize:"none", marginBottom:8, outline:"none" }} />
+                                )}
+                                <div style={{ display:"flex", gap:6 }}>
+                                  <button onClick={() => guardarEdicionComida(r.id)} style={{ flex:1, background:theme.success, border:"none", borderRadius:6, color:"#fff", fontSize:11, fontWeight:700, cursor:"pointer", padding:"6px 0" }}>Guardar</button>
+                                  <button onClick={cancelarEdicionComida} style={{ flex:1, background:theme.card, border:`1px solid ${theme.border}`, borderRadius:6, color:theme.muted, fontSize:11, fontWeight:700, cursor:"pointer", padding:"6px 0" }}>Cancelar</button>
+                                </div>
+                              </div>
+                            ) : (
+                              <div style={{ position:"relative", background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:8, padding:"7px 10px" }}>
+                                {!readOnly && (
+                                  <button onClick={() => iniciarEdicionComida(r)} title="Editar"
+                                    style={{ position:"absolute", top:-5, left:-5, width:15, height:15, borderRadius:"50%", background:theme.card, border:`1px solid ${theme.border}`, color:theme.text, fontSize:8, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", padding:0, lineHeight:1 }}>✏️</button>
+                                )}
+                                <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                                  <span style={{ fontSize:14 }}>{iconEstado(r.estado)}</span>
+                                  <span style={{ fontSize:12, color:theme.text, fontWeight:600 }}>{r.comida_nombre || `Comida ${r.comida_index + 1}`}</span>
+                                </div>
+                                {r.estado === "cambio" && r.descripcion && (
+                                  <div style={{ fontSize:11, color:theme.muted, fontStyle:"italic", paddingLeft:22, marginTop:2 }}>"{r.descripcion}"</div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      (d.entreno || d.energia !== null) ? <div style={{ fontSize:11, color:theme.muted }}>Sin registro de dieta ese día</div> : null
+                    )}
+
+                    {!d.entreno && d.energia === null && dietaDia.length === 0 && (
+                      <div style={{ fontSize:11, color:theme.muted }}>Sin registros ese día</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Card>
+  );
+};
+// Texto por defecto de las notas del coach en cada plan de dieta nuevo.
+// Queda precargado pero el coach lo puede editar libremente (agregar algo puntual al alumno).
+const NOTAS_DIETA_DEFAULT = "Respeta todas las comidas del plan. Si te saltas alguna, puedes juntarla con la siguiente. Para reemplazar un alimento, revisa primero las equivalencias permitidas. Ante cualquier duda, consulta directamente con tu coach.";
+const DIAS_SEMANA_ABREV = ["Dom","Lun","Mar","Mié","Jue","Vie","Sáb"];
+function getMondayGlobal(d) {
+  const date = new Date(d);
+  const day = date.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  date.setDate(date.getDate() + diff);
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+// Calcula el resumen (RPE, sueño, cargas, adherencia dieta) de una semana.
+// Se usa tanto en el Diario del coach como en el resumen que ve el propio alumno.
+function resumenSemanaCalc(semana, entrenosDetalle, dietaRegs) {
+  const diasConDatos = semana.dias.filter(d => d.energia !== null);
+  const fechasSemana = new Set(semana.dias.map(d => d.fechaStr));
+  const entrenosSemana = entrenosDetalle.filter(r => fechasSemana.has(r.fecha));
+  const dietaSemana = dietaRegs.filter(r => fechasSemana.has(r.fecha));
+
+  const rpeValues = diasConDatos.map(d => d.energia);
+  const suenoValues = diasConDatos.map(d => d.sueno);
+  const diasEntrenados = semana.dias.filter(d => d.entreno).length;
+
+  const dietaCompletadas = dietaSemana.filter(r => r.estado === "completada").length;
+  const adherenciaDieta = dietaSemana.length > 0 ? Math.round((dietaCompletadas / dietaSemana.length) * 100) : null;
+
+  const ejerciciosSemana = {};
+  entrenosSemana.forEach(r => {
+    const nombre = r.ejercicios?.nombre || "Ejercicio";
+    if (!ejerciciosSemana[nombre]) ejerciciosSemana[nombre] = { kgs: [], repsMax: 0 };
+    if (r.kg) ejerciciosSemana[nombre].kgs.push(r.kg);
+    if (r.reps) ejerciciosSemana[nombre].repsMax = Math.max(ejerciciosSemana[nombre].repsMax, r.reps);
+  });
+
+  return {
+    rpeProm: rpeValues.length ? (rpeValues.reduce((a,b)=>a+b,0)/rpeValues.length).toFixed(1) : null,
+    rpeMin: rpeValues.length ? Math.min(...rpeValues) : null,
+    rpeMax: rpeValues.length ? Math.max(...rpeValues) : null,
+    suenoProm: suenoValues.length ? (suenoValues.reduce((a,b)=>a+b,0)/suenoValues.length).toFixed(1) : null,
+    diasEntrenados,
+    adherenciaDieta,
+    ejerciciosSemana,
+  };
+}
+// Construye los ciclos (mesociclos de 4 semanas) de un alumno a partir de sus
+// registros de diario, entrenamiento y dieta. Se usa tanto en el Diario del
+// coach (CoachAlumno) como en el resumen semanal que ve el propio alumno
+// (ProgresoScreen), para no duplicar esta lógica en dos lugares.
+async function cargarCiclosAlumno(usuarioId, fechaInicioPlanOverride) {
+  const SEMANAS_POR_CICLO = 4;
+  const vacio = { ciclos: [], entrenosDetalle: [], dietaRegs: [], diasPlanificados: 0 };
+  if (!usuarioId) return vacio;
+  const hoy = fechaOperativa();
+
+  const [{ data: eDiario }, { data: eEntreno }, { data: eDieta }, { data: rutinasAlumno }] = await Promise.all([
+    supabase.from("diario_registros").select("fecha").eq("usuario_id", usuarioId).order("fecha", { ascending: true }).limit(1),
+    supabase.from("registros_entreno").select("fecha").eq("usuario_id", usuarioId).order("fecha", { ascending: true }).limit(1),
+    supabase.from("dieta_registros").select("fecha").eq("usuario_id", usuarioId).order("fecha", { ascending: true }).limit(1),
+    supabase.from("rutinas").select("dia").eq("usuario_id", usuarioId),
+  ]);
+  const diasConRutina = new Set((rutinasAlumno || []).map(r => r.dia).filter(Boolean));
+  const diasPlanificados = diasConRutina.size;
+  const fechasIniciales = [eDiario?.[0]?.fecha, eEntreno?.[0]?.fecha, eDieta?.[0]?.fecha].filter(Boolean).sort();
+  if (fechasIniciales.length === 0 && !fechaInicioPlanOverride) return { ...vacio, diasPlanificados };
+
+  let inicioRango = fechaInicioPlanOverride
+    ? getMondayGlobal(new Date(fechaInicioPlanOverride + "T00:00:00"))
+    : getMondayGlobal(new Date(fechasIniciales[0] + "T00:00:00"));
+  if (inicioRango > hoy) inicioRango = getMondayGlobal(hoy);
+  const fechaDesde = aFechaStr(inicioRango);
+
+  const { data: registros } = await supabase
+    .from("diario_registros")
+    .select("*")
+    .eq("usuario_id", usuarioId)
+    .gte("fecha", fechaDesde)
+    .order("fecha", { ascending: true });
+
+  const { data: entrenos } = await supabase
+    .from("registros_entreno")
+    .select("*, ejercicios(nombre)")
+    .eq("usuario_id", usuarioId)
+    .gte("fecha", fechaDesde)
+    .order("creado_en", { ascending: true });
+  const fechasEntreno = new Set((entrenos || []).map(e => e.fecha));
+
+  const { data: dietaR } = await supabase
+    .from("dieta_registros")
+    .select("*")
+    .eq("usuario_id", usuarioId)
+    .gte("fecha", fechaDesde)
+    .order("comida_index", { ascending: true });
+
+  const hoyStr = aFechaStr(hoy);
+  const totalDias = Math.max(1, Math.floor((hoy - inicioRango) / 86400000) + 1);
+  const diasArr = [];
+  for (let i = 0; i < totalDias; i++) {
+    const d = new Date(inicioRango);
+    d.setDate(d.getDate() + i);
+    const fechaStr = aFechaStr(d);
+    const reg = (registros || []).find(r => r.fecha === fechaStr);
+    const esHoy = fechaStr === hoyStr;
+    diasArr.push({
+      dia: esHoy ? "Hoy" : DIAS_SEMANA_ABREV[d.getDay()],
+      fecha: d.toLocaleDateString("es-CL", { day: "numeric", month: "short" }),
+      fechaStr,
+      energia: reg?.energia ?? null,
+      sueno: reg?.sueno ?? null,
+      horas: reg?.horas ?? null,
+      entreno: fechasEntreno.has(fechaStr),
+    });
+  }
+
+  const semanasArr = [];
+  for (let w = 0; w < diasArr.length; w += 7) {
+    const diasSemana = diasArr.slice(w, w + 7);
+    const inicio = diasSemana[0];
+    const fin = diasSemana[diasSemana.length - 1];
+    semanasArr.push({
+      key: inicio.fechaStr,
+      rango: `${inicio.fecha} – ${fin.fecha}`,
+      esActual: diasSemana.some(d => d.dia === "Hoy"),
+      dias: diasSemana,
+    });
+  }
+
+  const ciclosArr = [];
+  for (let c = 0; c < semanasArr.length; c += SEMANAS_POR_CICLO) {
+    const semanasCiclo = semanasArr.slice(c, c + SEMANAS_POR_CICLO).map((s, idx) => ({ ...s, numero: idx + 1 }));
+    const inicio = semanasCiclo[0];
+    const fin = semanasCiclo[semanasCiclo.length - 1];
+    ciclosArr.push({
+      key: inicio.key,
+      numeroCiclo: Math.floor(c / SEMANAS_POR_CICLO) + 1,
+      rango: `${inicio.rango.split(" – ")[0]} – ${fin.rango.split(" – ")[1]}`,
+      semanas: semanasCiclo,
+    });
+  }
+  ciclosArr.forEach((c, i) => { c.esActivo = i === ciclosArr.length - 1; });
+
+  return { ciclos: ciclosArr, entrenosDetalle: entrenos || [], dietaRegs: dietaR || [], diasPlanificados };
+}
+// Imágenes/animaciones de referencia por ejercicio, subidas por el propio
+// coach (tabla "ejercicio_imagenes" + bucket de Storage "ejercicios-imagenes").
+// Se busca por nombre normalizado (minúsculas, sin tildes, sin espacios de
+// más), así que el nombre que escriba el coach al crear la rutina calza
+// automáticamente con la imagen ya subida para ese ejercicio.
+function normalizarNombreEjercicio(nombre) {
+  return (nombre || "").toLowerCase().trim().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ");
+}
+// "mapa" es un objeto { nombreNormalizado: url } cargado por cada pantalla
+// que lo necesita (ver cargarMapaImagenesEjercicios), y pasado como prop.
+function buscarImagenEjercicio(nombre, mapa) {
+  return (mapa && mapa[normalizarNombreEjercicio(nombre)]) || null;
+}
+async function cargarMapaImagenesEjercicios() {
+  const { data } = await supabase.from("ejercicio_imagenes").select("nombre_normalizado, url");
+  const mapa = {};
+  (data || []).forEach(r => { mapa[r.nombre_normalizado] = r.url; });
+  return mapa;
+}
+// Sube (o reemplaza) la imagen/animación de referencia de un ejercicio, y
+// guarda la referencia en "ejercicio_imagenes" para que quede acoplada a
+// ese nombre en cualquier rutina, presente o futura, que use ese ejercicio.
+async function subirImagenEjercicio(nombreOriginal, file) {
+  if (!file || !nombreOriginal?.trim()) return null;
+  const normalizado = normalizarNombreEjercicio(nombreOriginal);
+  if (!normalizado) return null;
+  const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
+  const path = `${normalizado}.${ext}`;
+  const { error: errUpload } = await supabase.storage.from("ejercicios-imagenes").upload(path, file, { upsert: true, contentType: file.type || undefined });
+  if (errUpload) { alert("No se pudo subir la imagen: " + errUpload.message); return null; }
+  const url = `https://srlucwsakjuivogvunzx.supabase.co/storage/v1/object/public/ejercicios-imagenes/${path}?t=${new Date().getTime()}`;
+  const { error: errDb } = await supabase.from("ejercicio_imagenes").upsert({ nombre_normalizado: normalizado, nombre_original: nombreOriginal.trim(), url }, { onConflict: "nombre_normalizado" });
+  if (errDb) { alert("Se subió la imagen pero no se pudo guardar la referencia: " + errDb.message); return null; }
+  return { normalizado, url };
+}
+// Miniatura de referencia de un ejercicio/movimiento de calentamiento. No
+// renderiza nada si todavía no hay una imagen cargada para ese nombre.
+const ImagenReferenciaEjercicio = ({ nombre, mapa, size = 40 }) => {
+  const url = buscarImagenEjercicio(nombre, mapa);
+  if (!url) return null;
+  return <img src={url} alt={nombre} style={{ width:size, height:size, minWidth:size, borderRadius:8, objectFit:"cover", border:`1px solid ${theme.border}`, flexShrink:0 }} />;
+};
+// Botón para que el coach suba/reemplace la imagen de referencia de un
+// ejercicio directamente desde el armador de rutinas, sin salir de la app.
+const BotonSubirImagenEjercicio = ({ nombre, onSubida }) => {
+  const [subiendo, setSubiendo] = useState(false);
+  const handleChange = async (file) => {
+    if (!file) return;
+    if (!nombre?.trim()) { alert("Primero escribe el nombre del ejercicio."); return; }
+    setSubiendo(true);
+    const res = await subirImagenEjercicio(nombre, file);
+    setSubiendo(false);
+    if (res) onSubida?.(res);
+  };
+  return (
+    <label style={{ display:"inline-flex", alignItems:"center", gap:4, background:theme.surface, border:`1px dashed ${theme.border}`, borderRadius:6, padding:"4px 8px", color:theme.accentLight, fontSize:10, cursor:"pointer", whiteSpace:"nowrap", flexShrink:0 }}>
+      {subiendo ? "Subiendo..." : "📎 Imagen"}
+      <input type="file" accept="image/*" style={{ display:"none" }} disabled={subiendo} onChange={e => handleChange(e.target.files[0])} />
+    </label>
+  );
+};
 const NavBar = ({ active, onNav, mensajesNoLeidos = 0 }) => {
   const items = [{ id: "alumno_home", icon: "home", label: "Inicio" }, { id: "rutina", icon: "dumbbell", label: "Entreno" }, { id: "nutricion", icon: "fork_knife", label: "Dieta" }, { id: "checkin", icon: "chart", label: "Check-in" }, { id: "progreso", icon: "calendar_check", label: "Progreso" }];
   return (
@@ -274,9 +793,10 @@ function AnamnesisScreen({ onNav }) {
     nombre: "", edad: "", sexo: "", ocupacion: "", actividadLaboral: "",
     instagram: "", whatsapp: "",
     peso: "", estatura: "", porcGrasa: "", objetivo: "",
-    haEntrenado: "", queEntrenamiento: "", diasSemana: "", horarioEntreno: "",
+    haEntrenado: "", queEntrenamiento: "", diasSemana: "", horarioEntreno: "", horarioEntrenoHasta: "",
     enfermedadLesion: "", cualEnfermedad: "", medicamento: "", cualMedicamento: "",
-    sustanciaFarmacologica: "",
+    sustanciaFarmacologica: "", sustanciaCuales: "", sustanciaTiempo: "", sustanciaHaceCuanto: "",
+    consumeSuplemento: "", cualSuplemento: "",
     alimentacionDiferente: "", alergia: "", cualAlergia: "",
     noLeGustan: "", favoritos: "",
     horaLevanta: "", horaDuerme: "", comidasDia: "", resumenComida: "",
@@ -432,7 +952,11 @@ function AnamnesisScreen({ onNav }) {
             </select>
 
             <span style={labelStyle}>¿En qué horario pretendes entrenar? *</span>
-            <input type="time" style={inputStyle} value={form.horarioEntreno} onChange={e => set("horarioEntreno", e.target.value)} />
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <input type="time" style={{ ...inputStyle, flex: 1 }} value={form.horarioEntreno} onChange={e => set("horarioEntreno", e.target.value)} />
+              <span style={{ color: theme.muted, fontSize: 12 }}>y</span>
+              <input type="time" style={{ ...inputStyle, flex: 1 }} value={form.horarioEntrenoHasta} onChange={e => set("horarioEntrenoHasta", e.target.value)} />
+            </div>
 
             <span style={labelStyle}>¿Tiene alguna enfermedad o lesión? *</span>
             <select style={selectStyle} value={form.enfermedadLesion} onChange={e => set("enfermedadLesion", e.target.value)}>
@@ -465,6 +989,32 @@ function AnamnesisScreen({ onNav }) {
               <option value="">Selecciona...</option>
               {opciones(["Sí", "No", "Prefiero no responder"])}
             </select>
+
+            {form.sustanciaFarmacologica === "Sí" && (
+              <>
+                <span style={labelStyle}>Especifique qué sustancias</span>
+                <input style={inputStyle} placeholder="Ej: Testosterona, Oxandrolona..." value={form.sustanciaCuales} onChange={e => set("sustanciaCuales", e.target.value)} />
+
+                <span style={labelStyle}>¿Por cuánto tiempo las consumió/consume?</span>
+                <input style={inputStyle} placeholder="Ej: 8 semanas, 3 meses..." value={form.sustanciaTiempo} onChange={e => set("sustanciaTiempo", e.target.value)} />
+
+                <span style={labelStyle}>¿Hace cuánto tiempo fue eso?</span>
+                <input style={inputStyle} placeholder="Ej: Hace 1 año, actualmente..." value={form.sustanciaHaceCuanto} onChange={e => set("sustanciaHaceCuanto", e.target.value)} />
+              </>
+            )}
+
+            <span style={labelStyle}>¿Consume algún suplemento alimenticio o deportivo actualmente?</span>
+            <select style={selectStyle} value={form.consumeSuplemento} onChange={e => set("consumeSuplemento", e.target.value)}>
+              <option value="">Selecciona...</option>
+              {opciones(["Sí", "No"])}
+            </select>
+
+            {form.consumeSuplemento === "Sí" && (
+              <>
+                <span style={labelStyle}>Especifique cuál</span>
+                <input style={inputStyle} placeholder="Ej: Creatina, proteína, pre-entreno..." value={form.cualSuplemento} onChange={e => set("cualSuplemento", e.target.value)} />
+              </>
+            )}
           </div>
         )}
 
@@ -598,11 +1148,17 @@ const { error } = await supabase.from("usuarios").upsert({                  id: 
                   que_entrenamiento: form.queEntrenamiento,
                   dias_semana: form.diasSemana,
                   horario_entreno: form.horarioEntreno,
+                  horario_entreno_hasta: form.horarioEntrenoHasta,
                   enfermedad_lesion: form.enfermedadLesion,
                   cual_enfermedad: form.cualEnfermedad,
                   medicamento: form.medicamento,
                   cual_medicamento: form.cualMedicamento,
                   sustancia_farmacologica: form.sustanciaFarmacologica,
+                  sustancia_cuales: form.sustanciaCuales,
+                  sustancia_tiempo: form.sustanciaTiempo,
+                  sustancia_hace_cuanto: form.sustanciaHaceCuanto,
+                  consume_suplemento: form.consumeSuplemento,
+                  cual_suplemento: form.cualSuplemento,
                   alimentacion_diferente: form.alimentacionDiferente,
                   alergia: form.alergia,
                   cual_alergia: form.cualAlergia,
@@ -653,6 +1209,7 @@ const [estadoPago, setEstadoPago] = useState(null);
   const [dieta, setDieta] = useState(null);
   const [semana, setSemana] = useState(null); const [mensajesNoLeidos, setMensajesNoLeidos] = useState(0); const pagoVencido = false;
   const [ultimoMensajeCoach, setUltimoMensajeCoach] = useState(null);
+  const [suplementosPendientes, setSuplementosPendientes] = useState(0);
   const diasRestantes = 2;
 
   useEffect(() => {
@@ -675,8 +1232,22 @@ const [estadoPago, setEstadoPago] = useState(null);
         }
         const { data: checkins } = await supabase.from("checkins").select("peso").eq("usuario_id", user.id).order("fecha", { ascending: false }).limit(1);
         if (checkins && checkins.length > 0) setCheckin(checkins[0]);
-        const { data: dietas } = await supabase.from("dietas").select("calorias").eq("usuario_id", user.id).order("created_at", { ascending: false }).limit(1);
-        if (dietas && dietas.length > 0) setDieta(dietas[0]);
+        const { data: dietas } = await supabase.from("dietas").select("calorias, suplementos").eq("usuario_id", user.id).order("created_at", { ascending: false }).limit(1);
+        if (dietas && dietas.length > 0) {
+          setDieta(dietas[0]);
+          // Aviso de suplementación pendiente en el inicio (además del que ya se ve en Dieta).
+          // Importante: se usa el arreglo COMPLETO (sin filtrar) para que el índice de cada
+          // suplemento coincida exactamente con el que usa NutricionScreen al guardar/leer
+          // "tomado" — si se filtraba antes de contar, los índices se corrían y la cuenta
+          // quedaba mal (por eso no se veía el aviso).
+          const suplementosPlan = Array.isArray(dietas[0].suplementos) ? dietas[0].suplementos : [];
+          if (suplementosPlan.some(s => s.nombre)) {
+            const hoyStr = fechaOperativaStr();
+            const { data: suplRegs } = await supabase.from("suplemento_registros").select("suplemento_index, tomado").eq("usuario_id", user.id).eq("fecha", hoyStr);
+            const marcados = new Set((suplRegs || []).filter(r => r.tomado).map(r => r.suplemento_index));
+            setSuplementosPendientes(suplementosPlan.filter((s, i) => s.nombre && !marcados.has(i)).length);
+          }
+        }
         const { data: pagoData } = await supabase.from("pagos").select("*").eq("usuario_id", user.id).order("created_at", { ascending: false }).limit(1);
         if (pagoData && pagoData.length > 0) {
           const pago = pagoData[0];
@@ -726,6 +1297,12 @@ const [estadoPago, setEstadoPago] = useState(null);
         <div style={{ background:`${theme.danger}15`, border:`1px solid ${theme.danger}55`, borderRadius:14, padding:"14px 16px", marginBottom:16 }}>
           <div style={{ fontSize:14, fontWeight:800, color:theme.danger, marginBottom:4 }}>❌ Pago vencido hace {estadoPago.dias} días</div>
           <div style={{ fontSize:12, color:theme.muted }}>Contacta a tu coach para regularizar tu situación.</div>
+        </div>
+      )}
+      {suplementosPendientes > 0 && (
+        <div onClick={() => onNav("nutricion")} style={{ cursor:"pointer", background:`${theme.warning}15`, border:`1px solid ${theme.warning}55`, borderRadius:14, padding:"12px 16px", marginBottom:16, display:"flex", alignItems:"center", gap:10 }}>
+          <span style={{ fontSize:18 }}>⏰</span>
+          <div style={{ fontSize:12, color:theme.warning, fontWeight:700 }}>Te falta marcar {suplementosPendientes === 1 ? "un suplemento" : `${suplementosPendientes} suplementos`} de hoy. Toca para verlos.</div>
         </div>
       )}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
@@ -821,6 +1398,9 @@ function RutinaScreen({ onNav }) {
   const [registros, setRegistros] = useState({});
   const [completado, setCompletado] = useState(false);
   const [verCalentamiento, setVerCalentamiento] = useState(false);
+  const [mapaImagenes, setMapaImagenes] = useState({});
+
+  useEffect(() => { cargarMapaImagenesEjercicios().then(setMapaImagenes); }, []);
   const [bloqueado, setBloqueado] = useState(false);
   const [seriesHechas, setSeriesHechas] = useState({});
   const [diarioPaso, setDiarioPaso] = useState("form");
@@ -947,16 +1527,26 @@ function RutinaScreen({ onNav }) {
         </div>
       )}
 
-      {/* Calentamiento general de la sesión */}
+      {/* Calentamiento general de la sesión (colapsado por defecto) */}
       {Array.isArray(rutinaActiva.calentamiento_general) && rutinaActiva.calentamiento_general.length > 0 && (
-        <Card style={{ marginBottom: 14, border: `1px solid ${theme.accent}44` }}>
-          <div style={{ fontSize: 11, fontWeight: 800, color: theme.accentLight, marginBottom: 10, letterSpacing: 0.5 }}>🔥 CALENTAMIENTO GENERAL</div>
-          {rutinaActiva.calentamiento_general.map((m, i) => (
-            <div key={i} style={{ padding: "8px 4px", borderBottom: i < rutinaActiva.calentamiento_general.length - 1 ? `1px solid ${theme.border}` : "none" }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: theme.text }}>{m.nombre}</div>
-              <div style={{ fontSize: 11, color: theme.muted }}>{m.detalle}</div>
+        <Card style={{ marginBottom: 14, padding:0, overflow:"hidden", border: `1px solid ${theme.accent}44` }}>
+          <div onClick={() => setVerCalentamiento(!verCalentamiento)} style={{ padding:14, cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+            <div style={{ fontSize: 11, fontWeight: 800, color: theme.accentLight, letterSpacing: 0.5 }}>🔥 CALENTAMIENTO GENERAL</div>
+            <span style={{ fontSize:11, color:theme.accentLight }}>{verCalentamiento ? "▲ ocultar" : `▼ ver (${rutinaActiva.calentamiento_general.length})`}</span>
+          </div>
+          {verCalentamiento && (
+            <div style={{ padding:"0 14px 14px" }}>
+              {rutinaActiva.calentamiento_general.map((m, i) => (
+                <div key={i} style={{ padding: "8px 4px", display:"flex", alignItems:"center", gap:10, borderBottom: i < rutinaActiva.calentamiento_general.length - 1 ? `1px solid ${theme.border}` : "none" }}>
+                  <ImagenReferenciaEjercicio nombre={m.nombre} mapa={mapaImagenes} size={56} />
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: theme.text }}>{m.nombre}</div>
+                    <div style={{ fontSize: 11, color: theme.muted }}>{m.detalle}</div>
+                  </div>
+                </div>
+              ))}
             </div>
-          ))}
+          )}
         </Card>
       )}
 
@@ -966,9 +1556,12 @@ function RutinaScreen({ onNav }) {
         return (
           <Card key={ej.id} style={{ marginBottom: 14 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
-              <div>
-                <div style={{ fontSize: 15, fontWeight: 700, color: theme.text, marginBottom: 4 }}>{ej.nombre}</div>
-                <div style={{ fontSize: 11, color: theme.muted }}>⏱ Descanso: {ej.descanso_desde && ej.descanso_hasta ? `${ej.descanso_desde}-${ej.descanso_hasta}s` : `${ej.descanso}s`}</div>
+              <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                <ImagenReferenciaEjercicio nombre={ej.nombre} mapa={mapaImagenes} size={64} />
+                <div>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: theme.text, marginBottom: 4 }}>{ej.nombre}</div>
+                  <div style={{ fontSize: 11, color: theme.muted }}>⏱ Descanso: {ej.descanso_desde && ej.descanso_hasta ? `${ej.descanso_desde}-${ej.descanso_hasta}s` : `${ej.descanso}s`}</div>
+                </div>
               </div>
               {ej.video_url && (
                 <a href={ej.video_url} target="_blank" rel="noreferrer" style={{ width: 36, height: 36, borderRadius: 10, background: theme.surface, display: "flex", alignItems: "center", justifyContent: "center", border: `1px solid ${theme.border}`, flexShrink: 0, textDecoration: "none" }}>▶️</a>
@@ -1163,6 +1756,7 @@ function NutricionScreen({ onNav }) {
   const [bloqueado, setBloqueado] = useState(false);
   const [userId, setUserId] = useState(null);
   const [comidasEstado, setComidasEstado] = useState({});
+  const [suplementosEstado, setSuplementosEstado] = useState({});
   const [modalCambio, setModalCambio] = useState(false);
   const [modalComidaIndex, setModalComidaIndex] = useState(null);
   const [modalDescripcion, setModalDescripcion] = useState("");
@@ -1205,6 +1799,18 @@ function NutricionScreen({ onNav }) {
           const estadoMap = {};
           regs.forEach(r => { estadoMap[r.comida_index] = r.estado; });
           setComidasEstado(estadoMap);
+        }
+
+        // Carga el registro de "tomado" de suplementos de hoy (si ya marcó algo antes)
+        const { data: suplRegs } = await supabase
+          .from("suplemento_registros")
+          .select("*")
+          .eq("usuario_id", user.id)
+          .eq("fecha", hoyStr);
+        if (suplRegs && suplRegs.length > 0) {
+          const suplMap = {};
+          suplRegs.forEach(r => { suplMap[r.suplemento_index] = r.tomado; });
+          setSuplementosEstado(suplMap);
         }
       }
       setLoading(false);
@@ -1280,6 +1886,19 @@ function NutricionScreen({ onNav }) {
     setModalCambio(false);
     setModalComidaIndex(null);
     setModalDescripcion("");
+  };
+
+  const toggleSuplementoTomado = async (index, nombre) => {
+    if (!userId) return;
+    const nuevoValor = !suplementosEstado[index];
+    setSuplementosEstado(prev => ({ ...prev, [index]: nuevoValor }));
+    await supabase.from("suplemento_registros").upsert({
+      usuario_id: userId,
+      fecha: hoyStr,
+      suplemento_index: index,
+      suplemento_nombre: nombre || null,
+      tomado: nuevoValor,
+    }, { onConflict: "usuario_id,fecha,suplemento_index" });
   };
 
   const getEstadoColor = (estado) => {
@@ -1419,6 +2038,16 @@ function NutricionScreen({ onNav }) {
         </Card>
       )}
 
+      {/* Aviso si quedan suplementos de hoy sin marcar */}
+      {suplementos.length > 0 && suplementos.some((s, i) => s.nombre && !suplementosEstado[i]) && (
+        <Card style={{ marginBottom:14, background:`${theme.warning}12`, border:`1px solid ${theme.warning}44` }}>
+          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+            <span style={{ fontSize:18 }}>⏰</span>
+            <div style={{ fontSize:12, color:theme.warning, fontWeight:700 }}>Recuerda tomar tu suplementación de hoy — márcala abajo cuando la tomes.</div>
+          </div>
+        </Card>
+      )}
+
       {/* Suplementos */}
       {suplementos.length > 0 && (
         <Card style={{ marginBottom:14, border:`1px solid ${theme.accent}44`, background:"#0e1420" }}>
@@ -1426,15 +2055,24 @@ function NutricionScreen({ onNav }) {
             <span style={{ fontSize:16 }}>💊</span>
             <div style={{ fontSize:12, fontWeight:800, color:theme.accentLight, letterSpacing:0.5 }}>SUPLEMENTACIÓN</div>
           </div>
-          {suplementos.map((s, i) => (
-            <div key={i} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", background:theme.surface, borderRadius:10, padding:"10px 12px", marginBottom:8 }}>
-              <div>
-                <div style={{ fontSize:13, fontWeight:700, color:theme.text }}>{s.nombre}</div>
-                <div style={{ fontSize:11, color:theme.muted }}>{s.momento}</div>
+          {suplementos.map((s, i) => {
+            const tomado = !!suplementosEstado[i];
+            return (
+              <div key={i} onClick={() => toggleSuplementoTomado(i, s.nombre)}
+                style={{ display:"flex", alignItems:"center", justifyContent:"space-between", background: tomado ? `${theme.success}14` : theme.surface, border: `1px solid ${tomado ? theme.success + "55" : "transparent"}`, borderRadius:10, padding:"10px 12px", marginBottom:8, cursor:"pointer" }}>
+                <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                  <div style={{ width:22, height:22, borderRadius:6, border:`1.5px solid ${tomado ? theme.success : theme.border}`, background: tomado ? theme.success : "transparent", display:"flex", alignItems:"center", justifyContent:"center", fontSize:13, color:"#fff", flexShrink:0 }}>
+                    {tomado ? "✓" : ""}
+                  </div>
+                  <div>
+                    <div style={{ fontSize:13, fontWeight:700, color:theme.text }}>{s.nombre}</div>
+                    <div style={{ fontSize:11, color:theme.muted }}>{s.momento}</div>
+                  </div>
+                </div>
+                <div style={{ background:`${theme.accent}22`, border:`1px solid ${theme.accent}44`, borderRadius:6, padding:"3px 10px", fontSize:12, fontWeight:700, color:theme.accentLight }}>{s.dosis}</div>
               </div>
-              <div style={{ background:`${theme.accent}22`, border:`1px solid ${theme.accent}44`, borderRadius:6, padding:"3px 10px", fontSize:12, fontWeight:700, color:theme.accentLight }}>{s.dosis}</div>
-            </div>
-          ))}
+            );
+          })}
         </Card>
       )}
 
@@ -1560,7 +2198,7 @@ function DietaCoach({ alumno }) {
   const resetForm = () => {
     setNombrePlan("");
     setDiasDieta([]);
-    setCalorias(""); setProteinas(""); setCarbos(""); setGrasas(""); setNotas("");
+    setCalorias(""); setProteinas(""); setCarbos(""); setGrasas(""); setNotas(NOTAS_DIETA_DEFAULT);
     setComidas([
       { nombre: "Desayuno", hora: "07:00", alimentos: [{ nombre: "", gramos: "" }] },
       { nombre: "Almuerzo", hora: "13:00", alimentos: [{ nombre: "", gramos: "" }] },
@@ -2319,11 +2957,19 @@ function ProgresoScreen({ onNav }) {
   const [fotoActual, setFotoActual] = useState(null);
   const [prs, setPrs] = useState([]);
   const [lightbox, setLightbox] = useState(null);
+  const [userId, setUserId] = useState(null);
+  const [ciclosResumen, setCiclosResumen] = useState([]);
+  const [entrenosResumen, setEntrenosResumen] = useState([]);
+  const [dietaRegsResumen, setDietaRegsResumen] = useState([]);
+  const [diasPlanificadosResumen, setDiasPlanificadosResumen] = useState(0);
+  const [semanaExpandidaResumen, setSemanaExpandidaResumen] = useState(null);
+  const [diaExpandidoResumen, setDiaExpandidoResumen] = useState(null);
 
   useEffect(() => {
     const cargar = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) { setLoading(false); return; }
+      setUserId(user.id);
 
       // Peso corporal: historial real de check-ins
       const { data: checkinsData } = await supabase
@@ -2334,11 +2980,27 @@ function ProgresoScreen({ onNav }) {
       if (checkinsData) setCheckins(checkinsData.filter(c => c.peso));
 
       // Foto "antes": la de la Anamnesis. Foto "actual": el check-in más reciente con foto.
-      const { data: usr } = await supabase.from("usuarios").select("foto_frente").eq("id", user.id).single();
+      const { data: usr } = await supabase.from("usuarios").select("foto_frente, fecha_inicio_plan").eq("id", user.id).single();
       if (usr?.foto_frente) setFotoAntes(usr.foto_frente);
       if (checkinsData) {
         const conFoto = checkinsData.filter(c => c.foto_frente);
         if (conFoto.length > 0) setFotoActual(conFoto[conFoto.length - 1].foto_frente);
+      }
+
+      // Resumen semana a semana (cargas de entreno, sueño, días entrenados, cumplimiento
+      // dieta), la misma construcción de ciclos que usa el coach en su Diario -- de hecho
+      // se reutiliza el mismo componente SemanaCard, en modo solo-lectura (ver más abajo),
+      // para que el alumno vea exactamente la misma información que ve el coach.
+      const { ciclos: ciclosArr, entrenosDetalle: entrenos, dietaRegs: dietaR, diasPlanificados: dp } =
+        await cargarCiclosAlumno(user.id, usr?.fecha_inicio_plan);
+      setCiclosResumen(ciclosArr);
+      setEntrenosResumen(entrenos);
+      setDietaRegsResumen(dietaR);
+      setDiasPlanificadosResumen(dp);
+      if (ciclosArr.length > 0) {
+        const cicloActivo = ciclosArr[ciclosArr.length - 1];
+        const semanaActual = cicloActivo.semanas[cicloActivo.semanas.length - 1];
+        if (semanaActual) setSemanaExpandidaResumen(semanaActual.key);
       }
 
       // PRs reales: solo de los 4 ejercicios básicos, y solo si están en su rutina
@@ -2498,6 +3160,31 @@ function ProgresoScreen({ onNav }) {
       </Card>
 
       <Card style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 12, color: theme.muted, marginBottom: 4 }}>📅 RESUMEN SEMANA A SEMANA</div>
+        <div style={{ fontSize: 11, color: theme.muted, marginBottom: 10 }}>Tus cargas de entreno, sueño y cumplimiento de dieta, semana a semana -- lo mismo que ve tu coach.</div>
+        {ciclosResumen.length === 0 ? (
+          <div style={{ fontSize: 13, color: theme.muted }}>Aún no hay suficientes registros para mostrar un resumen semanal.</div>
+        ) : (() => {
+          const ctxResumenAlumno = {
+            resumenSemana: (semana) => resumenSemanaCalc(semana, entrenosResumen, dietaRegsResumen),
+            semanaExpandida: semanaExpandidaResumen, setSemanaExpandida: setSemanaExpandidaResumen,
+            diaExpandido: diaExpandidoResumen, setDiaExpandido: setDiaExpandidoResumen,
+            diasPlanificados: diasPlanificadosResumen, entrenosDetalle: entrenosResumen, dietaRegs: dietaRegsResumen,
+            edicionSerie: null, edicionKg: "", setEdicionKg: () => {}, edicionReps: "", setEdicionReps: () => {},
+            guardarEdicionSerie: () => {}, cancelarEdicionSerie: () => {}, iniciarEdicionSerie: () => {},
+            edicionComida: null, edicionEstado: "", setEdicionEstado: () => {}, edicionDescripcion: "", setEdicionDescripcion: () => {},
+            guardarEdicionComida: () => {}, cancelarEdicionComida: () => {}, iniciarEdicionComida: () => {},
+            COLOR_RPE: "#B0C4DE", COLOR_SUENO: "#39FF88",
+            iconEstado: (estado) => estado === "completada" ? "✅" : estado === "no_hecha" ? "❌" : estado === "cambio" ? "🔄" : "⬜",
+            readOnly: true,
+          };
+          return [...ciclosResumen[ciclosResumen.length - 1].semanas].reverse().map((semana) => (
+            <SemanaCard key={semana.key} semana={semana} ctx={ctxResumenAlumno} />
+          ));
+        })()}
+      </Card>
+
+      <Card style={{ marginBottom: 14 }}>
         <div style={{ fontSize: 12, color: theme.muted, marginBottom: 12 }}>RÉCORDS PERSONALES 🏆</div>
         {prs.length === 0 ? (
           <div style={{ fontSize: 13, color: theme.muted }}>Aún no hay cargas registradas en tus entrenamientos. Tus PRs aparecerán acá a medida que entrenes.</div>
@@ -2535,7 +3222,7 @@ function CoachPanel({ onNav, onVerAlumno }) {
     const cargarAlumnos = async () => {
       const { data } = await supabase
         .from("usuarios")
-        .select("id, nombre, email, objetivo, peso_actual, edad, sexo, estatura, created_at")
+        .select("id, nombre, email, whatsapp, objetivo, peso_actual, edad, sexo, estatura, created_at")
         .order("created_at", { ascending: false });
       if (data) {
           const alumnosFiltrados = data.filter(a => a.email !== "coach.claudiomiquel@gmail.com");
@@ -2635,18 +3322,16 @@ function CoachPanel({ onNav, onVerAlumno }) {
         </Card>
       ) : (
         alumnos.map(a => (
-          <div key={a.id} onClick={() => { console.log("CLICK ALUMNO", a.nombre); onVerAlumno(a); }} style={{ marginBottom:10, cursor:"pointer", background:theme.card, border:`1px solid ${theme.border}`, borderRadius:14, padding:16 }}>
-            <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center" }}>
-              <div style={{ display:"flex",alignItems:"center",gap:12 }}>
-                <div style={{ width:40,height:40,borderRadius:12,background:theme.accent,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,fontWeight:800 }}>
-                  {a.nombre ? a.nombre[0].toUpperCase() : "?"}
-                </div>
-                <div>
-                  <div style={{ fontSize:14,fontWeight:700,color:theme.text }}>{a.nombre || "Sin nombre"}</div>
-                  <div style={{ fontSize:12,color:theme.muted }}>{a.objetivo || "Sin objetivo"} · {a.peso_actual ? a.peso_actual + " kg" : "Sin peso"}</div>
-                </div>
+          <div key={a.id} onClick={() => onVerAlumno(a)} style={{ marginBottom:10, cursor:"pointer", background:theme.card, border:`1px solid ${theme.border}`, borderRadius:14, padding:"14px 16px" }}>
+            <div style={{ display:"flex",alignItems:"center",gap:12 }}>
+              <div style={{ width:40,height:40,minWidth:40,borderRadius:12,background:theme.accent,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,fontWeight:800 }}>
+                {a.nombre ? a.nombre[0].toUpperCase() : "?"}
               </div>
-              <div style={{ fontSize:11,color:theme.muted }}>{a.email}</div>
+              <div style={{ flex:1, display:"grid", gridTemplateColumns:"1fr 1fr", gap:"2px 10px", alignItems:"center" }}>
+                <div style={{ fontSize:14,fontWeight:700,color:theme.text, gridColumn:"1 / -1" }}>{a.nombre || "Sin nombre"}</div>
+                <div style={{ fontSize:11,color:theme.muted, display:"flex", alignItems:"center", gap:4 }}>📱 {a.whatsapp || "—"}</div>
+                <div style={{ fontSize:11,color:theme.muted, display:"flex", alignItems:"center", gap:4, justifySelf:"end" }}>🎯 {a.objetivo || "—"}</div>
+              </div>
             </div>
           </div>
         ))
@@ -2890,11 +3575,28 @@ function RutinaCoach({ alumno }) {
   const [guardando, setGuardando] = useState(false);
   const [exito, setExito] = useState(false);
   const [nombresEjerciciosUsados, setNombresEjerciciosUsados] = useState([]);
+  const [fechaInicioPlan, setFechaInicioPlan] = useState("");
+  const [guardandoFechaInicio, setGuardandoFechaInicio] = useState(false);
+  const [mapaImagenes, setMapaImagenes] = useState({});
 
   useEffect(() => {
     cargarRutinas();
     cargarNombresEjercicios();
+    setFechaInicioPlan(alumno?.fecha_inicio_plan || "");
   }, [alumno]);
+
+  useEffect(() => { cargarMapaImagenesEjercicios().then(setMapaImagenes); }, []);
+
+  // El conteo de las 4 semanas del ciclo (ver Diario) arranca automáticamente desde
+  // el primer registro del alumno. Si el coach prefiere que arranque un día puntual
+  // (ej: siempre lunes, aunque la cuenta se haya creado el sábado), la define acá.
+  const guardarFechaInicioPlan = async () => {
+    if (!alumno?.id) return;
+    setGuardandoFechaInicio(true);
+    const { error } = await supabase.from("usuarios").update({ fecha_inicio_plan: fechaInicioPlan || null }).eq("id", alumno.id);
+    setGuardandoFechaInicio(false);
+    if (error) { alert("Error al guardar la fecha de inicio: " + error.message); return; }
+  };
 
   const cargarNombresEjercicios = async () => {
     const { data } = await supabase.from("ejercicios").select("nombre");
@@ -3098,6 +3800,19 @@ function RutinaCoach({ alumno }) {
         </Card>
       )}
 
+      <Card style={{ marginBottom:14 }}>
+        <div style={{ fontSize:12, color:theme.muted, marginBottom:8 }}>📅 FECHA DE INICIO DEL PLAN</div>
+        <div style={{ fontSize:11, color:theme.muted, marginBottom:10 }}>El conteo de las 4 semanas del ciclo arranca desde acá (por ejemplo, siempre un lunes). Si la dejas vacía, arranca automáticamente desde el primer registro del alumno.</div>
+        <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+          <input type="date" value={fechaInicioPlan} onChange={e => setFechaInicioPlan(e.target.value)}
+            style={{ flex:1, background:theme.bg, border:`1px solid ${theme.border}`, borderRadius:8, padding:"9px 11px", color:theme.text, fontSize:13, outline:"none" }} />
+          <button onClick={guardarFechaInicioPlan} disabled={guardandoFechaInicio}
+            style={{ background:theme.accent, border:"none", borderRadius:8, padding:"9px 14px", color:"#fff", fontSize:12, fontWeight:700, cursor:"pointer" }}>
+            {guardandoFechaInicio ? "Guardando..." : "Guardar"}
+          </button>
+        </div>
+      </Card>
+
       {/* Rutinas existentes */}
       {loading ? (
         <Card style={{ textAlign:"center", padding:20 }}><div style={{ color:theme.muted }}>Cargando...</div></Card>
@@ -3141,12 +3856,12 @@ function RutinaCoach({ alumno }) {
                         {verCargas[ej.id] ? "▲ Ocultar cargas" : `▼ Ver cargas (${cargas[ej.id].length} series)`}
                       </button>
                       {verCargas[ej.id] && (
-                        <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+                        <div style={{ display:"grid", gridTemplateColumns:"repeat(4, 1fr)", gap:6 }}>
                           {cargas[ej.id].slice(0, 8).map((c, ci) => (
-                            <div key={ci} style={{ background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:8, padding:"4px 8px", textAlign:"center" }}>
-                              <div style={{ fontSize:10, color:theme.muted }}>S{c.serie} · {c.fecha}</div>
-                              <div style={{ fontSize:12, fontWeight:800, color:theme.text }}>{c.kg}kg</div>
-                              <div style={{ fontSize:10, color:theme.muted }}>×{c.reps}</div>
+                            <div key={ci} style={{ minWidth:0, background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:8, padding:"4px 4px", textAlign:"center" }}>
+                              <div style={{ fontSize:9, color:theme.muted, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>S{c.serie} · {c.fecha}</div>
+                              <div style={{ fontSize:12, fontWeight:800, color:theme.text, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{c.kg}kg</div>
+                              <div style={{ fontSize:10, color:theme.muted, whiteSpace:"nowrap" }}>×{c.reps}</div>
                             </div>
                           ))}
                         </div>
@@ -3197,10 +3912,16 @@ function RutinaCoach({ alumno }) {
               )}
             </div>
             {calentamientoGeneral.map((m, i) => (
-              <div key={i} style={{ display:"grid", gridTemplateColumns:"1fr 1fr 20px", gap:6, marginBottom:6, alignItems:"center" }}>
-                <input style={inputStyle} value={m.nombre} onChange={e => { const c=[...calentamientoGeneral]; c[i]={...c[i], nombre:e.target.value}; setCalentamientoGeneral(c); }} />
-                <input style={inputStyle} value={m.detalle} onChange={e => { const c=[...calentamientoGeneral]; c[i]={...c[i], detalle:e.target.value}; setCalentamientoGeneral(c); }} />
-                <span onClick={() => setCalentamientoGeneral(calentamientoGeneral.filter((_,idx)=>idx!==i))} style={{ cursor:"pointer", color:theme.danger, fontSize:14, textAlign:"center" }}>×</span>
+              <div key={i} style={{ background:theme.card, borderRadius:8, padding:8, marginBottom:8 }}>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 20px", gap:6, alignItems:"center", marginBottom:6 }}>
+                  <input style={inputStyle} placeholder="Nombre" value={m.nombre} onChange={e => { const c=[...calentamientoGeneral]; c[i]={...c[i], nombre:e.target.value}; setCalentamientoGeneral(c); }} />
+                  <input style={inputStyle} placeholder="Detalle" value={m.detalle} onChange={e => { const c=[...calentamientoGeneral]; c[i]={...c[i], detalle:e.target.value}; setCalentamientoGeneral(c); }} />
+                  <span onClick={() => setCalentamientoGeneral(calentamientoGeneral.filter((_,idx)=>idx!==i))} style={{ cursor:"pointer", color:theme.danger, fontSize:14, textAlign:"center" }}>×</span>
+                </div>
+                <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                  <ImagenReferenciaEjercicio nombre={m.nombre} mapa={mapaImagenes} size={64} />
+                  <BotonSubirImagenEjercicio nombre={m.nombre} onSubida={({ normalizado, url }) => setMapaImagenes(prev => ({ ...prev, [normalizado]: url }))} />
+                </div>
               </div>
             ))}
             <button onClick={() => setCalentamientoGeneral([...calentamientoGeneral, { nombre:"", detalle:"" }])} style={{ background:"transparent", border:`1px dashed ${theme.border}`, borderRadius:6, padding:"4px 10px", color:theme.muted, fontSize:11, cursor:"pointer" }}>+ Movimiento</button>
@@ -3214,10 +3935,14 @@ function RutinaCoach({ alumno }) {
 
               <div style={{ marginBottom:8 }}>
                 <div style={{ fontSize:10, color:theme.muted, marginBottom:3 }}>Nombre</div>
-                <input style={inputStyle} placeholder="Ej: Press Banca" value={ej.nombre} onChange={e => updateEj(ejIdx, "nombre", e.target.value)} list="lista-ejercicios" />
+                <input style={{ ...inputStyle, marginBottom:8 }} placeholder="Ej: Press Banca" value={ej.nombre} onChange={e => updateEj(ejIdx, "nombre", e.target.value)} list="lista-ejercicios" />
                 <datalist id="lista-ejercicios">
                   {nombresEjerciciosUsados.map(n => <option key={n} value={n} />)}
                 </datalist>
+                <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                  <ImagenReferenciaEjercicio nombre={ej.nombre} mapa={mapaImagenes} size={72} />
+                  <BotonSubirImagenEjercicio nombre={ej.nombre} onSubida={({ normalizado, url }) => setMapaImagenes(prev => ({ ...prev, [normalizado]: url }))} />
+                </div>
               </div>
 
               <div style={{ marginBottom:8 }}>
@@ -3423,119 +4148,18 @@ cargarMensajes();  }, [alumno]);
     setDietaRegs(prev => prev.map(r => r.id === id ? { ...r, estado: edicionEstado, descripcion: descripcionFinal } : r));
     setEdicionComida(null);
   };
-  const getMonday = (d) => {
-    const date = new Date(d);
-    const day = date.getDay();
-    const diff = day === 0 ? -6 : 1 - day;
-    date.setDate(date.getDate() + diff);
-    date.setHours(0, 0, 0, 0);
-    return date;
-  };
-
   useEffect(() => {
     const cargar = async () => {
       if (!alumno?.id) return;
-      const hoy = fechaOperativa();
-
-      // Busca la fecha del primer registro del alumno (en cualquiera de las 3 fuentes)
-      // para que los ciclos arranquen desde que empezó, y no se pierda historial.
-      const [{ data: eDiario }, { data: eEntreno }, { data: eDieta }, { data: rutinasAlumno }] = await Promise.all([
-        supabase.from("diario_registros").select("fecha").eq("usuario_id", alumno.id).order("fecha", { ascending: true }).limit(1),
-        supabase.from("registros_entreno").select("fecha").eq("usuario_id", alumno.id).order("fecha", { ascending: true }).limit(1),
-        supabase.from("dieta_registros").select("fecha").eq("usuario_id", alumno.id).order("fecha", { ascending: true }).limit(1),
-        supabase.from("rutinas").select("dia").eq("usuario_id", alumno.id),
-      ]);
-      // Cantidad de días distintos de la semana que tienen una rutina asignada
-      // (el "split" real del alumno: 3, 4, 5, 6 días, etc). Los días sin rutina
-      // son descanso y no cuentan como incumplimiento.
-      const diasConRutina = new Set((rutinasAlumno || []).map(r => r.dia).filter(Boolean));
-      setDiasPlanificados(diasConRutina.size);
-      const fechasIniciales = [eDiario?.[0]?.fecha, eEntreno?.[0]?.fecha, eDieta?.[0]?.fecha].filter(Boolean).sort();
-      if (fechasIniciales.length === 0) { setLoading(false); return; }
-
-      let inicioRango = getMonday(new Date(fechasIniciales[0] + "T00:00:00"));
-      // Salvaguarda: si por algún registro viejo (guardado antes de corregir el
-      // huso horario) quedó una fecha "futura" respecto a hoy, no se calcula un
-      // rango invertido (que dejaría todo el diario vacío) — se arranca como
-      // máximo desde la semana actual.
-      if (inicioRango > hoy) inicioRango = getMonday(hoy);
-      const fechaDesde = aFechaStr(inicioRango);
-
-      const { data: registros } = await supabase
-        .from("diario_registros")
-        .select("*")
-        .eq("usuario_id", alumno.id)
-        .gte("fecha", fechaDesde)
-        .order("fecha", { ascending: true });
-
-      const { data: entrenos } = await supabase
-        .from("registros_entreno")
-        .select("*, ejercicios(nombre)")
-        .eq("usuario_id", alumno.id)
-        .gte("fecha", fechaDesde)
-        .order("creado_en", { ascending: true });
-      setEntrenosDetalle(entrenos || []);
-      const fechasEntreno = new Set((entrenos || []).map(e => e.fecha));
-
-      const { data: dietaR } = await supabase
-        .from("dieta_registros")
-        .select("*")
-        .eq("usuario_id", alumno.id)
-        .gte("fecha", fechaDesde)
-        .order("comida_index", { ascending: true });
-      setDietaRegs(dietaR || []);
-
-      // Construye todos los días desde el inicio del rango hasta hoy
-      const hoyStr = aFechaStr(hoy);
-      const totalDias = Math.max(1, Math.floor((hoy - inicioRango) / 86400000) + 1);
-      const diasArr = [];
-      for (let i = 0; i < totalDias; i++) {
-        const d = new Date(inicioRango);
-        d.setDate(d.getDate() + i);
-        const fechaStr = aFechaStr(d);
-        const reg = (registros || []).find(r => r.fecha === fechaStr);
-        const esHoy = fechaStr === hoyStr;
-        diasArr.push({
-          dia: esHoy ? "Hoy" : diasNombre[d.getDay()],
-          fecha: d.toLocaleDateString("es-CL", { day: "numeric", month: "short" }),
-          fechaStr,
-          energia: reg?.energia ?? null,
-          sueno: reg?.sueno ?? null,
-          horas: reg?.horas ?? null,
-          entreno: fechasEntreno.has(fechaStr),
-        });
-      }
-
-      // Agrupa los días en semanas de lunes a domingo (orden cronológico)
-      const semanasArr = [];
-      for (let w = 0; w < diasArr.length; w += 7) {
-        const diasSemana = diasArr.slice(w, w + 7);
-        const inicio = diasSemana[0];
-        const fin = diasSemana[diasSemana.length - 1];
-        semanasArr.push({
-          key: inicio.fechaStr,
-          rango: `${inicio.fecha} – ${fin.fecha}`,
-          esActual: diasSemana.some(d => d.dia === "Hoy"),
-          dias: diasSemana,
-        });
-      }
-
-      // Agrupa las semanas en ciclos de 4 (mesociclos), numerando cada semana
-      // según su posición cronológica dentro del ciclo (1 a 4)
-      const ciclosArr = [];
-      for (let c = 0; c < semanasArr.length; c += SEMANAS_POR_CICLO) {
-        const semanasCiclo = semanasArr.slice(c, c + SEMANAS_POR_CICLO).map((s, idx) => ({ ...s, numero: idx + 1 }));
-        const inicio = semanasCiclo[0];
-        const fin = semanasCiclo[semanasCiclo.length - 1];
-        ciclosArr.push({
-          key: inicio.key,
-          numeroCiclo: Math.floor(c / SEMANAS_POR_CICLO) + 1,
-          rango: `${inicio.rango.split(" – ")[0]} – ${fin.rango.split(" – ")[1]}`,
-          semanas: semanasCiclo,
-        });
-      }
-      ciclosArr.forEach((c, i) => { c.esActivo = i === ciclosArr.length - 1; });
-
+      // La construcción de ciclos/semanas es compartida con el resumen que ve
+      // el propio alumno en Progreso (ver cargarCiclosAlumno a nivel de módulo),
+      // así ambas vistas arrancan siempre desde la misma fecha (fecha_inicio_plan
+      // si el coach la definió, si no el primer registro del alumno).
+      const { ciclos: ciclosArr, entrenosDetalle: entrenos, dietaRegs: dietaR, diasPlanificados: dp } =
+        await cargarCiclosAlumno(alumno.id, alumno?.fecha_inicio_plan);
+      setDiasPlanificados(dp);
+      setEntrenosDetalle(entrenos);
+      setDietaRegs(dietaR);
       setCiclos(ciclosArr);
       setLoading(false);
     };
@@ -3559,12 +4183,6 @@ cargarMensajes();  }, [alumno]);
   const promedioEnergia = conDatosActivo.length ? (conDatosActivo.reduce((a,b) => a + b.energia, 0) / conDatosActivo.length).toFixed(1) : "—";
   const promedioSueno = conDatosActivo.length ? (conDatosActivo.reduce((a,b) => a + b.sueno, 0) / conDatosActivo.length).toFixed(1) : "—";
   const semanasConDatosActivo = cicloActivo ? cicloActivo.semanas.filter(s => s.dias.some(d => d.energia !== null)).length : 0;
-
-  const Barra = ({ value, color }) => (
-    <div style={{ background: theme.surface, borderRadius: 6, height: 7, overflow: "hidden", border: `1px solid ${theme.border}` }}>
-      <div style={{ width: `${Math.min(100, (value / 10) * 100)}%`, height: "100%", background: color, borderRadius: 6, boxShadow: `0 0 8px ${color}88` }} />
-    </div>
-  );
 
   const iconEstado = (estado) => estado === "completada" ? "✅" : estado === "no_hecha" ? "❌" : estado === "cambio" ? "🔄" : "⬜";
 
@@ -3601,211 +4219,16 @@ cargarMensajes();  }, [alumno]);
     };
   };
 
-  // Tarjeta de una semana individual (usada tanto en el ciclo activo como en ciclos pasados expandidos)
-  const SemanaCard = ({ semana }) => {
-    const resumen = resumenSemana(semana);
-    const expandida = semanaExpandida === semana.key;
-    const tieneDatos = semana.dias.some(d => d.energia !== null || d.entreno) || Object.keys(resumen.ejerciciosSemana).length > 0;
-
-    return (
-      <Card style={{ marginBottom:10, padding:0, overflow:"hidden", border: expandida ? `1px solid ${theme.accent}66` : `1px solid ${theme.border}`, boxShadow: expandida ? `0 0 16px ${theme.accent}22` : "none" }}>
-        <div onClick={() => tieneDatos && setSemanaExpandida(expandida ? null : semana.key)}
-          style={{ padding:14, cursor: tieneDatos ? "pointer" : "default", display:"flex", justifyContent:"space-between", alignItems:"center", background: semana.esActual ? `${theme.accent}12` : "transparent" }}>
-          <div>
-            <div style={{ fontSize:13, fontWeight:800, color:theme.text, display:"flex", alignItems:"center", gap:8 }}>
-              Semana {semana.numero}
-              {semana.esActual && <Tag color={theme.accent}>Actual</Tag>}
-            </div>
-            <div style={{ fontSize:11, color:theme.muted, marginTop:2 }}>{semana.rango}</div>
-          </div>
-          <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-            {resumen.rpeProm && (
-              <div style={{ textAlign:"center" }}>
-                <div style={{ fontSize:13, fontWeight:800, color:COLOR_RPE }}>{resumen.rpeProm}</div>
-                <div style={{ fontSize:8, color:theme.muted }}>RPE</div>
-              </div>
-            )}
-            <div style={{ textAlign:"center" }}>
-              <div style={{ fontSize:13, fontWeight:800, color:theme.success }}>{resumen.diasEntrenados}</div>
-              <div style={{ fontSize:8, color:theme.muted }}>días</div>
-            </div>
-            {tieneDatos && <span style={{ fontSize:11, color:theme.accentLight }}>{expandida ? "▲" : "▼"}</span>}
-          </div>
-        </div>
-
-        {expandida && (
-          <div style={{ padding:14, borderTop:`1px solid ${theme.border}`, background:theme.bg }}>
-            {/* Resumen de la semana */}
-            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:14 }}>
-              <div style={{ background:theme.surface, borderRadius:10, padding:10, textAlign:"center" }}>
-                <div style={{ fontSize:10, color:theme.muted, marginBottom:2 }}>💥 Rango RPE</div>
-                <div style={{ fontSize:14, fontWeight:800, color:COLOR_RPE }}>{resumen.rpeMin !== null ? `${resumen.rpeMin}–${resumen.rpeMax}` : "—"}</div>
-              </div>
-              <div style={{ background:theme.surface, borderRadius:10, padding:10, textAlign:"center" }}>
-                <div style={{ fontSize:10, color:theme.muted, marginBottom:2 }}>😴 Sueño prom.</div>
-                <div style={{ fontSize:14, fontWeight:800, color:COLOR_SUENO }}>{resumen.suenoProm !== null ? `${resumen.suenoProm}/10` : "—"}</div>
-              </div>
-              <div style={{ background:theme.surface, borderRadius:10, padding:10, textAlign:"center" }}>
-                <div style={{ fontSize:10, color:theme.muted, marginBottom:2 }}>💪 Días entrenados</div>
-                <div style={{ fontSize:14, fontWeight:800, color:theme.success }}>{resumen.diasEntrenados}/{diasPlanificados || 7}</div>
-              </div>
-              <div style={{ background:theme.surface, borderRadius:10, padding:10, textAlign:"center" }}>
-                <div style={{ fontSize:10, color:theme.muted, marginBottom:2 }}>🥗 Cumplim. dieta</div>
-                <div style={{ fontSize:14, fontWeight:800, color: resumen.adherenciaDieta !== null ? (resumen.adherenciaDieta >= 70 ? theme.success : resumen.adherenciaDieta >= 40 ? theme.warning : theme.danger) : theme.muted }}>{resumen.adherenciaDieta !== null ? `${resumen.adherenciaDieta}%` : "—"}</div>
-              </div>
-            </div>
-
-            {/* Días de la semana, cada uno expandible por separado */}
-            <div style={{ fontSize:11, fontWeight:800, color:theme.muted, marginBottom:8, letterSpacing:0.5 }}>📅 DÍA A DÍA</div>
-            {semana.dias.map((d, i) => {
-              const dietaDia = dietaRegs.filter(r => r.fecha === d.fechaStr);
-              const entrenoDia = entrenosDetalle.filter(r => r.fecha === d.fechaStr);
-              const tieneDatosDia = d.energia !== null || d.entreno || dietaDia.length > 0;
-              const diaExp = diaExpandido === d.fechaStr;
-
-              const ejerciciosAgrupados = {};
-              entrenoDia.forEach(r => {
-                const nombre = r.ejercicios?.nombre || "Ejercicio";
-                if (!ejerciciosAgrupados[nombre]) ejerciciosAgrupados[nombre] = [];
-                ejerciciosAgrupados[nombre].push(r);
-              });
-              Object.values(ejerciciosAgrupados).forEach(arr => arr.sort((a,b) => (a.serie||0) - (b.serie||0)));
-
-              return (
-                <div key={i} style={{ marginBottom:8 }}>
-                  <div onClick={() => tieneDatosDia && setDiaExpandido(diaExp ? null : d.fechaStr)} style={{
-                    display:"grid", gridTemplateColumns:"40px 1fr 1fr 30px",
-                    gap:8, alignItems:"center",
-                    background: d.dia === "Hoy" ? `${theme.accent}15` : theme.card,
-                    border: `1px solid ${diaExp ? theme.accent+"88" : theme.border}`,
-                    borderRadius: diaExp ? "10px 10px 0 0" : 10, padding:"7px 10px",
-                    cursor: tieneDatosDia ? "pointer" : "default",
-                  }}>
-                    <div style={{ textAlign:"center" }}>
-                      <div style={{ fontSize:10, fontWeight:800, color: d.dia === "Hoy" ? theme.accent : theme.text }}>{d.dia}</div>
-                      <div style={{ fontSize:8, color:theme.muted }}>{d.fecha}</div>
-                    </div>
-                    {d.energia !== null ? (
-                      <>
-                        <div style={{ textAlign:"center", fontSize:9, color:theme.muted }}>💥 {d.energia}/10</div>
-                        <div style={{ textAlign:"center", fontSize:9, color:theme.muted }}>😴 {d.horas || "—"}h · {d.sueno}/10</div>
-                      </>
-                    ) : (
-                      <div style={{ gridColumn:"2/4", fontSize:10, color:theme.muted }}>Sin registro</div>
-                    )}
-                    <div style={{ textAlign:"center" }}>
-                      {d.entreno ? <span style={{ fontSize:11 }}>💪</span> : <span style={{ fontSize:11, opacity:0.3 }}>—</span>}
-                    </div>
-                  </div>
-
-                  {diaExp && (
-                    <div style={{ background:theme.card, border:`1px solid ${theme.accent}44`, borderTop:"none", borderRadius:"0 0 10px 10px", padding:12 }}>
-                      {d.energia !== null && (
-                        <div style={{ marginBottom:14 }}>
-                          <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
-                            <span style={{ fontSize:11, color:theme.text }}>💥 Intensidad / RPE</span>
-                            <span style={{ fontSize:11, fontWeight:700, color:COLOR_RPE }}>{d.energia}/10</span>
-                          </div>
-                          <Barra value={d.energia} color={COLOR_RPE} />
-                          <div style={{ display:"flex", justifyContent:"space-between", marginTop:10, marginBottom:4 }}>
-                            <span style={{ fontSize:11, color:theme.text }}>😴 Calidad del sueño ({d.horas || "—"}h)</span>
-                            <span style={{ fontSize:11, fontWeight:700, color:COLOR_SUENO }}>{d.sueno}/10</span>
-                          </div>
-                          <Barra value={d.sueno} color={COLOR_SUENO} />
-                        </div>
-                      )}
-
-                      {Object.keys(ejerciciosAgrupados).length > 0 && (
-                        <div style={{ marginBottom:14 }}>
-                          <div style={{ fontSize:11, fontWeight:800, color:theme.muted, marginBottom:8, letterSpacing:0.5 }}>🏋️ ENTRENAMIENTO</div>
-                          {Object.entries(ejerciciosAgrupados).map(([nombre, series]) => (
-                            <div key={nombre} style={{ marginBottom:8 }}>
-                              <div style={{ fontSize:12, fontWeight:700, color:theme.text, marginBottom:4 }}>{nombre}</div>
-                              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:6 }}>
-                                {series.map((s, si) => (
-                                  edicionSerie === s.id ? (
-                                    <div key={si} style={{ display:"flex", alignItems:"center", gap:3, background:theme.surface, border:`1px solid ${theme.accent}66`, borderRadius:6, padding:"3px 4px", flexWrap:"wrap" }}>
-                                      <span style={{ fontSize:10, color:theme.muted }}>S{s.serie}</span>
-                                      <input type="number" value={edicionKg} onChange={e => setEdicionKg(e.target.value)} placeholder="kg"
-                                        style={{ width:44, background:theme.card, border:`1px solid ${theme.border}`, borderRadius:4, color:theme.text, fontSize:11, padding:"3px 4px", outline:"none" }} />
-                                      <span style={{ fontSize:10, color:theme.muted }}>×</span>
-                                      <input type="number" value={edicionReps} onChange={e => setEdicionReps(e.target.value)} placeholder="reps"
-                                        style={{ width:38, background:theme.card, border:`1px solid ${theme.border}`, borderRadius:4, color:theme.text, fontSize:11, padding:"3px 4px", outline:"none" }} />
-                                      <button onClick={() => guardarEdicionSerie(s.id)} style={{ background:theme.success, border:"none", borderRadius:4, color:"#fff", fontSize:11, fontWeight:800, cursor:"pointer", padding:"3px 7px" }}>✓</button>
-                                      <button onClick={cancelarEdicionSerie} style={{ background:"transparent", border:`1px solid ${theme.border}`, borderRadius:4, color:theme.muted, fontSize:11, cursor:"pointer", padding:"3px 7px" }}>×</button>
-                                    </div>
-                                  ) : (
-                                    <div key={si} style={{ position:"relative", display:"flex", alignItems:"center", justifyContent:"center", background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:6, padding:"6px 4px", fontSize:11, color:theme.muted, textAlign:"center" }}>
-                                      <button onClick={() => iniciarEdicionSerie(s)} title="Editar"
-                                        style={{ position:"absolute", top:-5, left:-5, width:15, height:15, borderRadius:"50%", background:theme.card, border:`1px solid ${theme.border}`, color:theme.text, fontSize:8, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", padding:0, lineHeight:1 }}>✏️</button>
-                                      S{s.serie}: <span style={{ color:theme.text, fontWeight:700 }}>{s.kg || "—"}kg × {s.reps || "—"}</span>
-                                    </div>
-                                  )
-                                ))}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                      {dietaDia.length > 0 ? (
-                        <div>
-                          <div style={{ fontSize:11, fontWeight:800, color:theme.muted, marginBottom:8, letterSpacing:0.5 }}>🥗 DIETA</div>
-                          {dietaDia.map((r, ri) => (
-                            <div key={ri} style={{ marginBottom:8, background: edicionComida === r.id ? theme.surface : "transparent", border: edicionComida === r.id ? `1px solid ${theme.accent}66` : "none", borderRadius:8, padding: edicionComida === r.id ? 10 : 0 }}>
-                              {edicionComida === r.id ? (
-                                <div>
-                                  <div style={{ fontSize:12, color:theme.text, fontWeight:700, marginBottom:8 }}>{r.comida_nombre || `Comida ${r.comida_index + 1}`}</div>
-                                  <div style={{ display:"flex", gap:6, marginBottom:8 }}>
-                                    {[["completada","✅"],["no_hecha","❌"],["cambio","🔄"]].map(([val, icon]) => (
-                                      <button key={val} onClick={() => setEdicionEstado(val)}
-                                        style={{ width:34, height:34, borderRadius:8, background: edicionEstado === val ? theme.accent : theme.card, border:`1.5px solid ${edicionEstado === val ? theme.accent : theme.border}`, fontSize:15, cursor:"pointer" }}>
-                                        {icon}
-                                      </button>
-                                    ))}
-                                  </div>
-                                  {edicionEstado === "cambio" && (
-                                    <textarea value={edicionDescripcion} onChange={e => setEdicionDescripcion(e.target.value)} placeholder="Descripción del cambio..."
-                                      style={{ width:"100%", boxSizing:"border-box", background:theme.card, border:`1px solid ${theme.border}`, borderRadius:6, padding:8, color:theme.text, fontSize:11, minHeight:50, resize:"none", marginBottom:8, outline:"none" }} />
-                                  )}
-                                  <div style={{ display:"flex", gap:6 }}>
-                                    <button onClick={() => guardarEdicionComida(r.id)} style={{ flex:1, background:theme.success, border:"none", borderRadius:6, color:"#fff", fontSize:11, fontWeight:700, cursor:"pointer", padding:"6px 0" }}>Guardar</button>
-                                    <button onClick={cancelarEdicionComida} style={{ flex:1, background:theme.card, border:`1px solid ${theme.border}`, borderRadius:6, color:theme.muted, fontSize:11, fontWeight:700, cursor:"pointer", padding:"6px 0" }}>Cancelar</button>
-                                  </div>
-                                </div>
-                              ) : (
-                                <div style={{ position:"relative", background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:8, padding:"7px 10px" }}>
-                                  <button onClick={() => iniciarEdicionComida(r)} title="Editar"
-                                    style={{ position:"absolute", top:-5, left:-5, width:15, height:15, borderRadius:"50%", background:theme.card, border:`1px solid ${theme.border}`, color:theme.text, fontSize:8, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", padding:0, lineHeight:1 }}>✏️</button>
-                                  <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                                    <span style={{ fontSize:14 }}>{iconEstado(r.estado)}</span>
-                                    <span style={{ fontSize:12, color:theme.text, fontWeight:600 }}>{r.comida_nombre || `Comida ${r.comida_index + 1}`}</span>
-                                  </div>
-                                  {r.estado === "cambio" && r.descripcion && (
-                                    <div style={{ fontSize:11, color:theme.muted, fontStyle:"italic", paddingLeft:22, marginTop:2 }}>"{r.descripcion}"</div>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        (d.entreno || d.energia !== null) ? <div style={{ fontSize:11, color:theme.muted }}>Sin registro de dieta ese día</div> : null
-                      )}
-
-                      {!d.entreno && d.energia === null && dietaDia.length === 0 && (
-                        <div style={{ fontSize:11, color:theme.muted }}>Sin registros ese día</div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </Card>
-    );
+  const ctx = {
+    resumenSemana, semanaExpandida, setSemanaExpandida, diaExpandido, setDiaExpandido,
+    diasPlanificados, entrenosDetalle, dietaRegs,
+    edicionSerie, edicionKg, setEdicionKg, edicionReps, setEdicionReps,
+    guardarEdicionSerie, cancelarEdicionSerie, iniciarEdicionSerie,
+    edicionComida, edicionEstado, setEdicionEstado, edicionDescripcion, setEdicionDescripcion,
+    guardarEdicionComida, cancelarEdicionComida, iniciarEdicionComida,
+    COLOR_RPE, COLOR_SUENO, iconEstado,
   };
+
 
   const ciclosOrdenados = [...ciclos].reverse(); // el ciclo activo (más reciente) primero
 
@@ -3835,7 +4258,7 @@ cargarMensajes();  }, [alumno]);
                 <div style={{ fontSize:12, fontWeight:800, color:theme.accentLight, letterSpacing:0.5 }}>🔵 CICLO ACTUAL</div>
                 <div style={{ fontSize:11, color:theme.muted }}>{ciclo.rango}</div>
               </div>
-              {semanasOrden.map(semana => <SemanaCard key={semana.key} semana={semana} />)}
+              {semanasOrden.map(semana => <SemanaCard key={semana.key} semana={semana} ctx={ctx} />)}
             </div>
           );
         }
@@ -3855,7 +4278,7 @@ cargarMensajes();  }, [alumno]);
             </div>
             {cicloExp && (
               <div style={{ padding:"0 14px 14px" }}>
-                {semanasOrden.map(semana => <SemanaCard key={semana.key} semana={semana} />)}
+                {semanasOrden.map(semana => <SemanaCard key={semana.key} semana={semana} ctx={ctx} />)}
               </div>
             )}
           </Card>
@@ -3935,25 +4358,81 @@ cargarMensajes();  }, [alumno]);
   );
 }
 
+// Campos de la anamnesis que el coach puede corregir desde el perfil del
+// alumno (todo salvo el email, que va ligado a la cuenta de autenticación,
+// y las fotos iniciales, que se suben aparte).
+const CAMPOS_EDITABLES_ANAMNESIS = [
+  "nombre", "edad", "sexo", "estatura", "peso_actual", "porc_grasa",
+  "whatsapp", "instagram", "ocupacion", "actividad_laboral",
+  "objetivo", "ha_entrenado", "que_entrenamiento", "dias_semana", "horario_entreno", "horario_entreno_hasta",
+  "enfermedad_lesion", "cual_enfermedad", "medicamento", "cual_medicamento",
+  "sustancia_farmacologica", "sustancia_cuales", "sustancia_tiempo", "sustancia_hace_cuanto",
+  "consume_suplemento", "cual_suplemento",
+  "alimentacion_diferente", "alergia", "cual_alergia", "no_le_gustan", "favoritos",
+  "hora_levanta", "hora_duerme", "comidas_dia",
+  "resumen_desayuno", "resumen_snack", "resumen_almuerzo", "resumen_once", "resumen_cena",
+  "fecha_inicio_plan",
+];
+
 function CoachAlumno({ onNav, alumno }) {
   const tabs=["Datos","Rutina","Dieta","Check-ins","Diario","Pagos","Progreso","Mensajes"];
   const [tab,setTab]=useState(alumno?.tabInicial || "Datos");
   const [datosCompletos, setDatosCompletos] = useState(null);
   const [lightbox, setLightbox] = useState(null);
+  const [editandoDatos, setEditandoDatos] = useState(false);
+  const [formDatos, setFormDatos] = useState(null);
+  const [guardandoDatos, setGuardandoDatos] = useState(false);
 
-  useEffect(() => {
-    if (alumno?.id) {
-      const cargar = async () => {
-        const { data } = await supabase
-          .from("usuarios")
-          .select("*")
-          .eq("id", alumno.id)
-          .single();
-        if (data) setDatosCompletos(data);
-      };
-      cargar();
+  const cargarDatos = async () => {
+    if (!alumno?.id) return;
+    const { data } = await supabase
+      .from("usuarios")
+      .select("*")
+      .eq("id", alumno.id)
+      .single();
+    if (data) setDatosCompletos(data);
+  };
+
+  useEffect(() => { cargarDatos(); }, [alumno]);
+
+  const iniciarEdicion = () => {
+    const inicial = {};
+    CAMPOS_EDITABLES_ANAMNESIS.forEach(k => { inicial[k] = datosCompletos?.[k] ?? ""; });
+    setFormDatos(inicial);
+    setEditandoDatos(true);
+  };
+
+  const cancelarEdicion = () => {
+    setEditandoDatos(false);
+    setFormDatos(null);
+  };
+
+  const guardarDatos = async () => {
+    if (!alumno?.id || !formDatos) return;
+    setGuardandoDatos(true);
+    const cambios = {};
+    CAMPOS_EDITABLES_ANAMNESIS.forEach(k => {
+      let v = formDatos[k];
+      if (["edad", "estatura", "peso_actual", "porc_grasa"].includes(k)) {
+        v = v === "" || v === null || v === undefined ? null : parseFloat(v);
+      } else if (v === "") {
+        v = null;
+      }
+      cambios[k] = v;
+    });
+    const { error } = await supabase.from("usuarios").update(cambios).eq("id", alumno.id);
+    setGuardandoDatos(false);
+    if (error) {
+      alert("Error al guardar: " + error.message);
+      return;
     }
-  }, [alumno]);
+    await cargarDatos();
+    setEditandoDatos(false);
+    setFormDatos(null);
+  };
+
+  const setCampo = (k, v) => setFormDatos(prev => ({ ...prev, [k]: v }));
+
   return (
     <div style={{ height:"100%",display:"flex",flexDirection:"column" }}>
       <div style={{ padding:"16px 16px 0",background:theme.surface,borderBottom:`1px solid ${theme.border}` }}>
@@ -3971,96 +4450,192 @@ function CoachAlumno({ onNav, alumno }) {
       </div>
       <div style={{ flex:1,overflowY:"auto",padding:16 }}>
         {tab==="Datos"&&(<div style={{ display:"flex",flexDirection:"column",gap:10 }}>
-          <Card>
-            <div style={{ fontSize:12,color:theme.muted,marginBottom:10 }}>DATOS PERSONALES</div>
-            {[
-              ["Nombre", datosCompletos?.nombre],
-              ["Email", datosCompletos?.email],
-              ["Edad", datosCompletos?.edad ? datosCompletos.edad + " años" : null],
-              ["Sexo", datosCompletos?.sexo],
-              ["Estatura", datosCompletos?.estatura ? datosCompletos.estatura + " cm" : null],
-              ["Peso actual", datosCompletos?.peso_actual ? datosCompletos.peso_actual + " kg" : null],
-              ["WhatsApp", datosCompletos?.whatsapp],
-              ["Instagram", datosCompletos?.instagram],
-              ["Ocupación", datosCompletos?.ocupacion],
-              ["Actividad laboral", datosCompletos?.actividad_laboral],
-            ].filter(([,v]) => v).map(([k,v])=>(
-              <div key={k} style={{ display:"flex",justifyContent:"space-between",marginBottom:8,flexWrap:"wrap",gap:4 }}>
-                <span style={{ color:theme.muted,fontSize:13 }}>{k}</span>
-                <span style={{ color:theme.text,fontSize:13,fontWeight:600,textAlign:"right",maxWidth:"60%" }}>{v}</span>
-              </div>
-            ))}
-          </Card>
-          <Card>
-            <div style={{ fontSize:12,color:theme.muted,marginBottom:10 }}>ANAMNESIS</div>
-            {[
-              ["Objetivo", datosCompletos?.objetivo],
-              ["Ha entrenado", datosCompletos?.ha_entrenado],
-              ["Entrenamiento previo", datosCompletos?.que_entrenamiento],
-              ["Días/semana", datosCompletos?.dias_semana],
-              ["Horario entreno", datosCompletos?.horario_entreno],
-              ["Enfermedad/Lesión", datosCompletos?.enfermedad_lesion === "Sí" ? datosCompletos?.cual_enfermedad : "No"],
-              ["Medicamento", datosCompletos?.medicamento === "Sí" ? datosCompletos?.cual_medicamento : "No"],
-              ["Sustancias farmacológicas", datosCompletos?.sustancia_farmacologica],
-            ].filter(([,v]) => v).map(([k,v])=>(
-              <div key={k} style={{ display:"flex",justifyContent:"space-between",marginBottom:8,flexWrap:"wrap",gap:4 }}>
-                <span style={{ color:theme.muted,fontSize:13 }}>{k}</span>
-                <span style={{ color:theme.text,fontSize:13,fontWeight:600,textAlign:"right",maxWidth:"60%" }}>{v}</span>
-              </div>
-            ))}
-          </Card>
-          {(datosCompletos?.foto_frente || datosCompletos?.foto_espalda || datosCompletos?.foto_perf_der || datosCompletos?.foto_perf_izq) && (
-            <Card>
-              <div style={{ fontSize:12,color:theme.muted,marginBottom:10 }}>📸 FOTOS INICIALES (ANAMNESIS)</div>
-              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:6 }}>
-                {[["Frente", datosCompletos.foto_frente], ["Espalda", datosCompletos.foto_espalda], ["P. Der", datosCompletos.foto_perf_der], ["P. Izq", datosCompletos.foto_perf_izq]].map(([label, url]) => url && (
-                  <div key={label} style={{ borderRadius:8, overflow:"hidden", border:`1px solid ${theme.border}` }}>
-                    <img src={url} alt={label} onClick={() => setLightbox(url)} style={{ width:"100%", height:80, objectFit:"cover", cursor:"pointer" }} />
-                    <div style={{ fontSize:9, color:theme.muted, textAlign:"center", padding:3 }}>{label}</div>
-                  </div>
-                ))}
-              </div>
-            </Card>
-          )}
-          <Card>
-            <div style={{ fontSize:12,color:theme.muted,marginBottom:10 }}>ALIMENTACIÓN</div>
-            {[
-              ["Alergias", datosCompletos?.alergia === "Sí" ? datosCompletos?.cual_alergia : "No"],
-              ["No le gustan", datosCompletos?.no_le_gustan],
-              ["Favoritos", datosCompletos?.favoritos],
-              ["Dieta especial", datosCompletos?.alimentacion_diferente],
-              ["Hora levantarse", datosCompletos?.hora_levanta],
-              ["Hora dormir", datosCompletos?.hora_duerme],
-              ["Comidas al día", datosCompletos?.comidas_dia],
-            ].filter(([,v]) => v).map(([k,v])=>(
-              <div key={k} style={{ display:"flex",justifyContent:"space-between",marginBottom:8,flexWrap:"wrap",gap:4 }}>
-                <span style={{ color:theme.muted,fontSize:13 }}>{k}</span>
-                <span style={{ color:theme.text,fontSize:13,fontWeight:600,textAlign:"right",maxWidth:"60%" }}>{v}</span>
-              </div>
-            ))}
-            {datosCompletos?.resumen_desayuno && (
-              <div style={{ marginTop:10 }}>
-                <div style={{ fontSize:11,color:theme.muted,marginBottom:8,fontWeight:700 }}>RESUMEN DIETA TÍPICA</div>
-                {[
-                  ["🌅 Desayuno", datosCompletos?.resumen_desayuno],
-                  ["🍎 Snack", datosCompletos?.resumen_snack],
-                  ["🍽️ Almuerzo", datosCompletos?.resumen_almuerzo],
-                  ["☕ Once", datosCompletos?.resumen_once],
-                  ["🌙 Cena", datosCompletos?.resumen_cena],
-                ].filter(([,v]) => v).map(([k,v])=>(
-                  <div key={k} style={{ marginBottom:8, background:theme.surface, borderRadius:8, padding:"8px 10px" }}>
-                    <div style={{ fontSize:11,color:theme.muted,marginBottom:2 }}>{k}</div>
-                    <div style={{ fontSize:13,color:theme.text }}>{v}</div>
-                  </div>
-                ))}
-              </div>
+          <div style={{ display:"flex", justifyContent:"flex-end", gap:8 }}>
+            {!editandoDatos ? (
+              <button onClick={iniciarEdicion} style={{ background:theme.accent, border:"none", borderRadius:8, padding:"8px 14px", color:"#fff", fontSize:12, fontWeight:700, cursor:"pointer" }}>✏️ Editar datos</button>
+            ) : (
+              <>
+                <button onClick={cancelarEdicion} disabled={guardandoDatos} style={{ background:"transparent", border:`1px solid ${theme.border}`, borderRadius:8, padding:"8px 14px", color:theme.muted, fontSize:12, fontWeight:700, cursor:"pointer" }}>Cancelar</button>
+                <button onClick={guardarDatos} disabled={guardandoDatos} style={{ background:theme.success, border:"none", borderRadius:8, padding:"8px 14px", color:"#fff", fontSize:12, fontWeight:700, cursor:"pointer" }}>{guardandoDatos ? "Guardando..." : "✓ Guardar cambios"}</button>
+              </>
             )}
-          </Card>
+          </div>
+
+          {!editandoDatos ? (
+            <>
+              <Card>
+                <div style={{ fontSize:12,color:theme.muted,marginBottom:10 }}>DATOS PERSONALES</div>
+                {[
+                  ["Nombre", datosCompletos?.nombre],
+                  ["Email", datosCompletos?.email],
+                  ["Edad", datosCompletos?.edad ? datosCompletos.edad + " años" : null],
+                  ["Sexo", datosCompletos?.sexo],
+                  ["Estatura", datosCompletos?.estatura ? datosCompletos.estatura + " cm" : null],
+                  ["Peso actual", datosCompletos?.peso_actual ? datosCompletos.peso_actual + " kg" : null],
+                  ["% grasa estimado", datosCompletos?.porc_grasa ? datosCompletos.porc_grasa + " %" : null],
+                  ["WhatsApp", datosCompletos?.whatsapp],
+                  ["Instagram", datosCompletos?.instagram],
+                  ["Ocupación", datosCompletos?.ocupacion],
+                  ["Actividad laboral", datosCompletos?.actividad_laboral],
+                ].filter(([,v]) => v).map(([k,v])=>(
+                  <div key={k} style={{ display:"flex",justifyContent:"space-between",marginBottom:8,flexWrap:"wrap",gap:4 }}>
+                    <span style={{ color:theme.muted,fontSize:13 }}>{k}</span>
+                    <span style={{ color:theme.text,fontSize:13,fontWeight:600,textAlign:"right",maxWidth:"60%" }}>{v}</span>
+                  </div>
+                ))}
+              </Card>
+              <Card>
+                <div style={{ fontSize:12,color:theme.muted,marginBottom:10 }}>ANAMNESIS</div>
+                {[
+                  ["Objetivo", datosCompletos?.objetivo],
+                  ["Ha entrenado", datosCompletos?.ha_entrenado],
+                  ["Entrenamiento previo", datosCompletos?.que_entrenamiento],
+                  ["Días/semana", datosCompletos?.dias_semana],
+                  ["Horario entreno", datosCompletos?.horario_entreno_hasta ? `${datosCompletos?.horario_entreno || "?"} y ${datosCompletos.horario_entreno_hasta}` : datosCompletos?.horario_entreno],
+                  ["Enfermedad/Lesión", datosCompletos?.enfermedad_lesion === "Sí" ? datosCompletos?.cual_enfermedad : "No"],
+                  ["Medicamento", datosCompletos?.medicamento === "Sí" ? datosCompletos?.cual_medicamento : "No"],
+                  ["Sustancias farmacológicas", datosCompletos?.sustancia_farmacologica === "Sí" ? [datosCompletos?.sustancia_cuales, datosCompletos?.sustancia_tiempo && `por ${datosCompletos.sustancia_tiempo}`, datosCompletos?.sustancia_hace_cuanto && `(${datosCompletos.sustancia_hace_cuanto})`].filter(Boolean).join(" · ") || "Sí" : datosCompletos?.sustancia_farmacologica],
+                  ["Suplemento actual", datosCompletos?.consume_suplemento === "Sí" ? (datosCompletos?.cual_suplemento || "Sí") : datosCompletos?.consume_suplemento],
+                  ["Fecha inicio plan", datosCompletos?.fecha_inicio_plan],
+                ].filter(([,v]) => v).map(([k,v])=>(
+                  <div key={k} style={{ display:"flex",justifyContent:"space-between",marginBottom:8,flexWrap:"wrap",gap:4 }}>
+                    <span style={{ color:theme.muted,fontSize:13 }}>{k}</span>
+                    <span style={{ color:theme.text,fontSize:13,fontWeight:600,textAlign:"right",maxWidth:"60%" }}>{v}</span>
+                  </div>
+                ))}
+              </Card>
+              {(datosCompletos?.foto_frente || datosCompletos?.foto_espalda || datosCompletos?.foto_perf_der || datosCompletos?.foto_perf_izq) && (
+                <Card>
+                  <div style={{ fontSize:12,color:theme.muted,marginBottom:10 }}>📸 FOTOS INICIALES (ANAMNESIS)</div>
+                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:6 }}>
+                    {[["Frente", datosCompletos.foto_frente], ["Espalda", datosCompletos.foto_espalda], ["P. Der", datosCompletos.foto_perf_der], ["P. Izq", datosCompletos.foto_perf_izq]].map(([label, url]) => url && (
+                      <div key={label} style={{ borderRadius:8, overflow:"hidden", border:`1px solid ${theme.border}` }}>
+                        <img src={url} alt={label} onClick={() => setLightbox(url)} style={{ width:"100%", height:80, objectFit:"cover", cursor:"pointer" }} />
+                        <div style={{ fontSize:9, color:theme.muted, textAlign:"center", padding:3 }}>{label}</div>
+                      </div>
+                    ))}
+                  </div>
+                </Card>
+              )}
+              <Card>
+                <div style={{ fontSize:12,color:theme.muted,marginBottom:10 }}>ALIMENTACIÓN</div>
+                {[
+                  ["Alergias", datosCompletos?.alergia === "Sí" ? datosCompletos?.cual_alergia : "No"],
+                  ["No le gustan", datosCompletos?.no_le_gustan],
+                  ["Favoritos", datosCompletos?.favoritos],
+                  ["Dieta especial", datosCompletos?.alimentacion_diferente],
+                  ["Hora levantarse", datosCompletos?.hora_levanta],
+                  ["Hora dormir", datosCompletos?.hora_duerme],
+                  ["Comidas al día", datosCompletos?.comidas_dia],
+                ].filter(([,v]) => v).map(([k,v])=>(
+                  <div key={k} style={{ display:"flex",justifyContent:"space-between",marginBottom:8,flexWrap:"wrap",gap:4 }}>
+                    <span style={{ color:theme.muted,fontSize:13 }}>{k}</span>
+                    <span style={{ color:theme.text,fontSize:13,fontWeight:600,textAlign:"right",maxWidth:"60%" }}>{v}</span>
+                  </div>
+                ))}
+                {datosCompletos?.resumen_desayuno && (
+                  <div style={{ marginTop:10 }}>
+                    <div style={{ fontSize:11,color:theme.muted,marginBottom:8,fontWeight:700 }}>RESUMEN DIETA TÍPICA</div>
+                    {[
+                      ["🌅 Desayuno", datosCompletos?.resumen_desayuno],
+                      ["🍎 Snack", datosCompletos?.resumen_snack],
+                      ["🍽️ Almuerzo", datosCompletos?.resumen_almuerzo],
+                      ["☕ Once", datosCompletos?.resumen_once],
+                      ["🌙 Cena", datosCompletos?.resumen_cena],
+                    ].filter(([,v]) => v).map(([k,v])=>(
+                      <div key={k} style={{ marginBottom:8, background:theme.surface, borderRadius:8, padding:"8px 10px" }}>
+                        <div style={{ fontSize:11,color:theme.muted,marginBottom:2 }}>{k}</div>
+                        <div style={{ fontSize:13,color:theme.text }}>{v}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </Card>
+            </>
+          ) : (
+            <>
+              <Card>
+                <div style={{ fontSize:12,color:theme.muted,marginBottom:10 }}>DATOS PERSONALES</div>
+                <CampoEditable campo="nombre" label="Nombre completo" formDatos={formDatos} setCampo={setCampo} />
+                <CampoEditable campo="edad" label="Edad" tipo="number" formDatos={formDatos} setCampo={setCampo} />
+                <CampoEditable campo="sexo" label="Sexo" tipo="select" opciones={["Masculino","Femenino","Otro"]} formDatos={formDatos} setCampo={setCampo} />
+                <CampoEditable campo="estatura" label="Estatura (cm)" tipo="number" formDatos={formDatos} setCampo={setCampo} />
+                <CampoEditable campo="peso_actual" label="Peso actual (kg)" tipo="number" formDatos={formDatos} setCampo={setCampo} />
+                <CampoEditable campo="porc_grasa" label="% grasa estimado" tipo="number" formDatos={formDatos} setCampo={setCampo} />
+                <CampoEditable campo="whatsapp" label="WhatsApp" formDatos={formDatos} setCampo={setCampo} />
+                <CampoEditable campo="instagram" label="Instagram" formDatos={formDatos} setCampo={setCampo} />
+                <CampoEditable campo="ocupacion" label="Ocupación" formDatos={formDatos} setCampo={setCampo} />
+                <CampoEditable campo="actividad_laboral" label="Actividad laboral diaria" tipo="textarea" formDatos={formDatos} setCampo={setCampo} />
+                <CampoEditable campo="fecha_inicio_plan" label="Fecha de inicio del plan (opcional)" tipo="date" formDatos={formDatos} setCampo={setCampo} />
+              </Card>
+              <Card>
+                <div style={{ fontSize:12,color:theme.muted,marginBottom:10 }}>ANAMNESIS</div>
+                <CampoEditable campo="objetivo" label="Objetivo principal" tipo="select" opciones={["Bajar grasa","Ganar masa muscular","Recomposición corporal","Mejorar rendimiento deportivo","Mantener peso y mejorar salud"]} formDatos={formDatos} setCampo={setCampo} />
+                <CampoEditable campo="ha_entrenado" label="Ha entrenado antes" tipo="select" opciones={["Sí","No"]} formDatos={formDatos} setCampo={setCampo} />
+                {formDatos?.ha_entrenado === "Sí" && <CampoEditable campo="que_entrenamiento" label="Qué entrenamiento o deporte" formDatos={formDatos} setCampo={setCampo} />}
+                <CampoEditable campo="dias_semana" label="Días de entreno a la semana" tipo="select" opciones={["1 día","2 días","3 días","4 días","5 días","6 días"]} formDatos={formDatos} setCampo={setCampo} />
+                <span style={editLabelStyle}>Horario de entreno</span>
+                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:10 }}>
+                  <input style={{ ...editInputStyle, flex:1 }} type="time" value={formDatos?.horario_entreno ?? ""} onChange={e => setCampo("horario_entreno", e.target.value)} />
+                  <span style={{ color:theme.muted, fontSize:12 }}>y</span>
+                  <input style={{ ...editInputStyle, flex:1 }} type="time" value={formDatos?.horario_entreno_hasta ?? ""} onChange={e => setCampo("horario_entreno_hasta", e.target.value)} />
+                </div>
+                <CampoEditable campo="enfermedad_lesion" label="¿Enfermedad o lesión?" tipo="select" opciones={["Sí","No"]} formDatos={formDatos} setCampo={setCampo} />
+                {formDatos?.enfermedad_lesion === "Sí" && <CampoEditable campo="cual_enfermedad" label="Cuál enfermedad o lesión" formDatos={formDatos} setCampo={setCampo} />}
+                <CampoEditable campo="medicamento" label="¿Toma algún medicamento?" tipo="select" opciones={["Sí","No"]} formDatos={formDatos} setCampo={setCampo} />
+                {formDatos?.medicamento === "Sí" && <CampoEditable campo="cual_medicamento" label="Cuál medicamento" formDatos={formDatos} setCampo={setCampo} />}
+                <CampoEditable campo="sustancia_farmacologica" label="Sustancias farmacológicas" tipo="select" opciones={["Sí","No","Prefiero no responder"]} formDatos={formDatos} setCampo={setCampo} />
+                {formDatos?.sustancia_farmacologica === "Sí" && (<>
+                  <CampoEditable campo="sustancia_cuales" label="Cuáles sustancias" formDatos={formDatos} setCampo={setCampo} />
+                  <CampoEditable campo="sustancia_tiempo" label="Por cuánto tiempo" formDatos={formDatos} setCampo={setCampo} />
+                  <CampoEditable campo="sustancia_hace_cuanto" label="Hace cuánto tiempo" formDatos={formDatos} setCampo={setCampo} />
+                </>)}
+                <CampoEditable campo="consume_suplemento" label="¿Consume algún suplemento actualmente?" tipo="select" opciones={["Sí","No"]} formDatos={formDatos} setCampo={setCampo} />
+                {formDatos?.consume_suplemento === "Sí" && <CampoEditable campo="cual_suplemento" label="Cuál suplemento" formDatos={formDatos} setCampo={setCampo} />}
+              </Card>
+              <Card>
+                <div style={{ fontSize:12,color:theme.muted,marginBottom:10 }}>ALIMENTACIÓN</div>
+                <CampoEditable campo="alimentacion_diferente" label="Alimentación especial" formDatos={formDatos} setCampo={setCampo} />
+                <CampoEditable campo="alergia" label="¿Alergia a algún alimento/medicamento?" tipo="select" opciones={["Sí","No"]} formDatos={formDatos} setCampo={setCampo} />
+                {formDatos?.alergia === "Sí" && <CampoEditable campo="cual_alergia" label="Cuál alergia" formDatos={formDatos} setCampo={setCampo} />}
+                <CampoEditable campo="no_le_gustan" label="Alimentos que no le gustan" formDatos={formDatos} setCampo={setCampo} />
+                <CampoEditable campo="favoritos" label="Alimentos favoritos" formDatos={formDatos} setCampo={setCampo} />
+                <CampoEditable campo="hora_levanta" label="Hora de levantarse" tipo="time" formDatos={formDatos} setCampo={setCampo} />
+                <CampoEditable campo="hora_duerme" label="Hora de dormir" tipo="time" formDatos={formDatos} setCampo={setCampo} />
+                <CampoEditable campo="comidas_dia" label="Comidas al día" tipo="select" opciones={["1","2","3","4","5","6","Más de 6"]} formDatos={formDatos} setCampo={setCampo} />
+                <CampoEditable campo="resumen_desayuno" label="🌅 Desayuno típico" formDatos={formDatos} setCampo={setCampo} />
+                <CampoEditable campo="resumen_snack" label="🍎 Snack típico" formDatos={formDatos} setCampo={setCampo} />
+                <CampoEditable campo="resumen_almuerzo" label="🍽️ Almuerzo típico" formDatos={formDatos} setCampo={setCampo} />
+                <CampoEditable campo="resumen_once" label="☕ Once típica" formDatos={formDatos} setCampo={setCampo} />
+                <CampoEditable campo="resumen_cena" label="🌙 Cena típica" formDatos={formDatos} setCampo={setCampo} />
+              </Card>
+              <Card>
+                <div style={{ fontSize:12,color:theme.muted,marginBottom:10 }}>📸 FOTOS INICIALES (ANAMNESIS)</div>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:6 }}>
+                  {[
+                    ["frente","Frente","foto_frente"],
+                    ["espalda","Espalda","foto_espalda"],
+                    ["perfDer","P. Der","foto_perf_der"],
+                    ["perfIzq","P. Izq","foto_perf_izq"],
+                  ].map(([key,label,dbCol]) => (
+                    <FotoEditable
+                      key={key}
+                      userId={alumno?.id}
+                      campoKey={key}
+                      label={label}
+                      urlActual={datosCompletos?.[dbCol]}
+                      onSubida={(url) => setDatosCompletos(prev => ({ ...prev, [dbCol]: url }))}
+                    />
+                  ))}
+                </div>
+              </Card>
+            </>
+          )}
         </div>)}
         {tab==="Check-ins"&&(<CheckinsCoach alumno={alumno}/>)}
-        {tab==="Diario"&&(<DiarioCoach alumno={alumno}/>)}
+        {tab==="Diario"&&(<DiarioCoach alumno={{ ...alumno, ...(datosCompletos||{}) }}/>)}
 {tab==="Mensajes"&&(<MensajesCoach alumno={alumno}/>)}
-        {tab==="Rutina"&&(<RutinaCoach alumno={alumno}/>)}
+        {tab==="Rutina"&&(<RutinaCoach alumno={{ ...alumno, ...(datosCompletos||{}) }}/>)}
         {tab==="Dieta"&&(<DietaCoach alumno={alumno}/>)}
         {tab==="Pagos"&&(<PagosCoach alumno={alumno}/>)}
         {tab==="Progreso"&&(
@@ -4103,8 +4678,18 @@ export default function App() {
   // "revisa tu correo" o en el login.
   useEffect(() => {
     let activo = true;
+    // Solo se auto-enruta UNA vez por carga de la app (al restaurar sesión al
+    // abrir, o al confirmar el correo). Sin esto, cada vez que el celular
+    // vuelve del segundo plano (cambiás de app y volvés), Supabase revalida
+    // el token y puede volver a emitir "SIGNED_IN" — y sin esta bandera eso
+    // mandaba a la persona de vuelta al Inicio aunque estuviera navegando
+    // en otra pantalla. El login manual y el botón "Salir" ya navegan por
+    // su cuenta (ver LoginScreen y el botón Salir del coach), así que no
+    // dependen de este listener y no se ven afectados por la bandera.
+    let yaEnrutado = false;
     const enrutarSesion = async (session) => {
-      if (!session?.user || !activo) return;
+      if (!session?.user || !activo || yaEnrutado) return;
+      yaEnrutado = true;
       if (session.user.email === COACH_EMAIL) {
         setScreen("coach_panel");
         return;
