@@ -553,20 +553,25 @@ async function cargarCiclosAlumno(usuarioId, fechaInicioPlanOverride) {
 function normalizarNombreEjercicio(nombre) {
   return (nombre || "").toLowerCase().trim().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ");
 }
-// "mapa" es un objeto { nombreNormalizado: url } cargado por cada pantalla
-// que lo necesita (ver cargarMapaImagenesEjercicios), y pasado como prop.
-function buscarImagenEjercicio(nombre, mapa) {
+// "mapa" es un objeto { nombreNormalizado: { url, resena } } cargado por
+// cada pantalla que lo necesita (ver cargarMapaImagenesEjercicios), y
+// pasado como prop.
+function buscarInfoEjercicio(nombre, mapa) {
   return (mapa && mapa[normalizarNombreEjercicio(nombre)]) || null;
 }
+function buscarImagenEjercicio(nombre, mapa) {
+  return buscarInfoEjercicio(nombre, mapa)?.url || null;
+}
 async function cargarMapaImagenesEjercicios() {
-  const { data } = await supabase.from("ejercicio_imagenes").select("nombre_normalizado, url");
+  const { data } = await supabase.from("ejercicio_imagenes").select("nombre_normalizado, url, resena");
   const mapa = {};
-  (data || []).forEach(r => { mapa[r.nombre_normalizado] = r.url; });
+  (data || []).forEach(r => { mapa[r.nombre_normalizado] = { url: r.url, resena: r.resena || "" }; });
   return mapa;
 }
 // Sube (o reemplaza) la imagen/animación de referencia de un ejercicio, y
 // guarda la referencia en "ejercicio_imagenes" para que quede acoplada a
 // ese nombre en cualquier rutina, presente o futura, que use ese ejercicio.
+// No toca la reseña ya guardada (el upsert solo incluye estas columnas).
 async function subirImagenEjercicio(nombreOriginal, file) {
   if (!file || !nombreOriginal?.trim()) return null;
   const normalizado = normalizarNombreEjercicio(nombreOriginal);
@@ -580,12 +585,61 @@ async function subirImagenEjercicio(nombreOriginal, file) {
   if (errDb) { alert("Se subió la imagen pero no se pudo guardar la referencia: " + errDb.message); return null; }
   return { normalizado, url };
 }
+// Guarda (o actualiza) la reseña de técnica de un ejercicio, ligada al mismo
+// nombre normalizado que la imagen/GIF. No toca la imagen ya guardada.
+async function guardarResenaEjercicio(nombreOriginal, resena) {
+  if (!nombreOriginal?.trim()) return null;
+  const normalizado = normalizarNombreEjercicio(nombreOriginal);
+  if (!normalizado) return null;
+  const { error } = await supabase.from("ejercicio_imagenes").upsert({ nombre_normalizado: normalizado, nombre_original: nombreOriginal.trim(), resena }, { onConflict: "nombre_normalizado" });
+  if (error) { alert("No se pudo guardar la reseña: " + error.message); return null; }
+  return { normalizado, resena };
+}
 // Miniatura de referencia de un ejercicio/movimiento de calentamiento. No
-// renderiza nada si todavía no hay una imagen cargada para ese nombre.
+// renderiza nada si todavía no hay una imagen cargada para ese nombre. Al
+// tocarla, se agranda y muestra la reseña de técnica (si el coach la cargó).
 const ImagenReferenciaEjercicio = ({ nombre, mapa, size = 40 }) => {
-  const url = buscarImagenEjercicio(nombre, mapa);
-  if (!url) return null;
-  return <img src={url} alt={nombre} style={{ width:size, height:size, minWidth:size, borderRadius:8, objectFit:"cover", border:`1px solid ${theme.border}`, flexShrink:0 }} />;
+  const [abierto, setAbierto] = useState(false);
+  const info = buscarInfoEjercicio(nombre, mapa);
+
+  // Mientras el modal está abierto, se agrega una entrada al historial del
+  // navegador. Así el botón "atrás" del teléfono/navegador cierra el modal
+  // en vez de salir de la pantalla de la rutina.
+  useEffect(() => {
+    if (!abierto) return;
+    window.history.pushState({ imagenEjercicio: true }, "");
+    const onPop = () => setAbierto(false);
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [abierto]);
+
+  const cerrar = () => {
+    // Retrocede la entrada de historial que se agregó al abrir; el evento
+    // "popstate" es quien realmente pone abierto en false (ver arriba), así
+    // el botón atrás y el botón "✕"/tocar afuera quedan sincronizados.
+    window.history.back();
+  };
+
+  if (!info?.url) return null;
+  return (
+    <>
+      <img src={info.url} alt={nombre} onClick={() => setAbierto(true)}
+        style={{ width:size, height:size, minWidth:size, borderRadius:8, objectFit:"cover", border:`1px solid ${theme.border}`, flexShrink:0, cursor:"pointer" }} />
+      {abierto && (
+        <div onClick={cerrar}
+          style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.88)", zIndex:2500, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:24, cursor:"pointer" }}>
+          <button onClick={e => { e.stopPropagation(); cerrar(); }}
+            style={{ position:"absolute", top:18, right:18, width:36, height:36, borderRadius:"50%", background:theme.surface, border:`1px solid ${theme.border}`, color:theme.text, fontSize:16, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" }}>✕</button>
+          <img src={info.url} alt={nombre} style={{ maxWidth:"90%", maxHeight:"50%", borderRadius:12, border:`1px solid ${theme.border}`, marginBottom:16, objectFit:"contain" }} />
+          <div style={{ fontSize:15, fontWeight:800, color:theme.text, marginBottom:8, textAlign:"center" }}>{nombre}</div>
+          <div style={{ fontSize:13, color:theme.muted, maxWidth:420, textAlign:"center", lineHeight:1.6, cursor:"default" }} onClick={e => e.stopPropagation()}>
+            {info.resena ? info.resena : "Sin reseña de técnica cargada todavía."}
+          </div>
+          <div style={{ fontSize:11, color:theme.accentLight, marginTop:18 }}>Toca afuera, la ✕, o el botón atrás para cerrar</div>
+        </div>
+      )}
+    </>
+  );
 };
 // Botón para que el coach suba/reemplace la imagen de referencia de un
 // ejercicio directamente desde el armador de rutinas, sin salir de la app.
@@ -604,6 +658,45 @@ const BotonSubirImagenEjercicio = ({ nombre, onSubida }) => {
       {subiendo ? "Subiendo..." : "📎 Imagen"}
       <input type="file" accept="image/*" style={{ display:"none" }} disabled={subiendo} onChange={e => handleChange(e.target.files[0])} />
     </label>
+  );
+};
+// Cuadro de texto para que el coach escriba/edite la reseña de técnica de un
+// ejercicio, ligada al mismo nombre que la imagen (se guarda al tocar
+// "Guardar reseña" y se reutiliza en cualquier rutina que use ese nombre).
+const EditorResenaEjercicio = ({ nombre, mapa, onGuardado }) => {
+  const info = buscarInfoEjercicio(nombre, mapa);
+  const [texto, setTexto] = useState(info?.resena || "");
+  const [guardando, setGuardando] = useState(false);
+  const [guardado, setGuardado] = useState(false);
+  useEffect(() => { setTexto(info?.resena || ""); }, [info?.resena]);
+  const guardar = async () => {
+    if (!nombre?.trim()) { alert("Primero escribe el nombre del ejercicio."); return; }
+    if (texto.trim() === (info?.resena || "")) return; // sin cambios, nada que guardar
+    setGuardando(true);
+    const res = await guardarResenaEjercicio(nombre, texto.trim());
+    setGuardando(false);
+    if (res) {
+      onGuardado?.(res);
+      setGuardado(true);
+      setTimeout(() => setGuardado(false), 2500);
+    }
+  };
+  return (
+    <div style={{ marginTop:6, flex:1, minWidth:160 }}>
+      {/* Se guarda sola al salir del cuadro (onBlur), y también con el botón
+          por si prefieres tocarlo explícitamente -- no depende de "Guardar
+          Rutina" de más abajo, que no toca la reseña. */}
+      <textarea value={texto} onChange={e => setTexto(e.target.value)} onBlur={guardar}
+        placeholder="Reseña de cómo realizar el ejercicio (se guarda sola al salir del cuadro)"
+        style={{ background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:6, padding:"6px 8px", color:theme.text, fontSize:11, outline:"none", width:"100%", boxSizing:"border-box", minHeight:44, resize:"vertical", fontFamily:"inherit" }} />
+      <div style={{ marginTop:4, display:"flex", alignItems:"center", gap:8 }}>
+        <button onClick={guardar} disabled={guardando}
+          style={{ background:"transparent", border:`1px solid ${theme.accent}66`, borderRadius:6, padding:"3px 8px", color:theme.accentLight, fontSize:10, cursor:"pointer" }}>
+          {guardando ? "Guardando..." : "Guardar reseña"}
+        </button>
+        {guardado && <span style={{ fontSize:10, color:theme.success, fontWeight:700 }}>✓ Guardada</span>}
+      </div>
+    </div>
   );
 };
 const NavBar = ({ active, onNav, mensajesNoLeidos = 0 }) => {
@@ -1399,8 +1492,49 @@ function RutinaScreen({ onNav }) {
   const [completado, setCompletado] = useState(false);
   const [verCalentamiento, setVerCalentamiento] = useState(false);
   const [mapaImagenes, setMapaImagenes] = useState({});
+  const [userId, setUserId] = useState(null);
+  const [pasosHoy, setPasosHoy] = useState("");
+  const [pasosGuardado, setPasosGuardado] = useState(false);
+  const [guardandoPasos, setGuardandoPasos] = useState(false);
+  const [cardioRegistros, setCardioRegistros] = useState({});
+  const hoyStrRutina = fechaOperativaStr();
 
   useEffect(() => { cargarMapaImagenesEjercicios().then(setMapaImagenes); }, []);
+
+  useEffect(() => {
+    if (!userId) return;
+    supabase.from("pasos_registros").select("pasos").eq("usuario_id", userId).eq("fecha", hoyStrRutina).maybeSingle()
+      .then(({ data }) => setPasosHoy(data?.pasos != null ? String(data.pasos) : ""));
+    supabase.from("cardio_registros").select("cardio_index, duracion_real, distancia_real, completado").eq("usuario_id", userId).eq("fecha", hoyStrRutina)
+      .then(({ data }) => {
+        const mapa = {};
+        (data || []).forEach(r => { mapa[r.cardio_index] = { duracion_real: r.duracion_real, distancia_real: r.distancia_real, completado: r.completado }; });
+        setCardioRegistros(mapa);
+      });
+  }, [userId, hoyStrRutina]);
+
+  const guardarPasosHoy = async () => {
+    if (!userId) return;
+    setGuardandoPasos(true);
+    const { error } = await supabase.from("pasos_registros").upsert({ usuario_id: userId, fecha: hoyStrRutina, pasos: pasosHoy ? parseInt(pasosHoy) : null }, { onConflict: "usuario_id,fecha" });
+    setGuardandoPasos(false);
+    if (error) { alert("No se pudieron guardar los pasos: " + error.message); return; }
+    setPasosGuardado(true);
+    setTimeout(() => setPasosGuardado(false), 2500);
+  };
+
+  const marcarCardio = async (idx, item, patch) => {
+    if (!userId) return;
+    const actual = { ...(cardioRegistros[idx] || {}), ...patch };
+    setCardioRegistros(prev => ({ ...prev, [idx]: actual }));
+    const { error } = await supabase.from("cardio_registros").upsert({
+      usuario_id: userId, fecha: hoyStrRutina, cardio_index: idx, tipo: item.tipo,
+      duracion_real: actual.duracion_real != null && actual.duracion_real !== "" ? parseFloat(actual.duracion_real) : null,
+      distancia_real: actual.distancia_real != null && actual.distancia_real !== "" ? parseFloat(actual.distancia_real) : null,
+      completado: !!actual.completado,
+    }, { onConflict: "usuario_id,fecha,cardio_index" });
+    if (error) alert("No se pudo guardar el cardio: " + error.message);
+  };
   const [bloqueado, setBloqueado] = useState(false);
   const [seriesHechas, setSeriesHechas] = useState({});
   const [diarioPaso, setDiarioPaso] = useState("form");
@@ -1436,6 +1570,7 @@ function RutinaScreen({ onNav }) {
     const cargar = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
+        setUserId(user.id);
         const { data: pagoData } = await supabase.from("pagos").select("estado").eq("usuario_id", user.id).order("created_at", { ascending: false }).limit(1);
         if (pagoData && pagoData.length > 0 && pagoData[0].estado === "bloqueado") {
           setBloqueado(true);
@@ -1539,9 +1674,9 @@ function RutinaScreen({ onNav }) {
               {rutinaActiva.calentamiento_general.map((m, i) => (
                 <div key={i} style={{ padding: "8px 4px", display:"flex", alignItems:"center", gap:10, borderBottom: i < rutinaActiva.calentamiento_general.length - 1 ? `1px solid ${theme.border}` : "none" }}>
                   <ImagenReferenciaEjercicio nombre={m.nombre} mapa={mapaImagenes} size={56} />
-                  <div>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: theme.text }}>{m.nombre}</div>
-                    <div style={{ fontSize: 11, color: theme.muted }}>{m.detalle}</div>
+                  <div style={{ flex:1, minWidth:0, borderLeft:`2px solid ${theme.accent}88`, paddingLeft:9 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: theme.text, textTransform:"uppercase", letterSpacing:0.4, lineHeight:1.3, display:"-webkit-box", WebkitLineClamp:2, WebkitBoxOrient:"vertical", overflow:"hidden" }}>{m.nombre}</div>
+                    <div style={{ fontSize: 11, color: theme.muted, marginTop:2 }}>{m.detalle}</div>
                   </div>
                 </div>
               ))}
@@ -1550,16 +1685,68 @@ function RutinaScreen({ onNav }) {
         </Card>
       )}
 
+      {/* Cardio y pasos del día */}
+      {(rutinaActiva.meta_pasos || (Array.isArray(rutinaActiva.cardio) && rutinaActiva.cardio.length > 0)) && (
+        <Card style={{ marginBottom: 14, border: `1px solid ${theme.accent}44` }}>
+          <div style={{ fontSize: 11, fontWeight: 800, color: theme.accentLight, letterSpacing: 0.5, marginBottom: 12 }}>🏃 CARDIO Y PASOS</div>
+
+          {rutinaActiva.meta_pasos ? (
+            <div style={{ marginBottom: Array.isArray(rutinaActiva.cardio) && rutinaActiva.cardio.length > 0 ? 14 : 0 }}>
+              <div style={{ fontSize: 12, color: theme.muted, marginBottom: 6 }}>Meta de hoy: {rutinaActiva.meta_pasos.toLocaleString("es-CL")} pasos</div>
+              <div style={{ display:"flex", gap:8 }}>
+                <input type="number" value={pasosHoy} onChange={e => setPasosHoy(e.target.value)} placeholder="Pasos que diste hoy"
+                  style={{ flex:1, background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:8, padding:"9px 11px", color:theme.text, fontSize:13, outline:"none" }} />
+                <button onClick={guardarPasosHoy} disabled={guardandoPasos}
+                  style={{ background:theme.accent, border:"none", borderRadius:8, padding:"9px 14px", color:"#fff", fontSize:12, fontWeight:700, cursor:"pointer", whiteSpace:"nowrap" }}>
+                  {guardandoPasos ? "Guardando..." : "Guardar"}
+                </button>
+              </div>
+              {pasosGuardado && <div style={{ fontSize:11, color:theme.success, marginTop:6, fontWeight:700 }}>✓ Pasos guardados</div>}
+            </div>
+          ) : null}
+
+          {Array.isArray(rutinaActiva.cardio) && rutinaActiva.cardio.map((c, i) => {
+            const reg = cardioRegistros[i] || {};
+            return (
+              <div key={i} style={{ background:theme.surface, borderRadius:8, padding:10, marginTop: i === 0 ? 0 : 8 }}>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
+                  <div style={{ fontSize:13, fontWeight:700, color:theme.text }}>{c.tipo || "Cardio"}</div>
+                  <button onClick={() => marcarCardio(i, c, { completado: !reg.completado, duracion_real: reg.duracion_real ?? c.duracionMin, distancia_real: reg.distancia_real ?? c.distanciaKm })}
+                    style={{ background: reg.completado ? `${theme.success}22` : "transparent", border:`1px solid ${reg.completado ? theme.success : theme.border}`, borderRadius:6, padding:"4px 10px", color: reg.completado ? theme.success : theme.muted, fontSize:11, cursor:"pointer", fontWeight:700 }}>
+                    {reg.completado ? "✅ Hecho" : "Marcar hecho"}
+                  </button>
+                </div>
+                <div style={{ fontSize:11, color:theme.muted, marginBottom:8 }}>
+                  Planificado: {c.duracionMin ? `${c.duracionMin} min` : ""}{c.duracionMin && c.distanciaKm ? " · " : ""}{c.distanciaKm ? `${c.distanciaKm} km` : ""}{c.notas ? ` · ${c.notas}` : ""}
+                </div>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+                  <div>
+                    <div style={{ fontSize:10, color:theme.muted, marginBottom:2 }}>Duración real (min)</div>
+                    <input type="number" value={reg.duracion_real ?? ""} onChange={e => marcarCardio(i, c, { duracion_real: e.target.value })}
+                      style={{ width:"100%", boxSizing:"border-box", background:theme.card, border:`1px solid ${theme.border}`, borderRadius:6, padding:"6px 8px", color:theme.text, fontSize:12, outline:"none" }} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize:10, color:theme.muted, marginBottom:2 }}>Distancia real (km)</div>
+                    <input type="number" value={reg.distancia_real ?? ""} onChange={e => marcarCardio(i, c, { distancia_real: e.target.value })}
+                      style={{ width:"100%", boxSizing:"border-box", background:theme.card, border:`1px solid ${theme.border}`, borderRadius:6, padding:"6px 8px", color:theme.text, fontSize:12, outline:"none" }} />
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </Card>
+      )}
+
       {/* Ejercicios */}
       {ejercicios.map((ej) => {
         const series = Array.isArray(ej.series) ? ej.series : [];
         return (
           <Card key={ej.id} style={{ marginBottom: 14 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
-              <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6, gap:10 }}>
+              <div style={{ display:"flex", alignItems:"center", gap:10, flex:1, minWidth:0 }}>
                 <ImagenReferenciaEjercicio nombre={ej.nombre} mapa={mapaImagenes} size={64} />
-                <div>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: theme.text, marginBottom: 4 }}>{ej.nombre}</div>
+                <div style={{ flex:1, minWidth:0, borderLeft:`3px solid ${theme.accent}`, paddingLeft:10 }}>
+                  <div style={{ fontSize: 14, fontWeight: 800, color: theme.text, marginBottom: 4, textTransform:"uppercase", letterSpacing:0.4, lineHeight:1.3, display:"-webkit-box", WebkitLineClamp:2, WebkitBoxOrient:"vertical", overflow:"hidden" }}>{ej.nombre}</div>
                   <div style={{ fontSize: 11, color: theme.muted }}>⏱ Descanso: {ej.descanso_desde && ej.descanso_hasta ? `${ej.descanso_desde}-${ej.descanso_hasta}s` : `${ej.descanso}s`}</div>
                 </div>
               </div>
@@ -3566,6 +3753,8 @@ function RutinaCoach({ alumno }) {
   const [nombreRutina, setNombreRutina] = useState("");
   const [diaRutina, setDiaRutina] = useState("");
   const [calentamientoGeneral, setCalentamientoGeneral] = useState([]);
+  const [cardio, setCardio] = useState([]);
+  const [metaPasos, setMetaPasos] = useState("");
   const [ejercicios, setEjercicios] = useState([
     { nombre: "", videoUrl: "", descansoDesde: 60, descansoHasta: 90,
       seriesCalentamiento: [],
@@ -3578,10 +3767,18 @@ function RutinaCoach({ alumno }) {
   const [fechaInicioPlan, setFechaInicioPlan] = useState("");
   const [guardandoFechaInicio, setGuardandoFechaInicio] = useState(false);
   const [mapaImagenes, setMapaImagenes] = useState({});
+  const [rutinaExpandida, setRutinaExpandida] = useState({});
+  const [plantillas, setPlantillas] = useState([]);
+  const [mostrarPlantillas, setMostrarPlantillas] = useState(false);
+  const [modoPlantilla, setModoPlantilla] = useState(false);
+  const [guardarPlantillaAbierto, setGuardarPlantillaAbierto] = useState(false);
+  const [nombrePlantillaNueva, setNombrePlantillaNueva] = useState("");
+  const [guardandoPlantilla, setGuardandoPlantilla] = useState(false);
 
   useEffect(() => {
     cargarRutinas();
     cargarNombresEjercicios();
+    cargarPlantillas();
     setFechaInicioPlan(alumno?.fecha_inicio_plan || "");
   }, [alumno]);
 
@@ -3604,6 +3801,57 @@ function RutinaCoach({ alumno }) {
       const unicos = [...new Set(data.map(e => e.nombre).filter(Boolean))].sort();
       setNombresEjerciciosUsados(unicos);
     }
+  };
+
+  // Plantillas de rutina: no son de ningún alumno en particular, se
+  // reutilizan como punto de partida al armar la rutina de cualquiera.
+  const cargarPlantillas = async () => {
+    const { data } = await supabase.from("rutina_plantillas").select("*").order("created_at", { ascending: false });
+    if (data) setPlantillas(data);
+  };
+
+  const usarPlantilla = (p) => {
+    setNombreRutina(p.nombre || "");
+    setDiaRutina(p.dia || "");
+    setCalentamientoGeneral(Array.isArray(p.calentamiento_general) ? p.calentamiento_general : []);
+    setCardio(Array.isArray(p.cardio) ? p.cardio : []);
+    setMetaPasos(p.meta_pasos || "");
+    const ejerciciosPlantilla = Array.isArray(p.ejercicios) && p.ejercicios.length > 0
+      ? p.ejercicios.map(ej => ({ ...ej, _dbId: undefined }))
+      : [{ nombre: "", videoUrl: "", descansoDesde: 60, descansoHasta: 90, seriesCalentamiento: [], seriesAproximacion: [], seriesEfectivas: [{ reps: "10", rir: 2 }] }];
+    setEjercicios(ejerciciosPlantilla);
+    setModoPlantilla(true);
+    setModoDuplicar(false);
+    setEditandoRutinaId(null);
+    setMostrarPlantillas(false);
+    setCreando(true);
+    setTimeout(() => formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
+  };
+
+  const guardarComoPlantilla = async () => {
+    if (!nombrePlantillaNueva.trim()) { alert("Ponle un nombre a la plantilla."); return; }
+    setGuardandoPlantilla(true);
+    const ejerciciosLimpios = ejercicios.filter(ej => ej.nombre).map(ej => ({ ...ej, _dbId: undefined }));
+    const { error } = await supabase.from("rutina_plantillas").insert({
+      nombre: nombrePlantillaNueva.trim(),
+      dia: diaRutina,
+      calentamiento_general: calentamientoGeneral,
+      cardio: cardio,
+      meta_pasos: metaPasos ? parseInt(metaPasos) : null,
+      ejercicios: ejerciciosLimpios,
+    });
+    setGuardandoPlantilla(false);
+    if (error) { alert("Error guardando la plantilla: " + error.message); return; }
+    setGuardarPlantillaAbierto(false);
+    setNombrePlantillaNueva("");
+    cargarPlantillas();
+  };
+
+  const eliminarPlantilla = async (p) => {
+    if (!confirm(`¿Eliminar la plantilla "${p.nombre}"? Esto no afecta ninguna rutina ya asignada a alumnos.`)) return;
+    const { error } = await supabase.from("rutina_plantillas").delete().eq("id", p.id);
+    if (error) { alert("Error eliminando la plantilla: " + error.message); return; }
+    cargarPlantillas();
   };
 
   const cargarRutinas = async () => {
@@ -3676,7 +3924,7 @@ function RutinaCoach({ alumno }) {
       // Edición real: actualiza la rutina y sus ejercicios existentes, sin perder el historial de cargas
       const { error: errRutina } = await supabase
         .from("rutinas")
-        .update({ nombre: nombreRutina, dia: diaRutina, calentamiento_general: calentamientoGeneral })
+        .update({ nombre: nombreRutina, dia: diaRutina, calentamiento_general: calentamientoGeneral, cardio: cardio, meta_pasos: metaPasos ? parseInt(metaPasos) : null })
         .eq("id", editandoRutinaId);
       if (errRutina) { alert("Error actualizando rutina: " + errRutina.message); setGuardando(false); return; }
 
@@ -3711,7 +3959,7 @@ function RutinaCoach({ alumno }) {
       // Rutina nueva o duplicada: se crea desde cero
       const { data: rutina, error: errRutina } = await supabase
         .from("rutinas")
-        .insert({ usuario_id: alumno.id, nombre: nombreRutina, dia: diaRutina, calentamiento_general: calentamientoGeneral })
+        .insert({ usuario_id: alumno.id, nombre: nombreRutina, dia: diaRutina, calentamiento_general: calentamientoGeneral, cardio: cardio, meta_pasos: metaPasos ? parseInt(metaPasos) : null })
         .select().single();
       if (errRutina) { alert("Error creando rutina: " + errRutina.message); setGuardando(false); return; }
 
@@ -3743,10 +3991,15 @@ function RutinaCoach({ alumno }) {
     setExito(true);
     setCreando(false);
     setModoDuplicar(false);
+    setModoPlantilla(false);
+    setGuardarPlantillaAbierto(false);
+    setNombrePlantillaNueva("");
     setEditandoRutinaId(null);
     setNombreRutina("");
     setDiaRutina("");
     setCalentamientoGeneral([]);
+    setCardio([]);
+    setMetaPasos("");
     setEjercicios([{ nombre: "", videoUrl: "", descansoDesde: 60, descansoHasta: 90,
       seriesCalentamiento: [],
       seriesAproximacion: [],
@@ -3760,6 +4013,8 @@ function RutinaCoach({ alumno }) {
     setNombreRutina(modo === "editar" ? rutina.nombre : rutina.nombre + " (copia)");
     setDiaRutina(rutina.dia || "");
     setCalentamientoGeneral(Array.isArray(rutina.calentamiento_general) ? rutina.calentamiento_general : []);
+    setCardio(Array.isArray(rutina.cardio) ? rutina.cardio : []);
+    setMetaPasos(rutina.meta_pasos || "");
     const ejerciciosCargados = (rutina.ejercicios || []).slice().sort((a, b) => (a.orden || 0) - (b.orden || 0)).map(ej => {
       const series = Array.isArray(ej.series) ? ej.series : [];
       const seriesCalentamiento = series.filter(s => s.tipo === "calentamiento");
@@ -3783,6 +4038,7 @@ function RutinaCoach({ alumno }) {
         seriesEfectivas: [{ reps: "10", rir: 2 }] }
     ]);
     setModoDuplicar(modo === "duplicar");
+    setModoPlantilla(false);
     setEditandoRutinaId(modo === "editar" ? rutina.id : null);
     setCreando(true);
     setTimeout(() => formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
@@ -3821,12 +4077,12 @@ function RutinaCoach({ alumno }) {
           <div style={{ fontSize:12, color:theme.muted, marginBottom:10 }}>RUTINAS ASIGNADAS</div>
           {rutinas.map(r => (
             <Card key={r.id} style={{ marginBottom:10 }}>
-              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
-                <div>
-                  <div style={{ fontSize:14, fontWeight:700, color:theme.text }}>💪 {r.nombre}</div>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:8, gap:10 }}>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:14, fontWeight:800, color:theme.text, textTransform:"uppercase", letterSpacing:0.4, lineHeight:1.3, display:"-webkit-box", WebkitLineClamp:2, WebkitBoxOrient:"vertical", overflow:"hidden" }}>💪 {r.nombre}</div>
                   {r.created_at && <div style={{ fontSize:10, color:theme.muted, marginTop:2 }}>Creada: {new Date(r.created_at).toLocaleDateString("es-CL", { day:"2-digit", month:"short", year:"numeric" })}</div>}
                 </div>
-                <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+                <div style={{ display:"flex", gap:6, alignItems:"center", flexShrink:0, flexWrap:"wrap", justifyContent:"flex-end" }}>
                   <Tag>{r.dia || "Sin día"}</Tag>
                   <button onClick={() => cargarParaEditar(r, "editar")} style={{ background:`${theme.success}22`, border:`1px solid ${theme.success}44`, borderRadius:6, padding:"4px 8px", color:theme.success, fontSize:11, cursor:"pointer", fontWeight:700 }}>✏️ Editar</button>
                   <button onClick={() => cargarParaEditar(r, "duplicar")} style={{ background:`${theme.accent}22`, border:`1px solid ${theme.accent}44`, borderRadius:6, padding:"4px 8px", color:theme.accentLight, fontSize:11, cursor:"pointer", fontWeight:700 }}>⧉ Duplicar</button>
@@ -3845,8 +4101,11 @@ function RutinaCoach({ alumno }) {
                   }} style={{ background:`${theme.danger}22`, border:`1px solid ${theme.danger}44`, borderRadius:6, padding:"4px 8px", color:theme.danger, fontSize:11, cursor:"pointer", fontWeight:700 }}>× Eliminar</button>
                 </div>
               </div>
-              <div style={{ fontSize:12, color:theme.muted }}>{r.ejercicios?.length || 0} ejercicios</div>
-              {r.ejercicios?.map((ej, i) => (
+              <button onClick={() => setRutinaExpandida(prev => ({ ...prev, [r.id]: !prev[r.id] }))}
+                style={{ background:"transparent", border:"none", padding:0, color:theme.accentLight, fontSize:12, cursor:"pointer", display:"flex", alignItems:"center", gap:4 }}>
+                {rutinaExpandida[r.id] ? "▲" : "▼"} {r.ejercicios?.length || 0} ejercicios
+              </button>
+              {rutinaExpandida[r.id] && r.ejercicios?.map((ej, i) => (
                 <div key={i} style={{ marginTop: 6 }}>
                   <div style={{ fontSize:12, color:theme.muted, paddingLeft:8 }}>· {ej.nombre}</div>
                   {cargas[ej.id] && (
@@ -3875,17 +4134,43 @@ function RutinaCoach({ alumno }) {
         </div>
       ) : null}
 
-      {/* Botón crear */}
+      {/* Botón crear / usar plantilla */}
       {!creando ? (
-        <Btn onClick={() => { setModoDuplicar(false); setEditandoRutinaId(null); setCalentamientoGeneral([]); setCreando(true); }}>+ Crear Nueva Rutina</Btn>
-      ) : (
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+          <Btn onClick={() => { setModoDuplicar(false); setModoPlantilla(false); setEditandoRutinaId(null); setCalentamientoGeneral([]); setCardio([]); setMetaPasos(""); setCreando(true); }}>+ Crear Nueva Rutina</Btn>
+          <Btn variant="ghost" onClick={() => setMostrarPlantillas(!mostrarPlantillas)}>📋 Usar plantilla {mostrarPlantillas ? "▲" : "▼"}</Btn>
+        </div>
+      ) : null}
+
+      {!creando && mostrarPlantillas && (
+        <Card style={{ marginTop:10 }}>
+          <div style={{ fontSize:12, color:theme.muted, marginBottom:10 }}>PLANTILLAS GUARDADAS</div>
+          {plantillas.length === 0 ? (
+            <div style={{ fontSize:13, color:theme.muted }}>Todavía no guardaste ninguna plantilla. Arma una rutina y usa "💾 Guardar como plantilla" para reutilizarla con otros alumnos.</div>
+          ) : plantillas.map(p => (
+            <div key={p.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"8px 0", borderBottom:`1px solid ${theme.border}` }}>
+              <div>
+                <div style={{ fontSize:13, fontWeight:700, color:theme.text }}>{p.nombre}</div>
+                <div style={{ fontSize:11, color:theme.muted }}>{p.dia || "Sin día"} · {(p.ejercicios || []).length} ejercicios</div>
+              </div>
+              <div style={{ display:"flex", gap:6 }}>
+                <button onClick={() => usarPlantilla(p)} style={{ background:`${theme.accent}22`, border:`1px solid ${theme.accent}44`, borderRadius:6, padding:"4px 8px", color:theme.accentLight, fontSize:11, cursor:"pointer", fontWeight:700 }}>Usar</button>
+                <button onClick={() => eliminarPlantilla(p)} style={{ background:`${theme.danger}22`, border:`1px solid ${theme.danger}44`, borderRadius:6, padding:"4px 8px", color:theme.danger, fontSize:11, cursor:"pointer", fontWeight:700 }}>× Eliminar</button>
+              </div>
+            </div>
+          ))}
+        </Card>
+      )}
+
+      {creando && (
         <div ref={formRef}>
         <Card>
           <div style={{ fontSize:13, fontWeight:800, color:theme.accent, marginBottom:4 }}>
-            {editandoRutinaId ? "✏️ EDITANDO RUTINA" : modoDuplicar ? "⧉ DUPLICANDO RUTINA" : "NUEVA RUTINA"}
+            {editandoRutinaId ? "✏️ EDITANDO RUTINA" : modoPlantilla ? "🗂️ DESDE PLANTILLA" : modoDuplicar ? "⧉ DUPLICANDO RUTINA" : "NUEVA RUTINA"}
           </div>
           {editandoRutinaId && <div style={{ fontSize:11, color:theme.muted, marginBottom:10 }}>Estás editando esta rutina directamente. Los cambios se guardan sobre la misma rutina y se conserva el historial de cargas ya registrado.</div>}
           {modoDuplicar && <div style={{ fontSize:11, color:theme.muted, marginBottom:10 }}>Ajustá lo que necesites (nombre, series, pesos, ejercicios) y guardá. Se creará como una rutina nueva; la original no se modifica.</div>}
+          {modoPlantilla && <div style={{ fontSize:11, color:theme.muted, marginBottom:10 }}>Cargada desde una plantilla. Ajusta lo que necesites para este alumno (ejercicios, series, pesos) y guarda -- se crea como una rutina nueva; la plantilla no se modifica.</div>}
 
           <div style={{ marginBottom:10 }}>
             <div style={{ fontSize:11, color:theme.muted, marginBottom:4 }}>Nombre de la rutina</div>
@@ -3918,13 +4203,45 @@ function RutinaCoach({ alumno }) {
                   <input style={inputStyle} placeholder="Detalle" value={m.detalle} onChange={e => { const c=[...calentamientoGeneral]; c[i]={...c[i], detalle:e.target.value}; setCalentamientoGeneral(c); }} />
                   <span onClick={() => setCalentamientoGeneral(calentamientoGeneral.filter((_,idx)=>idx!==i))} style={{ cursor:"pointer", color:theme.danger, fontSize:14, textAlign:"center" }}>×</span>
                 </div>
-                <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                <div style={{ display:"flex", alignItems:"flex-start", gap:10, flexWrap:"wrap" }}>
                   <ImagenReferenciaEjercicio nombre={m.nombre} mapa={mapaImagenes} size={64} />
-                  <BotonSubirImagenEjercicio nombre={m.nombre} onSubida={({ normalizado, url }) => setMapaImagenes(prev => ({ ...prev, [normalizado]: url }))} />
+                  <BotonSubirImagenEjercicio nombre={m.nombre} onSubida={({ normalizado, url }) => setMapaImagenes(prev => ({ ...prev, [normalizado]: { ...(prev[normalizado]||{}), url } }))} />
+                  <EditorResenaEjercicio nombre={m.nombre} mapa={mapaImagenes} onGuardado={({ normalizado, resena }) => setMapaImagenes(prev => ({ ...prev, [normalizado]: { ...(prev[normalizado]||{}), resena } }))} />
                 </div>
               </div>
             ))}
             <button onClick={() => setCalentamientoGeneral([...calentamientoGeneral, { nombre:"", detalle:"" }])} style={{ background:"transparent", border:`1px dashed ${theme.border}`, borderRadius:6, padding:"4px 10px", color:theme.muted, fontSize:11, cursor:"pointer" }}>+ Movimiento</button>
+          </div>
+
+          <div style={{ marginBottom:16 }}>
+            <div style={{ fontSize:11, color:theme.muted, marginBottom:6 }}>🏃 Cardio y pasos</div>
+            <div style={{ marginBottom:10 }}>
+              <div style={{ fontSize:10, color:theme.muted, marginBottom:3 }}>Meta de pasos diaria (opcional)</div>
+              <input type="number" style={{ ...inputStyle, maxWidth:140 }} placeholder="Ej: 8000" value={metaPasos} onChange={e => setMetaPasos(e.target.value)} />
+            </div>
+            {cardio.map((c, i) => (
+              <div key={i} style={{ background:theme.card, borderRadius:8, padding:8, marginBottom:8 }}>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 20px", gap:6, alignItems:"center", marginBottom:6 }}>
+                  <input style={inputStyle} placeholder="Tipo (ej: Trote, Bicicleta)" value={c.tipo} list="lista-tipos-cardio" onChange={e => { const cc=[...cardio]; cc[i]={...cc[i], tipo:e.target.value}; setCardio(cc); }} />
+                  <span onClick={() => setCardio(cardio.filter((_,idx)=>idx!==i))} style={{ cursor:"pointer", color:theme.danger, fontSize:14, textAlign:"center" }}>×</span>
+                </div>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:6, marginBottom:6 }}>
+                  <div>
+                    <div style={{ fontSize:10, color:theme.muted, marginBottom:2 }}>Duración (min)</div>
+                    <input type="number" style={inputStyle} placeholder="20" value={c.duracionMin} onChange={e => { const cc=[...cardio]; cc[i]={...cc[i], duracionMin:e.target.value}; setCardio(cc); }} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize:10, color:theme.muted, marginBottom:2 }}>Distancia (km, opcional)</div>
+                    <input type="number" style={inputStyle} placeholder="3" value={c.distanciaKm} onChange={e => { const cc=[...cardio]; cc[i]={...cc[i], distanciaKm:e.target.value}; setCardio(cc); }} />
+                  </div>
+                </div>
+                <input style={inputStyle} placeholder="Notas (opcional)" value={c.notas || ""} onChange={e => { const cc=[...cardio]; cc[i]={...cc[i], notas:e.target.value}; setCardio(cc); }} />
+              </div>
+            ))}
+            <datalist id="lista-tipos-cardio">
+              {["Trote","Caminata","Bicicleta","Elíptica","Remo","Natación","Escaladora"].map(t => <option key={t} value={t} />)}
+            </datalist>
+            <button onClick={() => setCardio([...cardio, { tipo:"", duracionMin:"", distanciaKm:"", notas:"" }])} style={{ background:"transparent", border:`1px dashed ${theme.border}`, borderRadius:6, padding:"4px 10px", color:theme.muted, fontSize:11, cursor:"pointer" }}>+ Cardio</button>
           </div>
 
           <div style={{ fontSize:12, fontWeight:800, color:theme.text, marginBottom:10 }}>EJERCICIOS</div>
@@ -3939,9 +4256,10 @@ function RutinaCoach({ alumno }) {
                 <datalist id="lista-ejercicios">
                   {nombresEjerciciosUsados.map(n => <option key={n} value={n} />)}
                 </datalist>
-                <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                <div style={{ display:"flex", alignItems:"flex-start", gap:10, flexWrap:"wrap" }}>
                   <ImagenReferenciaEjercicio nombre={ej.nombre} mapa={mapaImagenes} size={72} />
-                  <BotonSubirImagenEjercicio nombre={ej.nombre} onSubida={({ normalizado, url }) => setMapaImagenes(prev => ({ ...prev, [normalizado]: url }))} />
+                  <BotonSubirImagenEjercicio nombre={ej.nombre} onSubida={({ normalizado, url }) => setMapaImagenes(prev => ({ ...prev, [normalizado]: { ...(prev[normalizado]||{}), url } }))} />
+                  <EditorResenaEjercicio nombre={ej.nombre} mapa={mapaImagenes} onGuardado={({ normalizado, resena }) => setMapaImagenes(prev => ({ ...prev, [normalizado]: { ...(prev[normalizado]||{}), resena } }))} />
                 </div>
               </div>
 
@@ -4021,9 +4339,23 @@ function RutinaCoach({ alumno }) {
 
           <button onClick={agregarEjercicio} style={{ background:"transparent", border:`1px dashed ${theme.accent}`, borderRadius:8, padding:"8px", color:theme.accentLight, fontSize:12, cursor:"pointer", width:"100%", marginBottom:12 }}>+ Agregar Ejercicio</button>
 
+          {!guardarPlantillaAbierto ? (
+            <button onClick={() => { setNombrePlantillaNueva(nombreRutina || ""); setGuardarPlantillaAbierto(true); }}
+              style={{ background:"transparent", border:`1px dashed ${theme.border}`, borderRadius:8, padding:"8px", color:theme.muted, fontSize:12, cursor:"pointer", width:"100%", marginBottom:12 }}>💾 Guardar como plantilla</button>
+          ) : (
+            <div style={{ background:theme.surface, borderRadius:8, padding:10, marginBottom:12 }}>
+              <div style={{ fontSize:11, color:theme.muted, marginBottom:6 }}>Nombre de la plantilla (ej: "Cuádriceps Lunes")</div>
+              <div style={{ display:"flex", gap:8 }}>
+                <input style={inputStyle} value={nombrePlantillaNueva} onChange={e => setNombrePlantillaNueva(e.target.value)} placeholder="Nombre de la plantilla" />
+                <button onClick={guardarComoPlantilla} disabled={guardandoPlantilla} style={{ background:theme.accent, border:"none", borderRadius:8, padding:"9px 14px", color:"#fff", fontSize:12, fontWeight:700, cursor:"pointer", whiteSpace:"nowrap" }}>{guardandoPlantilla ? "Guardando..." : "Guardar"}</button>
+                <button onClick={() => setGuardarPlantillaAbierto(false)} style={{ background:"transparent", border:`1px solid ${theme.border}`, borderRadius:8, padding:"9px 12px", color:theme.muted, fontSize:12, cursor:"pointer" }}>×</button>
+              </div>
+            </div>
+          )}
+
           <div style={{ display:"flex", gap:8 }}>
             <Btn onClick={guardarRutina} style={{ background:theme.success }}>{guardando ? "Guardando..." : editandoRutinaId ? "✓ Guardar Cambios" : "✓ Guardar Rutina"}</Btn>
-            <Btn variant="ghost" onClick={() => { setCreando(false); setModoDuplicar(false); setEditandoRutinaId(null); }}>Cancelar</Btn>
+            <Btn variant="ghost" onClick={() => { setCreando(false); setModoDuplicar(false); setModoPlantilla(false); setGuardarPlantillaAbierto(false); setEditandoRutinaId(null); }}>Cancelar</Btn>
           </div>
         </Card>
         </div>
