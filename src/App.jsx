@@ -24,6 +24,10 @@ const theme = {
 // (que para alumnos y coach en Chile ya es la hora de Chile).
 const CORTE_DIA_HORA = 4;
 const DIAS_SEMANA_NOMBRES = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
+// Orden lunes-a-domingo (distinto de DIAS_SEMANA_NOMBRES, que arranca en
+// domingo por ser el orden que devuelve Date.getDay()) -- se usa solo para
+// mostrar listados de rutinas/días ordenados de forma natural para el coach.
+const ORDEN_DIAS_SEMANA = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"];
 function fechaOperativa(base = new Date()) {
   const d = new Date(base);
   if (d.getHours() < CORTE_DIA_HORA) d.setDate(d.getDate() - 1);
@@ -89,11 +93,24 @@ const Input = ({ placeholder, type = "text", value, onChange }) => (
 const ImageLightbox = ({ src, onClose }) => {
   if (!src) return null;
   return (
-    <div onClick={onClose} style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(5,5,10,0.92)", backdropFilter: "blur(4px)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 24, boxSizing: "border-box" }}>
+    <div onClick={onClose} style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(5,5,10,0.92)", backdropFilter: "blur(4px)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 24, boxSizing: "border-box" }}>
       <button onClick={onClose} style={{ position: "absolute", top: 18, right: 18, width: 40, height: 40, borderRadius: "50%", background: theme.card, border: `1px solid ${theme.accent}66`, color: theme.text, fontSize: 20, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: `0 0 16px ${theme.accent}55` }}>×</button>
       <span onClick={onClose} style={{ position: "absolute", top: 22, left: 18, color: theme.accentLight, fontSize: 14, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>← Volver</span>
       <img src={src} alt="Vista ampliada" onClick={e => e.stopPropagation()} style={{ maxWidth: "100%", maxHeight: "85vh", borderRadius: 14, border: `1px solid ${theme.accent}44`, boxShadow: `0 0 30px ${theme.accent}33`, objectFit: "contain" }} />
     </div>
+  );
+};
+// Miniatura clicable que abre la foto en el ImageLightbox -- usada por el
+// coach para ver la foto que el alumno adjuntó al marcar una comida "cambio".
+const FotoMiniatura = ({ url, alt, size = 44 }) => {
+  const [abierta, setAbierta] = useState(false);
+  if (!url) return null;
+  return (
+    <>
+      <img src={url} alt={alt || "Foto"} onClick={() => setAbierta(true)}
+        style={{ width:size, height:size, borderRadius:6, objectFit:"cover", border:`1px solid ${theme.border}`, cursor:"pointer", marginTop:4, display:"block" }} />
+      {abierta && <ImageLightbox src={url} onClose={() => setAbierta(false)} />}
+    </>
   );
 };
 // Helpers compartidos de fotos (comprimir + subir a Supabase Storage).
@@ -258,7 +275,7 @@ const SemanaCard = ({ semana, ctx }) => {
 
           {/* Días de la semana, cada uno expandible por separado */}
           <div style={{ fontSize:11, fontWeight:800, color:theme.muted, marginBottom:8, letterSpacing:0.5 }}>📅 DÍA A DÍA</div>
-          {semana.dias.map((d, i) => {
+          {semana.dias.slice().reverse().map((d, i) => {
             const dietaDia = dietaRegs.filter(r => r.fecha === d.fechaStr);
             const entrenoDia = entrenosDetalle.filter(r => r.fecha === d.fechaStr);
             const tieneDatosDia = d.energia !== null || d.entreno || dietaDia.length > 0;
@@ -388,6 +405,11 @@ const SemanaCard = ({ semana, ctx }) => {
                                 </div>
                                 {r.estado === "cambio" && r.descripcion && (
                                   <div style={{ fontSize:11, color:theme.muted, fontStyle:"italic", paddingLeft:22, marginTop:2 }}>"{r.descripcion}"</div>
+                                )}
+                                {r.estado === "cambio" && r.foto_url && (
+                                  <div style={{ paddingLeft:22 }}>
+                                    <FotoMiniatura url={r.foto_url} alt={r.comida_nombre} />
+                                  </div>
                                 )}
                               </div>
                             )}
@@ -636,7 +658,7 @@ const ImagenReferenciaEjercicio = ({ nombre, mapa, size = 40 }) => {
         style={{ width:size, height:size, minWidth:size, borderRadius:8, objectFit:"cover", border:`1px solid ${theme.border}`, flexShrink:0, cursor:"pointer" }} />
       {abierto && (
         <div onClick={cerrar}
-          style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.88)", zIndex:2500, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:24, cursor:"pointer" }}>
+          style={{ position:"absolute", inset:0, background:"rgba(0,0,0,0.88)", zIndex:2500, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:24, cursor:"pointer" }}>
           <button onClick={e => { e.stopPropagation(); cerrar(); }}
             style={{ position:"absolute", top:18, right:18, width:36, height:36, borderRadius:"50%", background:theme.surface, border:`1px solid ${theme.border}`, color:theme.text, fontSize:16, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" }}>✕</button>
           <img src={info.url} alt={nombre} style={{ maxWidth:"90%", maxHeight:"50%", borderRadius:12, border:`1px solid ${theme.border}`, marginBottom:16, objectFit:"contain" }} />
@@ -1593,6 +1615,7 @@ function RutinaScreen({ onNav }) {
   const [registros, setRegistros] = useState({});
   const [completado, setCompletado] = useState(false);
   const [verCalentamiento, setVerCalentamiento] = useState(false);
+  const [verVueltaCalma, setVerVueltaCalma] = useState(false);
   const [mapaImagenes, setMapaImagenes] = useState({});
   const [userId, setUserId] = useState(null);
   const [cardioRegistros, setCardioRegistros] = useState({});
@@ -1641,9 +1664,28 @@ function RutinaScreen({ onNav }) {
   const [calidadSueno, setCalidadSueno] = useState(7);
   const [guardandoDiario, setGuardandoDiario] = useState(false);
 
+  // Flujo "Iniciar serie / Fin de serie" con cronómetro de descanso en el
+  // botón fijo inferior. estadoSerie: 'idle' (apuntando a la próxima serie
+  // pendiente) -> 'activa' (serie en curso, fila resaltada en azul) ->
+  // 'descansando' (cuenta regresiva usando el descanso_desde/descanso_hasta
+  // del ejercicio, en el mismo botón) -> vuelve a 'idle' al tocar el botón
+  // en cualquier momento del descanso.
+  const [estadoSerie, setEstadoSerie] = useState("idle");
+  const [serieObjetivo, setSerieObjetivo] = useState(null); // { ejId, idx }
+  const [segDescanso, setSegDescanso] = useState(0);
+  const restIntervalRef = useRef(null);
+  const limpiarIntervaloDescanso = () => {
+    if (restIntervalRef.current) { clearInterval(restIntervalRef.current); restIntervalRef.current = null; }
+  };
+  useEffect(() => () => limpiarIntervaloDescanso(), []);
+
   useEffect(() => {
     setCompletado(false);
     setRegistros({});
+    limpiarIntervaloDescanso();
+    setEstadoSerie("idle");
+    setSerieObjetivo(null);
+    setSegDescanso(0);
   }, [rutinaActiva]);
 
   const [ultimasCargas, setUltimasCargas] = useState({});
@@ -1741,52 +1783,255 @@ function RutinaScreen({ onNav }) {
 
   const ejercicios = rutinaActiva.ejercicios?.sort((a, b) => a.orden - b.orden) || [];
 
+  // Próxima serie pendiente (primera, recorriendo los ejercicios en orden y
+  // dentro de cada uno sus series en orden) -- es lo que apunta el botón
+  // fijo de abajo cuando está en estado "idle".
+  const todasLasSeries = ejercicios.flatMap(ej => (Array.isArray(ej.series) ? ej.series : []).map((s, idx) => ({ ej, s, idx, key: `${ej.id}-${idx}` })));
+  const siguientePendiente = todasLasSeries.find(x => !seriesHechas[x.key]);
+
+  const ejDescanso = serieObjetivo ? ejercicios.find(e => e.id === serieObjetivo.ejId) : null;
+  const descansoMinActivo = ejDescanso?.descanso_desde || 60;
+  const descansoMaxActivo = ejDescanso?.descanso_hasta || Math.max(descansoMinActivo, 90);
+
+  const handleBotonSerie = () => {
+    if (estadoSerie === "idle") {
+      if (!siguientePendiente) return;
+      setSerieObjetivo({ ejId: siguientePendiente.ej.id, idx: siguientePendiente.idx });
+      setEstadoSerie("activa");
+    } else if (estadoSerie === "activa") {
+      const key = serieObjetivo ? `${serieObjetivo.ejId}-${serieObjetivo.idx}` : null;
+      const hechasActualizadas = key ? { ...seriesHechas, [key]: true } : seriesHechas;
+      if (key) setSeriesHechas(hechasActualizadas);
+
+      // El descanso solo tiene sentido si lo que sigue es OTRA serie del
+      // MISMO ejercicio (para eso sirve el descanso_desde/hasta que define
+      // cada ejercicio). Si lo que sigue es un ejercicio distinto -- o ya no
+      // queda nada pendiente -- no tiene sentido forzar una cuenta
+      // regresiva: se vuelve directo a "idle" apuntando a lo que sigue.
+      const siguiente = todasLasSeries.find(x => !hechasActualizadas[x.key]);
+      const siguienteMismoEjercicio = siguiente && serieObjetivo && siguiente.ej.id === serieObjetivo.ejId;
+
+      if (siguienteMismoEjercicio) {
+        const ejActual = ejercicios.find(e => e.id === serieObjetivo?.ejId);
+        const min = ejActual?.descanso_desde || 60;
+        const max = ejActual?.descanso_hasta || Math.max(min, 90);
+        setSegDescanso(0);
+        setEstadoSerie("descansando");
+        limpiarIntervaloDescanso();
+        restIntervalRef.current = setInterval(() => {
+          setSegDescanso(prev => {
+            const next = prev + 1;
+            if (next >= max) limpiarIntervaloDescanso();
+            return next;
+          });
+        }, 1000);
+      } else {
+        limpiarIntervaloDescanso();
+        setEstadoSerie("idle");
+        setSerieObjetivo(null);
+        setSegDescanso(0);
+      }
+    } else if (estadoSerie === "descansando") {
+      // Tocar el botón en cualquier momento del descanso (esté en naranja o
+      // ya en verde) cancela la cuenta regresiva y vuelve a apuntar a la
+      // próxima serie pendiente.
+      limpiarIntervaloDescanso();
+      setEstadoSerie("idle");
+      setSerieObjetivo(null);
+      setSegDescanso(0);
+    }
+  };
+
+  let textoBotonSerie, bgBotonSerie, sombraBotonSerie, bottomLabelSerie, bottomLabelColorSerie;
+  if (estadoSerie === "activa") {
+    textoBotonSerie = "⏸ Fin de serie";
+    bgBotonSerie = "linear-gradient(135deg, #EF4444, #b91c1c)";
+    sombraBotonSerie = "0 0 18px rgba(239,68,68,0.4)";
+    bottomLabelSerie = "Serie en curso...";
+    bottomLabelColorSerie = theme.muted;
+  } else if (estadoSerie === "descansando") {
+    if (segDescanso < descansoMinActivo) {
+      textoBotonSerie = `⏱ Descansando... ${segDescanso}s`;
+      bgBotonSerie = `linear-gradient(135deg, ${theme.warning}, #b45309)`;
+      sombraBotonSerie = "0 0 18px rgba(245,158,11,0.4)";
+      bottomLabelSerie = `Meta: ${descansoMinActivo}-${descansoMaxActivo}s antes de la próxima`;
+      bottomLabelColorSerie = theme.muted;
+    } else {
+      textoBotonSerie = `▶ Iniciar serie (${segDescanso}s de descanso)`;
+      bgBotonSerie = `linear-gradient(135deg, ${theme.success}, #047857)`;
+      sombraBotonSerie = "0 0 18px rgba(16,185,129,0.45)";
+      bottomLabelSerie = "✅ Ya puedes partir cuando quieras";
+      bottomLabelColorSerie = theme.success;
+    }
+  } else {
+    textoBotonSerie = "▶ Iniciar serie";
+    bgBotonSerie = `linear-gradient(135deg, ${theme.accentLight}, ${theme.accent})`;
+    sombraBotonSerie = `0 0 18px ${theme.accent}66`;
+    bottomLabelSerie = siguientePendiente ? `${siguientePendiente.ej.nombre} · ${siguientePendiente.s.reps} reps` : "";
+    bottomLabelColorSerie = theme.muted;
+  }
+  const mostrarBarraSerie = !completado && (estadoSerie !== "idle" || !!siguientePendiente);
+
+  // El botón de terminar entrenamiento no se muestra mientras queden series
+  // o cardio pendientes -- antes aparecía siempre, lo que dejaba a la vista
+  // al mismo tiempo que la barra de "Iniciar serie", como si el entreno ya
+  // pudiera darse por terminado aunque todavía hubiera series sin marcar.
+  const cardioPendiente = Array.isArray(rutinaActiva.cardio) && rutinaActiva.cardio.some((c, i) => !cardioRegistros[i]?.completado);
+  const faltaParaTerminar = siguientePendiente ? "series" : cardioPendiente ? "cardio" : null;
+
   return (
-    <div style={{ padding: "20px 16px 90px", overflowY: "auto", height: "100%", boxSizing: "border-box" }}>
-      <div style={{ marginBottom: 16, display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:10 }}>
-        <div style={{ minWidth:0 }}>
-          <span onClick={() => onNav("alumno_home")} style={{ fontSize: 20, cursor: "pointer", color: theme.text, marginBottom: 6, display: "inline-block" }}>← Inicio</span>
-          <div style={{ color: theme.muted, fontSize: 12, marginBottom: 4, marginTop: 4 }}>ENTRENAMIENTO · {rutinaActiva.dia?.toUpperCase() || ""}</div>
-          <div style={{ fontSize: 22, fontWeight: 800, color: theme.text }}>{rutinaActiva.nombre} 💪</div>
+    <div style={{ padding: `20px 16px ${mostrarBarraSerie ? 200 : 90}px`, overflowY: "auto", height: "100%", boxSizing: "border-box" }}>
+      <div style={{ marginBottom: 16, display:"flex", alignItems:"center", gap:10 }}>
+        <button onClick={() => onNav("alumno_home")} aria-label="Volver a Inicio"
+          style={{ flexShrink:0, width:34, height:34, borderRadius:"50%", background:theme.surface, border:`1px solid ${theme.border}`, color:theme.text, fontSize:17, fontWeight:800, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" }}>←</button>
+        <div style={{ flex:1, minWidth:0, textAlign:"center" }}>
+          <div style={{ color: theme.muted, fontSize: 12, marginBottom: 2 }}>ENTRENAMIENTO · {rutinaActiva.dia?.toUpperCase() || ""}</div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: theme.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{rutinaActiva.nombre} 💪</div>
           {rutinaActiva.created_at && <div style={{ fontSize: 11, color: theme.muted, marginTop: 2 }}>Desde: {new Date(rutinaActiva.created_at).toLocaleDateString("es-CL", { day:"2-digit", month:"short", year:"numeric" })}</div>}
         </div>
-        <button onClick={() => setVerInfoRutina(true)}
-          style={{ flexShrink:0, width:34, height:34, borderRadius:"50%", background:`${theme.accent}22`, border:`1px solid ${theme.accent}66`, color:theme.accentLight, fontSize:16, fontWeight:800, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", marginTop:2 }}>ⓘ</button>
+        <button onClick={() => setVerInfoRutina(true)} aria-label="Info de la rutina"
+          style={{ flexShrink:0, width:34, height:34, borderRadius:"50%", background:`${theme.accent}22`, border:`1px solid ${theme.accent}66`, color:theme.accentLight, fontSize:16, fontWeight:800, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" }}>ⓘ</button>
       </div>
 
       {verInfoRutina && (
         <div onClick={cerrarInfoRutina}
-          style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.88)", zIndex:2500, display:"flex", alignItems:"center", justifyContent:"center", padding:24, cursor:"pointer" }}>
+          style={{ position:"absolute", inset:0, background:"rgba(0,0,0,0.88)", zIndex:2500, display:"flex", alignItems:"center", justifyContent:"center", padding:24, cursor:"pointer" }}>
           <div onClick={e => e.stopPropagation()} style={{ background:theme.card, border:`1px solid ${theme.border}`, borderRadius:16, padding:20, maxWidth:420, maxHeight:"80vh", overflowY:"auto", cursor:"default" }}>
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
               <div style={{ fontSize:15, fontWeight:800, color:theme.text }}>ℹ️ Sobre tu rutina</div>
               <button onClick={cerrarInfoRutina} style={{ width:30, height:30, borderRadius:"50%", background:theme.surface, border:`1px solid ${theme.border}`, color:theme.text, fontSize:14, cursor:"pointer" }}>✕</button>
             </div>
-            <div style={{ fontSize:12, color:theme.muted, marginBottom:12, lineHeight:1.6 }}>
-              <div style={{ color:theme.accentLight, fontWeight:700, marginBottom:4 }}>RIR (repeticiones en reserva)</div>
-              RIR 3: te quedan 3 repeticiones antes de fallar. RIR 2: te quedan 2. RIR 1: te queda 1, casi al límite. Fallo: no puedes hacer una repetición más con buena técnica.
-            </div>
-            <div style={{ fontSize:12, color:theme.muted, marginBottom:12, lineHeight:1.6 }}>
-              <div style={{ color:theme.accentLight, fontWeight:700, marginBottom:4 }}>Descansos entre series</div>
-              El rango indicado (ej: 60-90s) es una guía. Si sientes que aún no te recuperas al llegar al tiempo máximo, está bien tomarte unos segundos más antes de la siguiente serie.
-            </div>
-            <div style={{ fontSize:12, color:theme.muted, lineHeight:1.6 }}>
-              <div style={{ color:theme.accentLight, fontWeight:700, marginBottom:4 }}>Imágenes de referencia</div>
-              Las imágenes/animaciones de los ejercicios son referenciales, para ayudarte a identificar el movimiento. Algunos ejercicios pueden variar levemente según el equipo disponible en tu gimnasio.
-            </div>
+            {(() => {
+              const infoTitBig = { fontSize:13, fontWeight:800, color:theme.accentLight, letterSpacing:0.4, marginBottom:8, display:"flex", alignItems:"center", gap:6, background:`${theme.accentLight}1f`, border:`1px solid ${theme.accentLight}59`, borderRadius:8, padding:"8px 10px" };
+              const infoSec = { fontSize:12, color:theme.muted, marginBottom:16, lineHeight:1.6 };
+              const infoTit = { color:theme.accentLight, fontWeight:700, marginBottom:4, fontSize:12.5 };
+              const infoDiv = { height:1, background:theme.border, margin:"16px 0" };
+              const infoSub = { margin:"8px 0 8px 4px", paddingLeft:10, borderLeft:`2px solid ${theme.border}` };
+              const infoPct = { color:theme.gold, fontWeight:700 };
+              const rirBadge = (bg, color) => ({ display:"inline-block", padding:"1px 7px", borderRadius:10, fontSize:10, fontWeight:800, background:bg, color });
+              return (
+                <>
+                  <div style={infoTitBig}>🔥 CALENTAMIENTO GENERAL</div>
+                  <div style={infoSec}>
+                    Es la entrada en calor de <b style={{ color:theme.text }}>toda la sesión</b>, antes de tocar cualquier ejercicio con peso: movilidad articular, y según el día puede incluir algo de cardio suave, banda elástica, o ninguno de los dos. No usa el peso de ningún ejercicio en particular — es general, para preparar todo tu cuerpo.
+                  </div>
+
+                  <div style={infoDiv} />
+
+                  <div style={infoTitBig}>📋 CÓMO USAR TU RUTINA</div>
+                  <div style={infoSec}>
+                    Un ejercicio puede pasar por hasta 3 etapas antes de llegar al peso que realmente cuenta para tu progreso. Ojo: esto no aplica siempre a todos los ejercicios — normalmente se hace completo solo en el primero de cada grupo muscular, porque después tu cuerpo ya está a temperatura óptima para movimientos parecidos y no hace falta repetirlo, a menos que quieras aproximar o buscar la carga de otro grupo muscular distinto.
+                    <div style={infoSub}>
+                      <b style={{ color:theme.text }}>1. Calentamiento inicial</b><br/>
+                      Serie liviana que activa el patrón de movimiento y prepara la articulación específica.
+                    </div>
+                    <div style={infoSub}>
+                      <b style={{ color:theme.text }}>2. Series de aproximación</b><br/>
+                      Suben el peso poco a poco para acercarte a tu carga efectiva. No siempre son 2 — pueden ser más según el ejercicio y cuánto peso haya que subir. Ejemplo típico: aproximación 1 a <span style={infoPct}>~60–65%</span>, aproximación 2 a <span style={infoPct}>~80–85%</span>, subiendo la carga y bajando las repeticiones en cada una.
+                    </div>
+                    <div style={infoSub}>
+                      <b style={{ color:theme.text }}>3. Series efectivas</b><br/>
+                      Las series que <b style={{ color:theme.text }}>sí cuentan</b> para tu progreso — el peso que buscas es el que te permite lograr las repeticiones y el RIR que definió tu coach. No siempre serán 8 repeticiones efectivas, eso varía según cada ejercicio y lo que tu coach determine. Aquí es donde registras tu peso usado.
+                    </div>
+                  </div>
+
+                  <div style={infoDiv} />
+
+                  <div style={infoSec}>
+                    <div style={infoTit}>RIR (repeticiones en reserva)</div>
+                    Es cuántas repeticiones más, con buena técnica, sentías que podías hacer cuando terminaste la serie.
+                    <br/><br/>
+                    Por ejemplo: si te piden 8 repeticiones con RIR 2, haces esas 8 pero tu sensación es que podrías haber sacado 2 más — esas 2 quedaron "guardadas".
+                    <table style={{ width:"100%", borderCollapse:"collapse", marginTop:8, fontSize:11 }}>
+                      <tbody>
+                        <tr>
+                          <th style={{ padding:"6px 6px", textAlign:"center", borderBottom:`1px solid ${theme.border}`, color:theme.text, fontWeight:700, background:theme.surface }}>Reps pedidas</th>
+                          <th style={{ padding:"6px 6px", textAlign:"center", borderBottom:`1px solid ${theme.border}`, color:theme.text, fontWeight:700, background:theme.surface }}>RIR objetivo</th>
+                          <th style={{ padding:"6px 6px", textAlign:"center", borderBottom:`1px solid ${theme.border}`, color:theme.text, fontWeight:700, background:theme.surface }}>Lo que percibías que podías hacer</th>
+                        </tr>
+                        <tr>
+                          <td style={{ padding:"6px 6px", textAlign:"center", borderBottom:`1px solid ${theme.border}`, color:theme.muted }}>8</td>
+                          <td style={{ padding:"6px 6px", textAlign:"center", borderBottom:`1px solid ${theme.border}` }}><span style={rirBadge(`${theme.success}2e`, theme.success)}>RIR 3</span></td>
+                          <td style={{ padding:"6px 6px", textAlign:"center", borderBottom:`1px solid ${theme.border}`, color:theme.text, fontWeight:700 }}>hasta 11</td>
+                        </tr>
+                        <tr>
+                          <td style={{ padding:"6px 6px", textAlign:"center", borderBottom:`1px solid ${theme.border}`, color:theme.muted }}>8</td>
+                          <td style={{ padding:"6px 6px", textAlign:"center", borderBottom:`1px solid ${theme.border}` }}><span style={rirBadge(`${theme.accentLight}2e`, theme.accentLight)}>RIR 2</span></td>
+                          <td style={{ padding:"6px 6px", textAlign:"center", borderBottom:`1px solid ${theme.border}`, color:theme.text, fontWeight:700 }}>hasta 10</td>
+                        </tr>
+                        <tr>
+                          <td style={{ padding:"6px 6px", textAlign:"center", borderBottom:`1px solid ${theme.border}`, color:theme.muted }}>8</td>
+                          <td style={{ padding:"6px 6px", textAlign:"center", borderBottom:`1px solid ${theme.border}` }}><span style={rirBadge(`${theme.warning}2e`, theme.warning)}>RIR 1</span></td>
+                          <td style={{ padding:"6px 6px", textAlign:"center", borderBottom:`1px solid ${theme.border}`, color:theme.text, fontWeight:700 }}>hasta 9</td>
+                        </tr>
+                        <tr>
+                          <td style={{ padding:"6px 6px", textAlign:"center", color:theme.muted }}>8</td>
+                          <td style={{ padding:"6px 6px", textAlign:"center" }}><span style={rirBadge(`${theme.danger}2e`, theme.danger)}>Fallo</span></td>
+                          <td style={{ padding:"6px 6px", textAlign:"center", color:theme.text, fontWeight:700 }}>8 (no sale la 9)</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                    <br/>
+                    Si te sobró mucho margen (pedían RIR 2 y sientes que hubieras podido con 4-5 más), sube el peso la próxima vez. Si no llegaste a las repeticiones pedidas, bájalo.
+                  </div>
+
+                  <div style={infoDiv} />
+
+                  <div style={infoSec}>
+                    <div style={infoTit}>🏃 Cardio</div>
+                    Algunos días tu rutina incluye cardio con una duración sugerida y, a veces, una zona de pulso (FC). Si no alcanzas a completar los minutos pedidos, puedes reemplazarlo por su equivalente en pasos.
+                  </div>
+
+                  <div style={infoTitBig}>🧘 VUELTA A LA CALMA</div>
+                  <div style={infoSec}>
+                    Al terminar tu sesión, dedica unos minutos a estiramientos pasivos de los músculos que trabajaste ese día — ayuda a la recuperación y baja gradualmente la intensidad antes de terminar. Tu coach puede indicarte estiramientos específicos según el grupo muscular entrenado.
+                  </div>
+
+                  <div style={infoDiv} />
+
+                  <div style={infoSec}>
+                    <div style={infoTit}>💥 Intensidad del entrenamiento</div>
+                    Al terminar cada sesión te pedimos calificar qué tan intensa sentiste la sesión completa (1 al 10). A diferencia del RIR, que es por serie, esto es tu sensación general de todo el entrenamiento — le ayuda a tu coach a ver tu carga de esfuerzo día a día.
+                  </div>
+
+                  <div style={infoSec}>
+                    <div style={infoTit}>😴 Calidad del sueño</div>
+                    En tu Diario registras cuántas horas dormiste y qué tan buena fue esa calidad (1 al 10). La calidad tiene que ver sobre todo con cuántas veces te despertaste: si dormiste de corrido sin despertar, normalmente es muy buena calidad (8-10 aprox); si te despertaste varias veces durante la noche o te costó volver a dormirte, la calidad baja — aunque hayas dormido muchas horas en total. Esto le permite a tu coach relacionar tu descanso con tu rendimiento y ajustar tu plan si hace falta.
+                  </div>
+
+                  <div style={infoDiv} />
+
+                  <div style={infoSec}>
+                    <div style={infoTit}>Descansos entre series</div>
+                    El rango indicado es una guía y puede ir desde 60 segundos hasta 240 o más, según el ejercicio. Si sientes que aún no te recuperas al llegar al tiempo máximo, está bien tomarte unos segundos más antes de la siguiente serie.
+                  </div>
+
+                  <div style={{ ...infoSec, marginBottom:0 }}>
+                    <div style={infoTit}>Imágenes de referencia</div>
+                    Las imágenes/animaciones de los ejercicios son referenciales, para ayudarte a identificar el movimiento. Algunos ejercicios pueden variar levemente según el equipo disponible en tu gimnasio.
+                  </div>
+                </>
+              );
+            })()}
           </div>
         </div>
       )}
 
-      {/* Selector de rutina si hay más de una */}
+      {/* Selector de rutina si hay más de una -- ordenadas de lunes a domingo,
+          en grilla pareja (en vez de una fila de pastillas de ancho variable)
+          para que quede prolijo sin importar cuántas rutinas tenga el día. */}
       {rutinas.length > 1 && (
-        <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
-          {rutinas.map(r => (
-            <button key={r.id} onClick={() => { setRutinaActiva(r); setCompletado(false); setRegistros({}); }}
-              style={{ background: rutinaActiva.id === r.id ? theme.accent : theme.surface, border: `1px solid ${rutinaActiva.id === r.id ? theme.accent : theme.border}`, borderRadius: 8, padding: "6px 12px", color: rutinaActiva.id === r.id ? "#fff" : theme.muted, fontSize: 12, cursor: "pointer", fontWeight: 600 }}>
-              {r.nombre}{r.dia ? ` · ${r.dia}` : ""}
-            </button>
-          ))}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 14 }}>
+          {rutinas.slice().sort((a, b) => ORDEN_DIAS_SEMANA.indexOf(a.dia) - ORDEN_DIAS_SEMANA.indexOf(b.dia)).map(r => {
+            const activa = rutinaActiva.id === r.id;
+            return (
+              <button key={r.id} onClick={() => { setRutinaActiva(r); setCompletado(false); setRegistros({}); }}
+                style={{ textAlign: "left", background: activa ? theme.accent : theme.surface, border: `1px solid ${activa ? theme.accent : theme.border}`, borderRadius: 10, padding: "8px 12px", cursor: "pointer", minWidth: 0 }}>
+                <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.4, textTransform: "uppercase", color: activa ? "rgba(255,255,255,0.75)" : theme.muted }}>{r.dia || "Sin día"}</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: activa ? "#fff" : theme.text, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.nombre}</div>
+              </button>
+            );
+          })}
         </div>
       )}
 
@@ -1810,57 +2055,6 @@ function RutinaScreen({ onNav }) {
               ))}
             </div>
           )}
-        </Card>
-      )}
-
-      {/* Cardio planificado del día (los pasos se registran en Inicio) */}
-      {Array.isArray(rutinaActiva.cardio) && rutinaActiva.cardio.length > 0 && (
-        <Card style={{ marginBottom: 14, border: `1px solid ${theme.accent}44` }}>
-          <div style={{ fontSize: 11, fontWeight: 800, color: theme.accentLight, letterSpacing: 0.5, marginBottom: 12 }}>🏃 CARDIO</div>
-
-          {rutinaActiva.cardio.map((c, i) => {
-            const reg = cardioRegistros[i] || {};
-            const fcMaxTeorica = edadAlumno ? 220 - edadAlumno : null;
-            const lpmMin = fcMaxTeorica && c.fcMinPct ? Math.round(fcMaxTeorica * (parseFloat(c.fcMinPct) / 100)) : null;
-            const lpmMax = fcMaxTeorica && c.fcMaxPct ? Math.round(fcMaxTeorica * (parseFloat(c.fcMaxPct) / 100)) : null;
-            const pasosEquivalentes = c.duracionMin ? estimarPasosEquivalentes(c.duracionMin) : 0;
-            return (
-              <div key={i} style={{ background:theme.surface, borderRadius:8, padding:10, marginTop: i === 0 ? 0 : 8 }}>
-                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
-                  <div style={{ fontSize:13, fontWeight:700, color:theme.text }}>{c.tipo || "Cardio"}</div>
-                  <button onClick={() => marcarCardio(i, c, { completado: !reg.completado, duracion_real: reg.duracion_real ?? c.duracionMin, distancia_real: reg.distancia_real ?? c.distanciaKm })}
-                    style={{ background: reg.completado ? `${theme.success}22` : "transparent", border:`1px solid ${reg.completado ? theme.success : theme.border}`, borderRadius:6, padding:"4px 10px", color: reg.completado ? theme.success : theme.muted, fontSize:11, cursor:"pointer", fontWeight:700 }}>
-                    {reg.completado ? "✅ Hecho" : "Marcar hecho"}
-                  </button>
-                </div>
-                <div style={{ fontSize:11, color:theme.muted, marginBottom: (lpmMin || lpmMax) ? 4 : 8 }}>
-                  Planificado: {c.duracionMin ? `${c.duracionMin} min` : ""}{c.duracionMin && c.distanciaKm ? " · " : ""}{c.distanciaKm ? `${c.distanciaKm} km` : ""}{c.notas ? ` · ${c.notas}` : ""}
-                </div>
-                {(lpmMin || lpmMax) && (
-                  <div style={{ fontSize:11, color:theme.accentLight, marginBottom:8 }}>
-                    🎯 Zona quema grasa: {lpmMin || "—"}{lpmMax ? `-${lpmMax}` : ""} lpm
-                  </div>
-                )}
-                {!reg.completado && pasosEquivalentes > 0 && (
-                  <div style={{ fontSize:11, color:theme.warning, marginBottom:8, lineHeight:1.4 }}>
-                    💡 Si no alcanzas a hacer los {c.duracionMin} min de cardio, puedes sustituirlos con <span style={{ fontWeight:700 }}>≈{pasosEquivalentes.toLocaleString("es-CL")} pasos</span> extra.
-                  </div>
-                )}
-                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
-                  <div>
-                    <div style={{ fontSize:10, color:theme.muted, marginBottom:2 }}>Duración real (min)</div>
-                    <input type="number" value={reg.duracion_real ?? ""} onChange={e => marcarCardio(i, c, { duracion_real: e.target.value })}
-                      style={{ width:"100%", boxSizing:"border-box", background:theme.card, border:`1px solid ${theme.border}`, borderRadius:6, padding:"6px 8px", color:theme.text, fontSize:12, outline:"none" }} />
-                  </div>
-                  <div>
-                    <div style={{ fontSize:10, color:theme.muted, marginBottom:2 }}>Distancia real (km)</div>
-                    <input type="number" value={reg.distancia_real ?? ""} onChange={e => marcarCardio(i, c, { distancia_real: e.target.value })}
-                      style={{ width:"100%", boxSizing:"border-box", background:theme.card, border:`1px solid ${theme.border}`, borderRadius:6, padding:"6px 8px", color:theme.text, fontSize:12, outline:"none" }} />
-                  </div>
-                </div>
-              </div>
-            );
-          })}
         </Card>
       )}
 
@@ -1904,6 +2098,8 @@ function RutinaScreen({ onNav }) {
                 const placeholderKg = tipo === "efectiva"
                   ? (anterior?.kg || "kg")
                   : (s.kgSugerido || "kg");
+                const esActiva = estadoSerie === "activa" && serieObjetivo && serieObjetivo.ejId === ej.id && serieObjetivo.idx === idx;
+                const hecha = !!seriesHechas[key] || (reg.kg && reg.reps);
                 return (
                   <div key={idx}>
                   {mostrarEncabezado && (
@@ -1916,7 +2112,12 @@ function RutinaScreen({ onNav }) {
                       </div>
                     </div>
                   )}
-                  <div style={{ display: "grid", gridTemplateColumns: "44px 1fr 50px 44px 48px 26px", gap: 3, alignItems: "center", marginBottom: 2, background: reg.kg && reg.reps ? `${theme.success}12` : `${colorTipo}0d`, border: `1px solid ${reg.kg && reg.reps ? theme.success + "44" : colorTipo + "33"}`, borderRadius: 10, padding: "7px 6px" }}>
+                  <div style={{
+                    display: "grid", gridTemplateColumns: "44px 1fr 50px 44px 48px 26px", gap: 3, alignItems: "center", marginBottom: 2, borderRadius: 10, padding: "7px 6px",
+                    background: esActiva ? `${theme.accentLight}29` : hecha ? `${theme.success}12` : `${colorTipo}0d`,
+                    border: `1px solid ${esActiva ? theme.accentLight : hecha ? theme.success + "44" : colorTipo + "33"}`,
+                    boxShadow: esActiva ? `0 0 0 1px ${theme.accentLight}, 0 0 14px ${theme.accentLight}59` : "none",
+                  }}>
                     <div style={{ textAlign: "center", fontSize: 11, fontWeight: 800, color: colorTipo }}>{etiqueta}</div>
                     <div style={{ fontSize: 12, color: theme.muted, paddingLeft: 4 }}>{s.reps} reps</div>
                     <input value={reg.kg || ""} onChange={e => setReg(ej.id, idx, "kg", e.target.value)} placeholder={placeholderKg}
@@ -1931,6 +2132,11 @@ function RutinaScreen({ onNav }) {
                     <div onClick={() => setSeriesHechas({ ...seriesHechas, [key]: !seriesHechas[key] })}
                       style={{ width: 20, height: 20, borderRadius: 6, border: `2px solid ${seriesHechas[key] ? theme.success : theme.border}`, background: seriesHechas[key] ? theme.success : "transparent", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 11, color: "#fff", fontWeight: 800 }}>{seriesHechas[key] ? "✓" : ""}</div>
                   </div>
+                  {esActiva && (
+                    <div style={{ display:"flex", alignItems:"center", gap:6, fontSize:10, color:theme.accentLight, fontWeight:700, paddingLeft:6, marginBottom:6, marginTop:-2 }}>
+                      🔵 Serie en curso...
+                    </div>
+                  )}
                   {anterior && (
                     <div style={{ fontSize: 10, color: theme.muted, paddingLeft: 6, marginBottom: 8 }}>
                       Semana anterior: <span style={{ color: colorTipo, fontWeight: 700 }}>{anterior.kg}kg × {anterior.reps}</span> {anterior.fecha ? `(${anterior.fecha})` : ""}
@@ -1944,8 +2150,94 @@ function RutinaScreen({ onNav }) {
         );
       })}
 
-      {!completado
-        ? <Btn onClick={async () => {
+      {/* Cardio planificado del día (los pasos se registran en Inicio) */}
+      {Array.isArray(rutinaActiva.cardio) && rutinaActiva.cardio.length > 0 && (
+        <Card style={{ marginBottom: 14, border: `1px solid ${theme.accent}44` }}>
+          <div style={{ fontSize: 11, fontWeight: 800, color: theme.accentLight, letterSpacing: 0.5, marginBottom: 12 }}>🏃 CARDIO</div>
+
+          {rutinaActiva.cardio.map((c, i) => {
+            const reg = cardioRegistros[i] || {};
+            const fcMaxTeorica = edadAlumno ? 220 - edadAlumno : null;
+            const lpmMin = fcMaxTeorica && c.fcMinPct ? Math.round(fcMaxTeorica * (parseFloat(c.fcMinPct) / 100)) : null;
+            const lpmMax = fcMaxTeorica && c.fcMaxPct ? Math.round(fcMaxTeorica * (parseFloat(c.fcMaxPct) / 100)) : null;
+            const pasosEquivalentes = c.duracionMin ? estimarPasosEquivalentes(c.duracionMin) : 0;
+            return (
+              <div key={i} style={{ background:theme.surface, borderRadius:8, padding:10, marginTop: i === 0 ? 0 : 8 }}>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
+                  <div style={{ fontSize:13, fontWeight:700, color:theme.text }}>{c.tipo || "Cardio"}</div>
+                  <button onClick={() => marcarCardio(i, c, { completado: !reg.completado, duracion_real: reg.duracion_real ?? c.duracionMin })}
+                    style={{ background: reg.completado ? `${theme.success}22` : "transparent", border:`1px solid ${reg.completado ? theme.success : theme.border}`, borderRadius:6, padding:"4px 10px", color: reg.completado ? theme.success : theme.muted, fontSize:11, cursor:"pointer", fontWeight:700 }}>
+                    {reg.completado ? "✅ Hecho" : "Marcar hecho"}
+                  </button>
+                </div>
+                {c.duracionMin ? (
+                  <div style={{ display:"flex", alignItems:"baseline", gap:6, marginBottom:6 }}>
+                    <span style={{ fontSize:28, fontWeight:900, color:theme.text, lineHeight:1 }}>{c.duracionMin}</span>
+                    <span style={{ fontSize:12, color:theme.muted, fontWeight:600 }}>minutos</span>
+                  </div>
+                ) : (
+                  <div style={{ fontSize:11, color:theme.muted, marginBottom: (lpmMin || lpmMax) ? 4 : 8 }}>Planificado: sin duración definida</div>
+                )}
+                {c.notas && (
+                  <div style={{ fontSize:11, color:theme.muted, marginBottom: (lpmMin || lpmMax) ? 4 : 8 }}>{c.notas}</div>
+                )}
+                {(lpmMin || lpmMax) && (
+                  <div style={{ fontSize:11, color:theme.accentLight, marginBottom:8 }}>
+                    🎯 Zona quema grasa: {lpmMin || "—"}{lpmMax ? `-${lpmMax}` : ""} lpm <span style={{ color:theme.muted }}>(latidos por minuto)</span>
+                  </div>
+                )}
+                {!reg.completado && pasosEquivalentes > 0 && (
+                  <div style={{ fontSize:11, color:theme.warning, marginBottom:8, lineHeight:1.4 }}>
+                    💡 Si no alcanzas a hacer los {c.duracionMin} min de cardio, puedes sustituirlos con <span style={{ fontWeight:700 }}>≈{pasosEquivalentes.toLocaleString("es-CL")} pasos</span> extra.
+                  </div>
+                )}
+                <div>
+                  <div style={{ fontSize:10, color:theme.muted, marginBottom:2 }}>Duración real (min)</div>
+                  <input type="number" value={reg.duracion_real ?? ""} onChange={e => marcarCardio(i, c, { duracion_real: e.target.value })}
+                    style={{ width:"100%", boxSizing:"border-box", background:theme.card, border:`1px solid ${theme.border}`, borderRadius:6, padding:"6px 8px", color:theme.text, fontSize:12, outline:"none" }} />
+                </div>
+              </div>
+            );
+          })}
+        </Card>
+      )}
+
+      {/* Vuelta a la calma: estiramientos pasivos post-sesión (colapsado por defecto) */}
+      {Array.isArray(rutinaActiva.vuelta_calma) && rutinaActiva.vuelta_calma.length > 0 && (
+        <Card style={{ marginBottom: 14, padding:0, overflow:"hidden", border: `1px solid ${theme.accent}44` }}>
+          <div onClick={() => setVerVueltaCalma(!verVueltaCalma)} style={{ padding:14, cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+            <div style={{ fontSize: 11, fontWeight: 800, color: theme.accentLight, letterSpacing: 0.5 }}>🧘 VUELTA A LA CALMA</div>
+            <span style={{ fontSize:11, color:theme.accentLight }}>{verVueltaCalma ? "▲ ocultar" : `▼ ver (${rutinaActiva.vuelta_calma.length})`}</span>
+          </div>
+          {verVueltaCalma && (
+            <div style={{ padding:"0 14px 14px" }}>
+              {rutinaActiva.vuelta_calma.map((m, i) => (
+                <div key={i} style={{ padding: "8px 4px", display:"flex", alignItems:"center", gap:10, borderBottom: i < rutinaActiva.vuelta_calma.length - 1 ? `1px solid ${theme.border}` : "none" }}>
+                  <ImagenReferenciaEjercicio nombre={m.nombre} mapa={mapaImagenes} size={56} />
+                  <div style={{ flex:1, minWidth:0, borderLeft:`2px solid ${theme.accent}88`, paddingLeft:9 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: theme.text, textTransform:"uppercase", letterSpacing:0.4, lineHeight:1.3, display:"-webkit-box", WebkitLineClamp:2, WebkitBoxOrient:"vertical", overflow:"hidden" }}>{m.nombre}</div>
+                    <div style={{ fontSize: 11, color: theme.muted, marginTop:2 }}>{m.detalle}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      )}
+
+      {!completado && faltaParaTerminar && (
+        <Card style={{ textAlign:"center", padding:16, border:`1px dashed ${theme.border}` }}>
+          <div style={{ fontSize:12, color:theme.muted, lineHeight:1.5 }}>
+            {faltaParaTerminar === "series"
+              ? "Te faltan series por completar más arriba."
+              : "Te falta marcar el cardio como hecho más arriba."}
+            {" "}Termina eso para poder cerrar el entrenamiento.
+          </div>
+        </Card>
+      )}
+
+      {!completado && !faltaParaTerminar && (
+        <Btn onClick={async () => {
             const { data: { user } } = await supabase.auth.getUser();
             if (user && rutinaActiva) {
               const inserts = [];
@@ -1997,7 +2289,10 @@ function RutinaScreen({ onNav }) {
             }
             setCompletado(true);
           }} style={{ background: `linear-gradient(135deg, ${theme.accentLight}, ${theme.accent})`, boxShadow: `0 0 18px ${theme.accent}66`, padding: 16, fontSize: 15, fontWeight: 800, letterSpacing: 1, borderRadius: 14 }}>✓ ENTRENAMIENTO COMPLETADO</Btn>
-        : <>
+      )}
+
+      {completado && (
+        <>
             {diarioPaso === "form" ? (
               <Card style={{ border: `1px solid ${theme.accent}44` }}>
                 <div style={{ textAlign: "center", marginBottom: 14 }}>
@@ -2057,7 +2352,19 @@ function RutinaScreen({ onNav }) {
               </Card>
             )}
           </>
-      }
+      )}
+
+      {mostrarBarraSerie && (
+        <div style={{ position:"absolute", bottom:72, left:0, right:0, padding:"12px 16px", background:theme.surface, borderTop:`1px solid ${theme.border}`, boxShadow:"0 -8px 20px rgba(0,0,0,0.35)", zIndex:50 }}>
+          <div style={{ textAlign:"center", fontSize:10, fontWeight:700, letterSpacing:0.3, lineHeight:"16px", minHeight:16, marginBottom:6, color: bottomLabelColorSerie, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+            {bottomLabelSerie}
+          </div>
+          <button onClick={handleBotonSerie}
+            style={{ width:"100%", border:"none", borderRadius:14, padding:15, fontSize:14, fontWeight:800, letterSpacing:0.5, cursor:"pointer", color:"#fff", background:bgBotonSerie, boxShadow:sombraBotonSerie }}>
+            {textoBotonSerie}
+          </button>
+        </div>
+      )}
       <NavBar active="rutina" onNav={onNav} />
     </div>
   );
@@ -2074,6 +2381,8 @@ function NutricionScreen({ onNav }) {
   const [modalCambio, setModalCambio] = useState(false);
   const [modalComidaIndex, setModalComidaIndex] = useState(null);
   const [modalDescripcion, setModalDescripcion] = useState("");
+  const [modalFotoUrl, setModalFotoUrl] = useState(null);
+  const [modalSubiendoFoto, setModalSubiendoFoto] = useState(false);
   const hoyStr = fechaOperativaStr();
 
   useEffect(() => {
@@ -2171,7 +2480,7 @@ function NutricionScreen({ onNav }) {
   const suplementos = Array.isArray(dieta.suplementos) ? dieta.suplementos : [];
   const equivalencias = Array.isArray(dieta.equivalencias) ? dieta.equivalencias : [];
 
-  const guardarRegistro = async (index, estado, descripcion = null) => {
+  const guardarRegistro = async (index, estado, descripcion = null, fotoUrl = null) => {
     if (!userId) return;
     await supabase.from("dieta_registros").upsert({
       usuario_id: userId,
@@ -2180,6 +2489,7 @@ function NutricionScreen({ onNav }) {
       comida_nombre: comidas[index]?.nombre || null,
       estado,
       descripcion,
+      foto_url: fotoUrl,
     }, { onConflict: "usuario_id,fecha,comida_index" });
   };
 
@@ -2187,6 +2497,7 @@ function NutricionScreen({ onNav }) {
     if (estado === "cambio") {
       setModalComidaIndex(index);
       setModalDescripcion("");
+      setModalFotoUrl(null);
       setModalCambio(true);
     } else {
       setComidasEstado(prev => ({ ...prev, [index]: estado }));
@@ -2194,12 +2505,33 @@ function NutricionScreen({ onNav }) {
     }
   };
 
-  const handleGuardarCambio = () => {
-    setComidasEstado(prev => ({ ...prev, [modalComidaIndex]: "cambio" }));
-    guardarRegistro(modalComidaIndex, "cambio", modalDescripcion);
+  // Comprime y sube la foto de la comida cambiada al mismo bucket que las
+  // fotos de anamnesis/progreso, pero en su propia carpeta por alumno,
+  // nombrada por fecha + índice de comida para no pisar otros días.
+  const subirFotoComida = async (file) => {
+    if (!file || !userId || modalComidaIndex === null) return;
+    setModalSubiendoFoto(true);
+    const comprimida = await comprimirFotoGlobal(file);
+    const path = `${userId}/dieta/${hoyStr}-${modalComidaIndex}.jpg`;
+    const { error } = await supabase.storage
+      .from("fotos-alumnos")
+      .upload(path, comprimida, { contentType: "image/jpeg", upsert: true });
+    setModalSubiendoFoto(false);
+    if (error) { alert("No se pudo subir la foto: " + error.message); return; }
+    setModalFotoUrl(`https://srlucwsakjuivogvunzx.supabase.co/storage/v1/object/public/fotos-alumnos/${path}?t=${new Date().getTime()}`);
+  };
+
+  const cerrarModalCambio = () => {
     setModalCambio(false);
     setModalComidaIndex(null);
     setModalDescripcion("");
+    setModalFotoUrl(null);
+  };
+
+  const handleGuardarCambio = () => {
+    setComidasEstado(prev => ({ ...prev, [modalComidaIndex]: "cambio" }));
+    guardarRegistro(modalComidaIndex, "cambio", modalDescripcion, modalFotoUrl);
+    cerrarModalCambio();
   };
 
   const toggleSuplementoTomado = async (index, nombre) => {
@@ -2312,24 +2644,38 @@ function NutricionScreen({ onNav }) {
 
       {/* Modal para cambios de comida */}
       {modalCambio && (
-        <div style={{ position:"fixed", top:0, left:0, right:0, bottom:0, background:"rgba(5,5,10,0.85)", backdropFilter:"blur(3px)", display:"flex", alignItems:"flex-end", zIndex:1000 }}>
-          <div style={{ background:theme.card, borderRadius:"18px 18px 0 0", padding:20, width:"100%", maxHeight:"70vh", overflowY:"auto", border:`1px solid ${theme.accent}44`, borderBottom:"none", boxShadow:`0 -6px 30px ${theme.accent}33` }}>
+        <div style={{ position:"absolute", top:0, left:0, right:0, bottom:0, background:"rgba(5,5,10,0.85)", backdropFilter:"blur(3px)", display:"flex", alignItems:"flex-end", zIndex:1000 }}>
+          <div style={{ background:theme.card, borderRadius:"18px 18px 0 0", padding:20, width:"100%", maxHeight:"80vh", overflowY:"auto", border:`1px solid ${theme.accent}44`, borderBottom:"none", boxShadow:`0 -6px 30px ${theme.accent}33`, boxSizing:"border-box" }}>
             <div style={{ width:36, height:4, borderRadius:2, background:theme.border, margin:"0 auto 14px" }} />
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
               <div style={{ fontSize:16, fontWeight:800, color:theme.text }}>🔄 ¿Qué cambiaste?</div>
-              <button onClick={() => setModalCambio(false)} style={{ background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:"50%", width:30, height:30, fontSize:18, cursor:"pointer", color:theme.muted, display:"flex", alignItems:"center", justifyContent:"center" }}>×</button>
+              <button onClick={cerrarModalCambio} style={{ background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:"50%", width:30, height:30, fontSize:18, cursor:"pointer", color:theme.muted, display:"flex", alignItems:"center", justifyContent:"center" }}>×</button>
             </div>
 
             <textarea placeholder="Describe qué cambios hiciste en esta comida..."
               value={modalDescripcion} onChange={e => setModalDescripcion(e.target.value)}
               style={{ background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:10, padding:12, width:"100%", boxSizing:"border-box", color:theme.text, fontSize:14, resize:"none", minHeight:80, outline:"none", marginBottom:14 }} />
 
+            <div style={{ fontSize:11, color:theme.muted, marginBottom:8 }}>Foto de lo que comiste (opcional)</div>
+            {modalFotoUrl ? (
+              <div style={{ position:"relative", display:"inline-block", marginBottom:14 }}>
+                <img src={modalFotoUrl} alt="Foto de la comida" style={{ width:96, height:96, borderRadius:10, objectFit:"cover", border:`1px solid ${theme.border}` }} />
+                <button onClick={() => setModalFotoUrl(null)}
+                  style={{ position:"absolute", top:-8, right:-8, width:24, height:24, borderRadius:"50%", background:theme.danger, border:`1px solid ${theme.card}`, color:"#fff", fontSize:13, fontWeight:800, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" }}>×</button>
+              </div>
+            ) : (
+              <label style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:6, background:theme.surface, border:`1px dashed ${theme.border}`, borderRadius:10, padding:14, color:theme.accentLight, fontSize:13, fontWeight:700, cursor:"pointer", marginBottom:14 }}>
+                {modalSubiendoFoto ? "Subiendo..." : "📷 Agregar foto"}
+                <input type="file" accept="image/*" style={{ display:"none" }} disabled={modalSubiendoFoto} onChange={e => subirFotoComida(e.target.files[0])} />
+              </label>
+            )}
+
             <div style={{ display:"flex", gap:8 }}>
-              <button onClick={handleGuardarCambio}
-                style={{ flex:1, background:`linear-gradient(135deg, ${theme.accentLight}, ${theme.accent})`, border:"none", borderRadius:10, padding:12, color:"#fff", fontSize:14, fontWeight:700, cursor:"pointer", boxShadow:`0 0 14px ${theme.accent}55` }}>
+              <button onClick={handleGuardarCambio} disabled={modalSubiendoFoto}
+                style={{ flex:1, background:`linear-gradient(135deg, ${theme.accentLight}, ${theme.accent})`, border:"none", borderRadius:10, padding:12, color:"#fff", fontSize:14, fontWeight:700, cursor: modalSubiendoFoto ? "default" : "pointer", opacity: modalSubiendoFoto ? 0.6 : 1, boxShadow:`0 0 14px ${theme.accent}55` }}>
                 Guardar
               </button>
-              <button onClick={() => setModalCambio(false)}
+              <button onClick={cerrarModalCambio}
                 style={{ flex:1, background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:10, padding:12, color:theme.text, fontSize:14, fontWeight:700, cursor:"pointer" }}>
                 Cancelar
               </button>
@@ -2841,7 +3187,7 @@ function DiarioScreen({ onNav }) {
       {/* Historial semanal */}
       <Card style={{ marginBottom: 14 }}>
         <div style={{ fontSize: 12, color: theme.muted, marginBottom: 12 }}>ÚLTIMOS 30 DÍAS</div>
-        {dias.map((d, i) => (
+        {dias.slice().reverse().map((d, i) => (
           <div key={i} style={{
             display: "grid", gridTemplateColumns: "32px 1fr 1fr 1fr 30px",
             gap: 6, alignItems: "center", marginBottom: 10,
@@ -3292,6 +3638,7 @@ function ProgresoScreen({ onNav }) {
   const [semanaExpandidaResumen, setSemanaExpandidaResumen] = useState(null);
   const [diaExpandidoResumen, setDiaExpandidoResumen] = useState(null);
   const [pasosResumen, setPasosResumen] = useState([]);
+  const [anillos30, setAnillos30] = useState(null);
 
   useEffect(() => {
     const cargar = async () => {
@@ -3317,6 +3664,25 @@ function ProgresoScreen({ onNav }) {
         .gte("fecha", aFechaStr(desdePasos))
         .order("fecha", { ascending: true });
       if (pasosData) setPasosResumen(pasosData.filter(p => p.pasos != null));
+
+      // Cumplimiento de los últimos 30 días: Entreno / Nutrición / Diario.
+      const hoyOp30 = fechaOperativa();
+      const hace30Str = aFechaStr((() => { const d = new Date(hoyOp30); d.setDate(d.getDate() - 29); return d; })());
+      const [rutinasRes, entRes, diaRes, dieRes] = await Promise.all([
+        supabase.from("rutinas").select("dia").eq("usuario_id", user.id),
+        supabase.from("registros_entreno").select("fecha").eq("usuario_id", user.id).gte("fecha", hace30Str),
+        supabase.from("diario_registros").select("fecha").eq("usuario_id", user.id).gte("fecha", hace30Str),
+        supabase.from("dieta_registros").select("fecha, estado").eq("usuario_id", user.id).gte("fecha", hace30Str),
+      ]);
+      const entreno30 = new Set((entRes.data || []).map(r => r.fecha)).size;
+      const diario30 = new Set((diaRes.data || []).map(r => r.fecha)).size;
+      const dieta30 = dieRes.data || [];
+      const nutriPct = dieta30.length > 0 ? Math.round((dieta30.filter(r => r.estado === "completada").length / dieta30.length) * 100) : null;
+      const diasPorSemana = new Set((rutinasRes.data || []).map(r => r.dia)).size;
+      const planEntreno30 = diasPorSemana > 0 ? Math.round(diasPorSemana * 30 / 7) : 0;
+      const entrenoPct = planEntreno30 > 0 ? Math.min(100, Math.round((entreno30 / planEntreno30) * 100)) : null;
+      const diarioPct = Math.round((diario30 / 30) * 100);
+      setAnillos30({ entrenoPct, nutriPct, diarioPct });
 
       // Foto "antes": la de la Anamnesis. Foto "actual": el check-in más reciente con foto.
       const { data: usr } = await supabase.from("usuarios").select("foto_frente, fecha_inicio_plan").eq("id", user.id).single();
@@ -3409,6 +3775,28 @@ function ProgresoScreen({ onNav }) {
   return (
     <div style={{ padding: "20px 16px 90px", overflowY: "auto", height: "100%", boxSizing: "border-box" }}>
       <div style={{ marginBottom: 20 }}><span onClick={() => onNav("alumno_home")} style={{ fontSize: 16, cursor: "pointer", color: theme.text, marginBottom: 6, display: "inline-block" }}>← Inicio</span><div style={{ color: theme.muted, fontSize: 12, marginTop: 4 }}>SEGUIMIENTO</div><div style={{ fontSize: 22, fontWeight: 800, color: theme.text }}>Progreso 📈</div></div>
+
+      {anillos30 && (
+        <Card style={{ marginBottom: 14, padding: "12px 10px" }}>
+          <div style={{ fontSize: 10, color: theme.muted, letterSpacing: 1, marginBottom: 10, textAlign: "center" }}>CUMPLIMIENTO · ÚLTIMOS 30 DÍAS</div>
+          <div style={{ display: "flex", justifyContent: "space-around" }}>
+            {[
+              { label: "Entreno", pct: anillos30.entrenoPct, color: theme.accentLight, icon: "🏋️" },
+              { label: "Nutrición", pct: anillos30.nutriPct, color: theme.success, icon: "🥗" },
+              { label: "Diario", pct: anillos30.diarioPct, color: "#A78BFA", icon: "📝" },
+            ].map(a => (
+              <div key={a.label} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+                <div style={{ width: 56, height: 56, borderRadius: "50%", background: a.pct == null ? theme.surface : `conic-gradient(${a.color} ${Math.max(0, Math.min(100, a.pct)) * 3.6}deg, ${theme.surface} 0deg)`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <div style={{ width: 44, height: 44, borderRadius: "50%", background: theme.card, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 800, color: theme.text }}>
+                    {a.pct == null ? "—" : `${a.pct}%`}
+                  </div>
+                </div>
+                <div style={{ fontSize: 10, color: theme.muted, fontWeight: 700 }}>{a.icon} {a.label}</div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
 
       <Card style={{ marginBottom: 14 }}>
         <div style={{ fontSize: 12, color: theme.muted, marginBottom: 4 }}>PESO CORPORAL</div>
@@ -3926,6 +4314,25 @@ const CALENTAMIENTO_DEFAULTS = {
     { nombre: "Bíceps con banda elástica", detalle: "12 repeticiones" },
   ],
 };
+
+const VUELTA_CALMA_DEFAULTS = {
+  piernas: [
+    { nombre: "Estiramiento de cuádriceps", detalle: "30 segundos por pierna, de pie apoyado" },
+    { nombre: "Estiramiento de isquiotibiales", detalle: "30 segundos por pierna, sentado" },
+    { nombre: "Estiramiento de glúteo", detalle: "30 segundos por lado" },
+    { nombre: "Estiramiento de gemelos", detalle: "30 segundos por pierna, contra la pared" },
+  ],
+  push: [
+    { nombre: "Estiramiento de pectoral en marco de puerta", detalle: "30 segundos por lado" },
+    { nombre: "Estiramiento de tríceps por encima de la cabeza", detalle: "30 segundos por lado" },
+    { nombre: "Estiramiento de hombro cruzado", detalle: "30 segundos por lado" },
+  ],
+  pull: [
+    { nombre: "Estiramiento de dorsal", detalle: "30 segundos por lado" },
+    { nombre: "Estiramiento de bíceps contra la pared", detalle: "30 segundos por lado" },
+    { nombre: "Estiramiento de trapecio/cuello", detalle: "30 segundos por lado" },
+  ],
+};
 function RutinaCoach({ alumno }) {
   const [rutinas, setRutinas] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -3938,6 +4345,7 @@ function RutinaCoach({ alumno }) {
   const [nombreRutina, setNombreRutina] = useState("");
   const [diaRutina, setDiaRutina] = useState("");
   const [calentamientoGeneral, setCalentamientoGeneral] = useState([]);
+  const [vueltaCalma, setVueltaCalma] = useState([]);
   const [cardio, setCardio] = useState([]);
   const [metaPasos, setMetaPasos] = useState("");
   const [ejercicios, setEjercicios] = useState([
@@ -3999,6 +4407,7 @@ function RutinaCoach({ alumno }) {
     setNombreRutina(p.nombre || "");
     setDiaRutina(p.dia || "");
     setCalentamientoGeneral(Array.isArray(p.calentamiento_general) ? p.calentamiento_general : []);
+    setVueltaCalma(Array.isArray(p.vuelta_calma) ? p.vuelta_calma : []);
     setCardio(Array.isArray(p.cardio) ? p.cardio : []);
     setMetaPasos(p.meta_pasos || "");
     const ejerciciosPlantilla = Array.isArray(p.ejercicios) && p.ejercicios.length > 0
@@ -4021,6 +4430,7 @@ function RutinaCoach({ alumno }) {
       nombre: nombrePlantillaNueva.trim(),
       dia: diaRutina,
       calentamiento_general: calentamientoGeneral,
+      vuelta_calma: vueltaCalma,
       cardio: cardio,
       meta_pasos: metaPasos ? parseInt(metaPasos) : null,
       ejercicios: ejerciciosLimpios,
@@ -4109,7 +4519,7 @@ function RutinaCoach({ alumno }) {
       // Edición real: actualiza la rutina y sus ejercicios existentes, sin perder el historial de cargas
       const { error: errRutina } = await supabase
         .from("rutinas")
-        .update({ nombre: nombreRutina, dia: diaRutina, calentamiento_general: calentamientoGeneral, cardio: cardio, meta_pasos: metaPasos ? parseInt(metaPasos) : null })
+        .update({ nombre: nombreRutina, dia: diaRutina, calentamiento_general: calentamientoGeneral, vuelta_calma: vueltaCalma, cardio: cardio, meta_pasos: metaPasos ? parseInt(metaPasos) : null })
         .eq("id", editandoRutinaId);
       if (errRutina) { alert("Error actualizando rutina: " + errRutina.message); setGuardando(false); return; }
 
@@ -4144,7 +4554,7 @@ function RutinaCoach({ alumno }) {
       // Rutina nueva o duplicada: se crea desde cero
       const { data: rutina, error: errRutina } = await supabase
         .from("rutinas")
-        .insert({ usuario_id: alumno.id, nombre: nombreRutina, dia: diaRutina, calentamiento_general: calentamientoGeneral, cardio: cardio, meta_pasos: metaPasos ? parseInt(metaPasos) : null })
+        .insert({ usuario_id: alumno.id, nombre: nombreRutina, dia: diaRutina, calentamiento_general: calentamientoGeneral, vuelta_calma: vueltaCalma, cardio: cardio, meta_pasos: metaPasos ? parseInt(metaPasos) : null })
         .select().single();
       if (errRutina) { alert("Error creando rutina: " + errRutina.message); setGuardando(false); return; }
 
@@ -4183,6 +4593,7 @@ function RutinaCoach({ alumno }) {
     setNombreRutina("");
     setDiaRutina("");
     setCalentamientoGeneral([]);
+    setVueltaCalma([]);
     setCardio([]);
     setMetaPasos("");
     setEjercicios([{ nombre: "", videoUrl: "", descansoDesde: 60, descansoHasta: 90,
@@ -4198,6 +4609,7 @@ function RutinaCoach({ alumno }) {
     setNombreRutina(modo === "editar" ? rutina.nombre : rutina.nombre + " (copia)");
     setDiaRutina(rutina.dia || "");
     setCalentamientoGeneral(Array.isArray(rutina.calentamiento_general) ? rutina.calentamiento_general : []);
+    setVueltaCalma(Array.isArray(rutina.vuelta_calma) ? rutina.vuelta_calma : []);
     setCardio(Array.isArray(rutina.cardio) ? rutina.cardio : []);
     setMetaPasos(rutina.meta_pasos || "");
     const ejerciciosCargados = (rutina.ejercicios || []).slice().sort((a, b) => (a.orden || 0) - (b.orden || 0)).map(ej => {
@@ -4322,7 +4734,7 @@ function RutinaCoach({ alumno }) {
       {/* Botón crear / usar plantilla */}
       {!creando ? (
         <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-          <Btn onClick={() => { setModoDuplicar(false); setModoPlantilla(false); setEditandoRutinaId(null); setCalentamientoGeneral([]); setCardio([]); setMetaPasos(""); setCreando(true); }}>+ Crear Nueva Rutina</Btn>
+          <Btn onClick={() => { setModoDuplicar(false); setModoPlantilla(false); setEditandoRutinaId(null); setCalentamientoGeneral([]); setVueltaCalma([]); setCardio([]); setMetaPasos(""); setCreando(true); }}>+ Crear Nueva Rutina</Btn>
           <Btn variant="ghost" onClick={() => setMostrarPlantillas(!mostrarPlantillas)}>📋 Usar plantilla {mostrarPlantillas ? "▲" : "▼"}</Btn>
         </div>
       ) : null}
@@ -4399,6 +4811,34 @@ function RutinaCoach({ alumno }) {
           </div>
 
           <div style={{ marginBottom:16 }}>
+            <div style={{ fontSize:11, color:theme.muted, marginBottom:6 }}>🧘 Vuelta a la calma (estiramientos post-sesión)</div>
+            <div style={{ display:"flex", gap:6, marginBottom:10, flexWrap:"wrap" }}>
+              {[["piernas","🦵 Piernas"],["push","💪 Push"],["pull","🎯 Pull"]].map(([key,label]) => (
+                <button key={key} onClick={() => setVueltaCalma(VUELTA_CALMA_DEFAULTS[key].map(m => ({...m})))}
+                  style={{ background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:8, padding:"6px 12px", color:theme.text, fontSize:12, cursor:"pointer" }}>{label}</button>
+              ))}
+              {vueltaCalma.length > 0 && (
+                <button onClick={() => setVueltaCalma([])} style={{ background:"transparent", border:`1px solid ${theme.danger}66`, borderRadius:8, padding:"6px 12px", color:theme.danger, fontSize:12, cursor:"pointer" }}>Quitar</button>
+              )}
+            </div>
+            {vueltaCalma.map((m, i) => (
+              <div key={i} style={{ background:theme.card, borderRadius:8, padding:8, marginBottom:8 }}>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 20px", gap:6, alignItems:"center", marginBottom:6 }}>
+                  <input style={inputStyle} placeholder="Nombre" value={m.nombre} onChange={e => { const c=[...vueltaCalma]; c[i]={...c[i], nombre:e.target.value}; setVueltaCalma(c); }} />
+                  <input style={inputStyle} placeholder="Detalle" value={m.detalle} onChange={e => { const c=[...vueltaCalma]; c[i]={...c[i], detalle:e.target.value}; setVueltaCalma(c); }} />
+                  <span onClick={() => setVueltaCalma(vueltaCalma.filter((_,idx)=>idx!==i))} style={{ cursor:"pointer", color:theme.danger, fontSize:14, textAlign:"center" }}>×</span>
+                </div>
+                <div style={{ display:"flex", alignItems:"flex-start", gap:10, flexWrap:"wrap" }}>
+                  <ImagenReferenciaEjercicio nombre={m.nombre} mapa={mapaImagenes} size={64} />
+                  <BotonSubirImagenEjercicio nombre={m.nombre} onSubida={({ normalizado, url }) => setMapaImagenes(prev => ({ ...prev, [normalizado]: { ...(prev[normalizado]||{}), url } }))} />
+                  <EditorResenaEjercicio nombre={m.nombre} mapa={mapaImagenes} onGuardado={({ normalizado, resena }) => setMapaImagenes(prev => ({ ...prev, [normalizado]: { ...(prev[normalizado]||{}), resena } }))} />
+                </div>
+              </div>
+            ))}
+            <button onClick={() => setVueltaCalma([...vueltaCalma, { nombre:"", detalle:"" }])} style={{ background:"transparent", border:`1px dashed ${theme.border}`, borderRadius:6, padding:"4px 10px", color:theme.muted, fontSize:11, cursor:"pointer" }}>+ Estiramiento</button>
+          </div>
+
+          <div style={{ marginBottom:16 }}>
             <div style={{ fontSize:11, color:theme.muted, marginBottom:6 }}>🏃 Cardio y pasos</div>
             <div style={{ marginBottom:10 }}>
               <div style={{ fontSize:10, color:theme.muted, marginBottom:3 }}>Meta de pasos diaria (opcional)</div>
@@ -4410,15 +4850,9 @@ function RutinaCoach({ alumno }) {
                   <input style={inputStyle} placeholder="Tipo (ej: Trote, Bicicleta)" value={c.tipo} list="lista-tipos-cardio" onChange={e => { const cc=[...cardio]; cc[i]={...cc[i], tipo:e.target.value}; setCardio(cc); }} />
                   <span onClick={() => setCardio(cardio.filter((_,idx)=>idx!==i))} style={{ cursor:"pointer", color:theme.danger, fontSize:14, textAlign:"center" }}>×</span>
                 </div>
-                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:6, marginBottom:6 }}>
-                  <div>
-                    <div style={{ fontSize:10, color:theme.muted, marginBottom:2 }}>Duración (min)</div>
-                    <input type="number" style={inputStyle} placeholder="20" value={c.duracionMin} onChange={e => { const cc=[...cardio]; cc[i]={...cc[i], duracionMin:e.target.value}; setCardio(cc); }} />
-                  </div>
-                  <div>
-                    <div style={{ fontSize:10, color:theme.muted, marginBottom:2 }}>Distancia (km, opcional)</div>
-                    <input type="number" style={inputStyle} placeholder="3" value={c.distanciaKm} onChange={e => { const cc=[...cardio]; cc[i]={...cc[i], distanciaKm:e.target.value}; setCardio(cc); }} />
-                  </div>
+                <div style={{ marginBottom:6 }}>
+                  <div style={{ fontSize:10, color:theme.muted, marginBottom:2 }}>Duración (min)</div>
+                  <input type="number" style={inputStyle} placeholder="20" value={c.duracionMin} onChange={e => { const cc=[...cardio]; cc[i]={...cc[i], duracionMin:e.target.value}; setCardio(cc); }} />
                 </div>
                 <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:6, marginBottom:6 }}>
                   <div>
@@ -4450,7 +4884,7 @@ function RutinaCoach({ alumno }) {
             <datalist id="lista-tipos-cardio">
               {["Trote","Caminata","Bicicleta","Elíptica","Remo","Natación","Escaladora"].map(t => <option key={t} value={t} />)}
             </datalist>
-            <button onClick={() => setCardio([...cardio, { tipo:"", duracionMin:"", distanciaKm:"", fcMinPct:"", fcMaxPct:"", notas:"" }])} style={{ background:"transparent", border:`1px dashed ${theme.border}`, borderRadius:6, padding:"4px 10px", color:theme.muted, fontSize:11, cursor:"pointer" }}>+ Cardio</button>
+            <button onClick={() => setCardio([...cardio, { tipo:"", duracionMin:"", fcMinPct:"", fcMaxPct:"", notas:"" }])} style={{ background:"transparent", border:`1px dashed ${theme.border}`, borderRadius:6, padding:"4px 10px", color:theme.muted, fontSize:11, cursor:"pointer" }}>+ Cardio</button>
           </div>
 
           <div style={{ fontSize:12, fontWeight:800, color:theme.text, marginBottom:10 }}>EJERCICIOS</div>
