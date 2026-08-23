@@ -5206,10 +5206,39 @@ export default function App() {
   const [screen, setScreen] = useState("login");
   const [alumnoSeleccionado, setAlumnoSeleccionado] = useState(null);
   const [emailPendiente, setEmailPendiente] = useState("");
-
   const navCoachAlumno = (alumno) => {
     setAlumnoSeleccionado(alumno);
     setScreen("coach_alumno");
+  };
+
+  // Guía para agregar la app a la pantalla de inicio: se muestra el mismo
+  // tipo de mensaje explicando los pasos a mano tanto en iPhone como en
+  // Android (a propósito no se usa el botón nativo de "instalar" que ofrece
+  // Chrome en Android, para que los alumnos de ambas plataformas tengan la
+  // misma experiencia). Se muestra una sola vez -- si la persona la cierra,
+  // no se le vuelve a mostrar en ese celular -- y no aparece si ya está
+  // corriendo instalada desde el ícono.
+  const [mostrarGuiaInstalar, setMostrarGuiaInstalar] = useState(false);
+  const [guiaInstalarTexto, setGuiaInstalarTexto] = useState(null);
+  useEffect(() => {
+    const ua = navigator.userAgent;
+    const esIOS = /iPad|iPhone|iPod/.test(ua) && !window.MSStream;
+    const esAndroid = /Android/.test(ua);
+    const yaInstalada = window.navigator.standalone === true || window.matchMedia("(display-mode: standalone)").matches;
+    let yaDescartada = false;
+    try { yaDescartada = localStorage.getItem("guiaInstalarDescartada") === "1"; } catch (e) {}
+    if (yaInstalada || yaDescartada) return;
+    if (esIOS) {
+      setGuiaInstalarTexto(<>Toca el botón <b style={{ color:theme.text }}>Compartir</b> ⬆️ en la barra de abajo del navegador, y luego elige <b style={{ color:theme.text }}>"Agregar a inicio"</b>.</>);
+      setMostrarGuiaInstalar(true);
+    } else if (esAndroid) {
+      setGuiaInstalarTexto(<>Toca el menú <b style={{ color:theme.text }}>⋮</b> (los tres puntos, arriba a la derecha de Chrome), y luego elige <b style={{ color:theme.text }}>"Instalar aplicación"</b> o <b style={{ color:theme.text }}>"Agregar a pantalla de inicio"</b>.</>);
+      setMostrarGuiaInstalar(true);
+    }
+  }, []);
+  const cerrarGuiaInstalar = () => {
+    setMostrarGuiaInstalar(false);
+    try { localStorage.setItem("guiaInstalarDescartada", "1"); } catch (e) {}
   };
 
   // Detecta cuándo hay una sesión activa (al cargar la app si ya había una
@@ -5278,7 +5307,20 @@ export default function App() {
         <div style={{ position:"relative",width:375,height:720,margin:"0 auto" }}>
           <div style={{ position:"absolute",inset:-12,border:"12px solid #1e1e2e",borderRadius:48,boxShadow:"0 0 0 2px #2e2e3e, 0 32px 80px rgba(0,0,0,0.9)",pointerEvents:"none",zIndex:10 }}/>
           <div style={{ position:"absolute",top:-18,left:"50%",transform:"translateX(-50%)",width:90,height:7,background:"#1e1e2e",borderRadius:4,zIndex:11 }}/>
-          <div style={{ width:375,height:720,background:theme.bg,borderRadius:36,overflow:"auto",position:"relative" }}>{renderScreen()}</div>
+          <div style={{ width:375,height:720,background:theme.bg,borderRadius:36,overflow:"auto",position:"relative" }}>
+            {renderScreen()}
+            {mostrarGuiaInstalar && (
+              <div style={{ position:"absolute", top:12, left:12, right:12, zIndex:3000, background:theme.card, border:`1px solid ${theme.accentLight}66`, borderRadius:12, padding:"12px 14px", boxShadow:`0 4px 20px rgba(0,0,0,0.5), 0 0 18px ${theme.accent}44` }}>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:8 }}>
+                  <div style={{ fontSize:12, fontWeight:800, color:theme.text }}>📲 Instala esta app en tu celular</div>
+                  <span onClick={cerrarGuiaInstalar} style={{ cursor:"pointer", color:theme.muted, fontSize:14, lineHeight:1, flexShrink:0 }}>✕</span>
+                </div>
+                <div style={{ fontSize:11, color:theme.muted, marginTop:6, lineHeight:1.5 }}>
+                  {guiaInstalarTexto} Así te queda como una app normal, sin tener que entrar por el navegador cada vez.
+                </div>
+              </div>
+            )}
+          </div>
         </div>
         <div style={{ marginTop:20,display:"flex",gap:8,flexWrap:"wrap",justifyContent:"center",maxWidth:420 }}>
           {[["login","Login"],["registro","Registro"],["confirmar_correo","Confirmar correo"],["anamnesis","Anamnesis"],["alumno_home","Inicio"],["rutina","Rutina"],["nutricion","Dieta"],["checkin","Check-in"],["progreso","Progreso"],["coach_panel","Coach Panel"],["coach_alumno","Perfil Alumno"]].map(([id,label])=>(<button key={id} onClick={()=>setScreen(id)} style={{ background:screen===id?"#2563EB":"#13131a",border:`1px solid ${screen===id?"#2563EB":"#2a2a38"}`,color:screen===id?"#fff":"#666",borderRadius:8,padding:"6px 12px",fontSize:11,cursor:"pointer",fontWeight:600 }}>{label}</button>))}
