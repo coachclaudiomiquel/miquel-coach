@@ -75,6 +75,27 @@ function formatearDescanso(segundos) {
   const seg = s % 60;
   return `${min}:${String(seg).padStart(2, "0")}`;
 }
+// Redondea un kg calculado (aproximación por %, o bajadas de dropset/strip)
+// al múltiplo de 2.5kg más cercano hacia ABAJO -- en la práctica no todos los
+// discos permiten cualquier número exacto (suelen venir de 1.25/2.5/5/10/15/
+// 20/25kg), y quedarse levemente corto es más seguro que pasarse.
+function redondearKg(kg) {
+  const n = parseFloat(kg);
+  if (!n || n <= 0) return null;
+  return Math.floor(n / 2.5) * 2.5;
+}
+// Defaults por técnica de intensidad: al elegir una técnica en el selector,
+// estos valores se precargan (editables) si el campo todavía no tiene nada
+// cargado, para que el coach los vea listos en vez de tener que escribirlos
+// de cero.
+const DEFAULTS_TECNICA = {
+  dropset: { dropsetCantidad: "2", dropsetPct: "25", dropsetRepsModo: "fallo" },
+  isometrica: { isoSegundos: "4" },
+  restpause: { rpCantidad: "2", rpSegundos: "15" },
+};
+// Un color distinto por técnica de intensidad, para que se puedan diferenciar
+// de un vistazo (badge de texto y el recuadro de la serie que la usa).
+const COLORES_TECNICA = { dropset: "#38BDF8", isometrica: "#A78BFA", restpause: "#39FF88" };
 // Fecha calendario real de hoy en hora local, sin el corte de las 4 AM (para fechas
 // administrativas como pagos, que no dependen de la rutina de sueño del alumno).
 function fechaLocalStr(base = new Date()) { return aFechaStr(base); }
@@ -1748,7 +1769,7 @@ function RutinaScreen({ onNav }) {
           const key = `${ej.id}-${idx}`;
           const actual = next[key] || {};
           const refEfectiva = ultimasCargas[`${ej.id}-1`];
-          const kgSugerido = (refEfectiva?.kg && s.pctDesde) ? Math.round((parseFloat(s.pctDesde) / 100) * refEfectiva.kg) : null;
+          const kgSugerido = (refEfectiva?.kg && s.pctDesde) ? redondearKg((parseFloat(s.pctDesde) / 100) * refEfectiva.kg) : null;
           const kgEditadoAMano = actual.kg && !actual._autoKg;
           const repsEditadoAMano = actual.reps && !actual._autoReps;
           const nuevoKg = kgEditadoAMano ? actual.kg : (kgSugerido != null ? String(kgSugerido) : (actual.kg || ""));
@@ -2130,14 +2151,18 @@ function RutinaScreen({ onNav }) {
 
                   <div style={infoSec}>
                     <div style={infoTit}>⚡ Técnicas de intensidad</div>
-                    Algunas series efectivas pueden venir marcadas con una técnica especial. Los valores son fijos (no los define tu coach caso a caso):
+                    Algunas series efectivas pueden venir marcadas con una técnica especial. Estos son los valores aproximados de cada una, pero tu coach los ajusta caso a caso -- el valor exacto para esa serie lo vas a ver junto a ella:
                     <div style={infoSub}>
                       <b style={{ color:theme.text }}>Dropset</b><br/>
                       Al llegar al fallo o cerca de él, bajas el peso <span style={infoPct}>20-30%</span> de inmediato (sin descansar) y segues sumando repeticiones.
                     </div>
                     <div style={infoSub}>
+                      <b style={{ color:theme.text }}>Pausa isométrica</b><br/>
+                      Bajas controlado y te quedas quieto abajo <span style={infoPct}>3-5 segundos</span> antes de subir explosivo.
+                    </div>
+                    <div style={infoSub}>
                       <b style={{ color:theme.text }}>Rest-pause</b><br/>
-                      Llegas cerca del fallo, descansas <span style={infoPct}>10-15 segundos</span> y sacas 3-5 repeticiones más; si tu serie lo pide, hay una segunda pausa opcional de otros 10-15 segundos para 1-3 repeticiones más (máximo 2 pausas en total).
+                      Llegas cerca del fallo, descansas <span style={infoPct}>10-15 segundos</span> y sacas algunas repeticiones más con el mismo peso; puede haber una segunda pausa igual de corta para sumar unas pocas más.
                     </div>
                   </div>
 
@@ -2237,7 +2262,10 @@ function RutinaScreen({ onNav }) {
                     <div style={{ display:"inline-block", fontSize:9, fontWeight:800, color:theme.gold, background:`${theme.gold}18`, border:`1px solid ${theme.gold}44`, borderRadius:6, padding:"2px 6px", marginBottom:4 }}>🔗 SUPERSERIE {ej.grupo_superserie} · sin descanso entre ejercicios</div>
                   )}
                   <div style={{ fontSize: 14, fontWeight: 800, color: theme.text, marginBottom: 4, textTransform:"uppercase", letterSpacing:0.4, lineHeight:1.3, display:"-webkit-box", WebkitLineClamp:2, WebkitBoxOrient:"vertical", overflow:"hidden" }}>{ej.nombre}</div>
-                  <div style={{ fontSize: 11, color: theme.muted }}>⏱ Descanso: {ej.descanso_desde && ej.descanso_hasta ? `${ej.descanso_desde}-${ej.descanso_hasta}s` : `${ej.descanso}s`}</div>
+                  <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                    <div style={{ fontSize: 11, color: theme.muted }}>⏱ Descanso: {ej.descanso_desde && ej.descanso_hasta ? `${ej.descanso_desde}-${ej.descanso_hasta}s` : `${ej.descanso}s`}</div>
+                    <div style={{ fontSize: 9.5, fontWeight:800, color: theme.muted, background:theme.card, border:`1px solid ${theme.border}`, borderRadius:6, padding:"2px 6px" }} title="Tempo: bajada-pausa-subida">⏱ {ej.tempo || "3-1-1"}</div>
+                  </div>
                 </div>
               </div>
               {ej.video_url && (
@@ -2269,10 +2297,15 @@ function RutinaScreen({ onNav }) {
                 // alumno todavía no tiene carga registrada ahí, no hay sugerencia
                 // -- igual que la primera vez en una serie efectiva.
                 const refEfectiva = ultimasCargas[`${ej.id}-1`];
-                const kgSugeridoAprox = (refEfectiva?.kg && s.pctDesde) ? Math.round((parseFloat(s.pctDesde) / 100) * refEfectiva.kg) : null;
+                const kgSugeridoAprox = (refEfectiva?.kg && s.pctDesde) ? redondearKg((parseFloat(s.pctDesde) / 100) * refEfectiva.kg) : null;
                 const placeholderKg = tipo === "efectiva"
                   ? (anterior?.kg || "kg")
                   : (kgSugeridoAprox || "kg");
+                // Color propio por técnica de intensidad, para el nombre dentro del
+                // recuadro de la serie (no se usa para teñir el recuadro entero,
+                // solo el texto, así queda claro a qué serie corresponde sin
+                // "pintar" toda la fila).
+                const colorTecnica = tipo === "efectiva" ? COLORES_TECNICA[s.tecnica] : null;
                 const esActiva = estadoSerie === "activa" && serieObjetivo && serieObjetivo.ejId === ej.id && serieObjetivo.idx === idx;
                 // Para aproximación, kg/reps vienen precargados automáticamente
                 // (ver efecto de precarga más arriba) -- eso solo no cuenta como
@@ -2307,6 +2340,15 @@ function RutinaScreen({ onNav }) {
                       {tipo === "aproximacion" && (s.pctDesde || s.pctHasta) && (
                         <div style={{ fontSize: 8.5, color: colorTipo, fontWeight: 700, marginTop: 2, lineHeight: 1.1 }}>{s.pctDesde}-{s.pctHasta}% de tu efectiva</div>
                       )}
+                      {tipo === "efectiva" && s.tecnica === "dropset" && (
+                        <div style={{ fontSize: 9, color: colorTecnica, fontWeight: 700, marginTop: 4, lineHeight: 1.1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>⚡ {s.dropsetCantidad || 2} drops -{s.dropsetPct || 25}%</div>
+                      )}
+                      {tipo === "efectiva" && s.tecnica === "isometrica" && (
+                        <div style={{ fontSize: 9, color: colorTecnica, fontWeight: 700, marginTop: 4, lineHeight: 1.1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>⚡ pausa {s.isoSegundos || 4}s</div>
+                      )}
+                      {tipo === "efectiva" && s.tecnica === "restpause" && (
+                        <div style={{ fontSize: 9, color: colorTecnica, fontWeight: 700, marginTop: 4, lineHeight: 1.1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>⚡ {s.rpCantidad || 2}×{s.rpSegundos || 15}s</div>
+                      )}
                     </div>
                     <input value={reg.kg || ""} onChange={e => setReg(ej.id, idx, "kg", e.target.value)} placeholder={placeholderKg}
                       style={{ background: theme.card, border: `1px solid ${reg.kg ? theme.accent + "66" : theme.border}`, borderRadius: 6, padding: "5px 2px", color: theme.text, fontSize: 12, fontWeight: 700, width: "100%", textAlign: "center", outline: "none", boxSizing: "border-box" }} />
@@ -2321,16 +2363,6 @@ function RutinaScreen({ onNav }) {
                   {esActiva && (
                     <div style={{ display:"flex", alignItems:"center", gap:6, fontSize:10, color:theme.accentLight, fontWeight:700, paddingLeft:6, marginBottom:6, marginTop:-2 }}>
                       🔵 Serie en curso...
-                    </div>
-                  )}
-                  {tipo === "efectiva" && s.tecnica === "dropset" && (
-                    <div style={{ display:"flex", alignItems:"center", gap:6, fontSize:10, color:theme.warning, fontWeight:700, paddingLeft:6, marginBottom:6, marginTop:-2, lineHeight:1.4 }}>
-                      ⚡ DROPSET <span style={{ color:theme.muted, fontWeight:500 }}>· baja 20-30% del peso al llegar cerca del fallo, sin descanso</span>
-                    </div>
-                  )}
-                  {tipo === "efectiva" && s.tecnica === "restpause" && (
-                    <div style={{ display:"flex", alignItems:"center", gap:6, fontSize:10, color:theme.warning, fontWeight:700, paddingLeft:6, marginBottom:6, marginTop:-2, lineHeight:1.4 }}>
-                      ⚡ REST-PAUSE <span style={{ color:theme.muted, fontWeight:500 }}>· pausa 10-15s → 3-5 reps → pausa opcional 10-15s → 1-3 reps (máx. 2 pausas)</span>
                     </div>
                   )}
                   {anterior && (
@@ -4552,7 +4584,7 @@ function RutinaCoach({ alumno }) {
   const [cardio, setCardio] = useState([]);
   const [metaPasos, setMetaPasos] = useState("");
   const [ejercicios, setEjercicios] = useState([
-    { nombre: "", videoUrl: "", descansoDesde: 60, descansoHasta: 90, grupoSuperserie: "",
+    { nombre: "", videoUrl: "", descansoDesde: 60, descansoHasta: 90, tempoBajada: "3", tempoPausa: "1", tempoSubida: "1", grupoSuperserie: "",
       seriesAproximacion: [{ reps: "8", pctDesde: "50", pctHasta: "60" }, { reps: "6", pctDesde: "70", pctHasta: "80" }, { reps: "3", pctDesde: "85", pctHasta: "90" }],
       seriesEfectivas: [{ reps: "10", rir: 2, tecnica: "normal" }] }
   ]);
@@ -4621,7 +4653,7 @@ function RutinaCoach({ alumno }) {
     setMetaPasos(p.meta_pasos || "");
     const ejerciciosPlantilla = Array.isArray(p.ejercicios) && p.ejercicios.length > 0
       ? p.ejercicios.map(ej => ({ ...ej, _dbId: undefined }))
-      : [{ nombre: "", videoUrl: "", descansoDesde: 60, descansoHasta: 90, grupoSuperserie: "", seriesAproximacion: [{ reps: "8", pctDesde: "50", pctHasta: "60" }, { reps: "6", pctDesde: "70", pctHasta: "80" }, { reps: "3", pctDesde: "85", pctHasta: "90" }], seriesEfectivas: [{ reps: "10", rir: 2, tecnica: "normal" }] }];
+      : [{ nombre: "", videoUrl: "", descansoDesde: 60, descansoHasta: 90, tempoBajada: "3", tempoPausa: "1", tempoSubida: "1", grupoSuperserie: "", seriesAproximacion: [{ reps: "8", pctDesde: "50", pctHasta: "60" }, { reps: "6", pctDesde: "70", pctHasta: "80" }, { reps: "3", pctDesde: "85", pctHasta: "90" }], seriesEfectivas: [{ reps: "10", rir: 2, tecnica: "normal" }] }];
     setEjercicios(ejerciciosPlantilla);
     setEjerciciosEliminados([]); setAproxExpandida({});
     setModoPlantilla(true);
@@ -4685,7 +4717,7 @@ function RutinaCoach({ alumno }) {
   };
 
   const agregarEjercicio = () => {
-    setEjercicios([...ejercicios, { nombre: "", videoUrl: "", descansoDesde: 60, descansoHasta: 90, grupoSuperserie: "",
+    setEjercicios([...ejercicios, { nombre: "", videoUrl: "", descansoDesde: 60, descansoHasta: 90, tempoBajada: "3", tempoPausa: "1", tempoSubida: "1", grupoSuperserie: "",
       seriesAproximacion: [{ reps: "8", pctDesde: "50", pctHasta: "60" }, { reps: "6", pctDesde: "70", pctHasta: "80" }, { reps: "3", pctDesde: "85", pctHasta: "90" }],
       seriesEfectivas: [{ reps: "10", rir: 2, tecnica: "normal" }] }]);
   };
@@ -4713,7 +4745,7 @@ function RutinaCoach({ alumno }) {
   // así se agrega uno "en el medio" en un solo clic, sin tener que crearlo al
   // final y subirlo a fuerza de flechas.
   const insertarEjercicioDespues = (idx) => {
-    const nuevo = { nombre: "", videoUrl: "", descansoDesde: 60, descansoHasta: 90, grupoSuperserie: "",
+    const nuevo = { nombre: "", videoUrl: "", descansoDesde: 60, descansoHasta: 90, tempoBajada: "3", tempoPausa: "1", tempoSubida: "1", grupoSuperserie: "",
       seriesAproximacion: [{ reps: "8", pctDesde: "50", pctHasta: "60" }, { reps: "6", pctDesde: "70", pctHasta: "80" }, { reps: "3", pctDesde: "85", pctHasta: "90" }],
       seriesEfectivas: [{ reps: "10", rir: 2, tecnica: "normal" }] };
     const upd = [...ejercicios];
@@ -4761,6 +4793,19 @@ function RutinaCoach({ alumno }) {
     setEjercicios(upd);
   };
 
+  // Cambia la técnica de una serie efectiva y precarga sus valores por
+  // defecto (ver DEFAULTS_TECNICA) solo en los campos que todavía no tengan
+  // nada cargado -- así no pisa un valor que el coach ya haya editado antes
+  // si va y vuelve entre técnicas.
+  const cambiarTecnica = (ejIdx, sIdx, tecnica) => {
+    const upd = [...ejercicios];
+    const serie = { ...upd[ejIdx].seriesEfectivas[sIdx], tecnica };
+    const defaults = DEFAULTS_TECNICA[tecnica] || {};
+    Object.keys(defaults).forEach(k => { if (serie[k] === undefined || serie[k] === "") serie[k] = defaults[k]; });
+    upd[ejIdx].seriesEfectivas[sIdx] = serie;
+    setEjercicios(upd);
+  };
+
   const guardarRutina = async () => {
     if (!nombreRutina) return;
     setGuardando(true);
@@ -4786,6 +4831,7 @@ function RutinaCoach({ alumno }) {
           descanso: parseInt(ej.descansoHasta) || 90,
           descanso_desde: parseInt(ej.descansoDesde) || null,
           descanso_hasta: parseInt(ej.descansoHasta) || null,
+          tempo: `${ej.tempoBajada || "3"}-${ej.tempoPausa || "1"}-${ej.tempoSubida || "1"}`,
           grupo_superserie: ej.grupoSuperserie || null,
           orden: i,
           series: seriesCombinadas
@@ -4830,6 +4876,7 @@ function RutinaCoach({ alumno }) {
               descanso: parseInt(ej.descansoHasta) || 90,
               descanso_desde: parseInt(ej.descansoDesde) || null,
               descanso_hasta: parseInt(ej.descansoHasta) || null,
+              tempo: `${ej.tempoBajada || "3"}-${ej.tempoPausa || "1"}-${ej.tempoSubida || "1"}`,
               grupo_superserie: ej.grupoSuperserie || null,
               orden: i,
               series: seriesCombinadas
@@ -4853,7 +4900,7 @@ function RutinaCoach({ alumno }) {
     setVueltaCalma([]);
     setCardio([]);
     setMetaPasos("10000");
-    setEjercicios([{ nombre: "", videoUrl: "", descansoDesde: 60, descansoHasta: 90, grupoSuperserie: "",
+    setEjercicios([{ nombre: "", videoUrl: "", descansoDesde: 60, descansoHasta: 90, tempoBajada: "3", tempoPausa: "1", tempoSubida: "1", grupoSuperserie: "",
       seriesAproximacion: [{ reps: "8", pctDesde: "50", pctHasta: "60" }, { reps: "6", pctDesde: "70", pctHasta: "80" }, { reps: "3", pctDesde: "85", pctHasta: "90" }],
       seriesEfectivas: [{ reps: "10", rir: 2, tecnica: "normal" }] }]);
     setEjerciciosEliminados([]); setAproxExpandida({});
@@ -4883,13 +4930,16 @@ function RutinaCoach({ alumno }) {
         videoUrl: ej.video_url || "",
         descansoDesde: ej.descanso_desde || 60,
         descansoHasta: ej.descanso_hasta || ej.descanso || 90,
+        tempoBajada: (ej.tempo || "3-1-1").split("-")[0] || "3",
+        tempoPausa: (ej.tempo || "3-1-1").split("-")[1] || "1",
+        tempoSubida: (ej.tempo || "3-1-1").split("-")[2] || "1",
         grupoSuperserie: ej.grupo_superserie || "",
-        seriesAproximacion: seriesAproximacion.length > 0 ? seriesAproximacion : [{ reps: "8", pctDesde: "50", pctHasta: "60" }, { reps: "6", pctDesde: "70", pctHasta: "80" }, { reps: "3", pctDesde: "85", pctHasta: "90" }],
+        seriesAproximacion,
         seriesEfectivas: seriesEfectivas.length > 0 ? seriesEfectivas : [{ reps: "10", rir: 2, tecnica: "normal" }],
       };
     });
     setEjercicios(ejerciciosCargados.length > 0 ? ejerciciosCargados : [
-      { nombre: "", videoUrl: "", descansoDesde: 60, descansoHasta: 90, grupoSuperserie: "",
+      { nombre: "", videoUrl: "", descansoDesde: 60, descansoHasta: 90, tempoBajada: "3", tempoPausa: "1", tempoSubida: "1", grupoSuperserie: "",
         seriesAproximacion: [{ reps: "8", pctDesde: "50", pctHasta: "60" }, { reps: "6", pctDesde: "70", pctHasta: "80" }, { reps: "3", pctDesde: "85", pctHasta: "90" }],
         seriesEfectivas: [{ reps: "10", rir: 2, tecnica: "normal" }] }
     ]);
@@ -5007,6 +5057,18 @@ function RutinaCoach({ alumno }) {
               </div>
 
               <div style={{ marginBottom:10 }}>
+                <div style={{ fontSize:10, color:theme.muted, marginBottom:3 }}>Tempo (bajada · pausa · subida)</div>
+                <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+                  <input style={{ ...inputStyle, width:44, textAlign:"center", padding:"8px 2px" }} value={ej.tempoBajada} onChange={e => updateEj(ejIdx, "tempoBajada", e.target.value)} />
+                  <span style={{ color:theme.muted, fontSize:12 }}>-</span>
+                  <input style={{ ...inputStyle, width:44, textAlign:"center", padding:"8px 2px" }} value={ej.tempoPausa} onChange={e => updateEj(ejIdx, "tempoPausa", e.target.value)} />
+                  <span style={{ color:theme.muted, fontSize:12 }}>-</span>
+                  <input style={{ ...inputStyle, width:44, textAlign:"center", padding:"8px 2px" }} value={ej.tempoSubida} onChange={e => updateEj(ejIdx, "tempoSubida", e.target.value)} />
+                  <span style={{ color:theme.muted, fontSize:11 }}>segundos</span>
+                </div>
+              </div>
+
+              <div style={{ marginBottom:10 }}>
                 <div style={{ fontSize:10, color:theme.muted, marginBottom:3 }}>Grupo (superserie / biserie) — opcional</div>
                 <input style={{ ...inputStyle, width:70 }} placeholder="Ej: A" maxLength={3}
                   value={ej.grupoSuperserie || ""} onChange={e => updateEj(ejIdx, "grupoSuperserie", e.target.value.toUpperCase())} />
@@ -5065,10 +5127,11 @@ function RutinaCoach({ alumno }) {
                     <option value={2}>RIR 2</option>
                     <option value={3}>RIR 3</option>
                   </select>
-                  <select value={s.tecnica || "normal"} onChange={e => updateSerie(ejIdx, "efectiva", sIdx, "tecnica", e.target.value)}
+                  <select value={s.tecnica || "normal"} onChange={e => cambiarTecnica(ejIdx, sIdx, e.target.value)}
                     title="Técnica de intensidad" style={{ ...inputStyle, padding:"4px 1px", fontSize:9 }}>
                     <option value="normal">—</option>
                     <option value="dropset">DS</option>
+                    <option value="isometrica">ISO</option>
                     <option value="restpause">RP</option>
                   </select>
                   {ej.seriesEfectivas.length > 1 && (
@@ -5076,10 +5139,43 @@ function RutinaCoach({ alumno }) {
                   )}
                 </div>
                 {s.tecnica === "dropset" && (
-                  <div style={{ fontSize:9, color:theme.muted, marginBottom:6, marginTop:-2, paddingLeft:4, lineHeight:1.4 }}>⚡ Dropset: baja 20-30% del peso al llegar cerca del fallo, sin descanso.</div>
+                  <div style={{ display:"flex", gap:5, alignItems:"center", marginBottom:6, marginTop:-2, paddingLeft:4, flexWrap:"wrap" }}>
+                    <span style={{ fontSize:9, color:COLORES_TECNICA.dropset, fontWeight:800 }}>⚡ DROPSET</span>
+                    <input type="number" value={s.dropsetCantidad ?? "2"} onChange={e => updateSerie(ejIdx, "efectiva", sIdx, "dropsetCantidad", e.target.value)}
+                      title="Cantidad de drops" style={{ ...inputStyle, width:38, padding:"3px 2px", fontSize:11 }} />
+                    <span style={{ fontSize:9, color:theme.muted }}>drops ·</span>
+                    <input type="number" value={s.dropsetPct ?? "25"} onChange={e => updateSerie(ejIdx, "efectiva", sIdx, "dropsetPct", e.target.value)}
+                      title="% de bajada por drop" style={{ ...inputStyle, width:38, padding:"3px 2px", fontSize:11 }} />
+                    <span style={{ fontSize:9, color:theme.muted }}>% c/u ·</span>
+                    <div style={{ display:"flex", gap:3 }}>
+                      {[["fallo","Fallo"],["fijas","Fijas"]].map(([v,l]) => (
+                        <span key={v} onClick={() => updateSerie(ejIdx, "efectiva", sIdx, "dropsetRepsModo", v)}
+                          style={{ fontSize:9, fontWeight:700, padding:"3px 6px", borderRadius:5, cursor:"pointer",
+                            background: (s.dropsetRepsModo || "fallo") === v ? theme.accent : "transparent",
+                            border: `1px solid ${(s.dropsetRepsModo || "fallo") === v ? theme.accentLight : theme.border}`,
+                            color: (s.dropsetRepsModo || "fallo") === v ? "#fff" : theme.muted }}>{l}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {s.tecnica === "isometrica" && (
+                  <div style={{ display:"flex", gap:5, alignItems:"center", marginBottom:6, marginTop:-2, paddingLeft:4, flexWrap:"wrap" }}>
+                    <span style={{ fontSize:9, color:COLORES_TECNICA.isometrica, fontWeight:800 }}>⚡ PAUSA ISOMÉTRICA</span>
+                    <input type="number" value={s.isoSegundos ?? "4"} onChange={e => updateSerie(ejIdx, "efectiva", sIdx, "isoSegundos", e.target.value)}
+                      title="Segundos de pausa abajo" style={{ ...inputStyle, width:38, padding:"3px 2px", fontSize:11 }} />
+                    <span style={{ fontSize:9, color:theme.muted }}>seg abajo · subida explosiva</span>
+                  </div>
                 )}
                 {s.tecnica === "restpause" && (
-                  <div style={{ fontSize:9, color:theme.muted, marginBottom:6, marginTop:-2, paddingLeft:4, lineHeight:1.4 }}>⚡ Rest-pause: pausa 10-15s → 3-5 reps más → pausa opcional 10-15s → 1-3 reps más (máx. 2 pausas).</div>
+                  <div style={{ display:"flex", gap:5, alignItems:"center", marginBottom:6, marginTop:-2, paddingLeft:4, flexWrap:"wrap" }}>
+                    <span style={{ fontSize:9, color:COLORES_TECNICA.restpause, fontWeight:800 }}>⚡ REST-PAUSE</span>
+                    <input type="number" value={s.rpCantidad ?? "2"} onChange={e => updateSerie(ejIdx, "efectiva", sIdx, "rpCantidad", e.target.value)}
+                      title="Cantidad de pausas" style={{ ...inputStyle, width:38, padding:"3px 2px", fontSize:11 }} />
+                    <span style={{ fontSize:9, color:theme.muted }}>pausas ·</span>
+                    <input type="number" value={s.rpSegundos ?? "15"} onChange={e => updateSerie(ejIdx, "efectiva", sIdx, "rpSegundos", e.target.value)}
+                      title="Segundos por pausa" style={{ ...inputStyle, width:38, padding:"3px 2px", fontSize:11 }} />
+                    <span style={{ fontSize:9, color:theme.muted }}>seg c/u</span>
+                  </div>
                 )}
                 </div>
               ))}
