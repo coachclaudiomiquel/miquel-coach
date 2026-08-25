@@ -52,6 +52,29 @@ function estimarPasosEquivalentes(minutos) {
 }
 // Nombre del día de la semana operativo actual (ej: "Lunes"), considerando el corte de las 4 AM.
 function nombreDiaOperativo(base = new Date()) { return DIAS_SEMANA_NOMBRES[fechaOperativa(base).getDay()]; }
+// Interpola linealmente entre dos colores hex (#RRGGBB) según t (0 a 1).
+// Se usa en la barra de descanso para que el relleno vaya degradando de
+// verde oscuro a verde flúor a medida que avanza el tiempo.
+function interpolarColor(hexA, hexB, t) {
+  const clamp = Math.max(0, Math.min(1, t));
+  const a = parseInt(hexA.slice(1), 16), b = parseInt(hexB.slice(1), 16);
+  const ar = (a >> 16) & 255, ag = (a >> 8) & 255, ab = a & 255;
+  const br = (b >> 16) & 255, bg = (b >> 8) & 255, bb = b & 255;
+  const rr = Math.round(ar + (br - ar) * clamp);
+  const rg = Math.round(ag + (bg - ag) * clamp);
+  const rb = Math.round(ab + (bb - ab) * clamp);
+  return `rgb(${rr}, ${rg}, ${rb})`;
+}
+// Formatea segundos de descanso como texto: bajo el minuto se muestra en
+// segundos ("45s"), desde el minuto en curso se muestra como m:ss ("1:05",
+// "2:00") -- más fácil de leer de un vistazo que un número grande de segundos.
+function formatearDescanso(segundos) {
+  const s = Math.max(0, Math.round(segundos));
+  if (s < 60) return `${s}s`;
+  const min = Math.floor(s / 60);
+  const seg = s % 60;
+  return `${min}:${String(seg).padStart(2, "0")}`;
+}
 // Fecha calendario real de hoy en hora local, sin el corte de las 4 AM (para fechas
 // administrativas como pagos, que no dependen de la rutina de sueño del alumno).
 function fechaLocalStr(base = new Date()) { return aFechaStr(base); }
@@ -1371,9 +1394,9 @@ const [estadoPago, setEstadoPago] = useState(null);
           setRutina(rutinaHoy || null);
           if (rutinaHoy && Array.isArray(rutinaHoy.cardio) && rutinaHoy.cardio.length > 0) {
             const hoyStrCardio = fechaOperativaStr();
-            const { data: cardioReg } = await supabase.from("cardio_registros").select("cardio_index, duracion_real, completado").eq("usuario_id", user.id).eq("fecha", hoyStrCardio);
+            const { data: cardioReg } = await supabase.from("cardio_registros").select("cardio_index, duracion_real, completado, via_pasos").eq("usuario_id", user.id).eq("fecha", hoyStrCardio);
             const mapaCardio = {};
-            (cardioReg || []).forEach(r => { mapaCardio[r.cardio_index] = { duracion_real: r.duracion_real, completado: r.completado }; });
+            (cardioReg || []).forEach(r => { mapaCardio[r.cardio_index] = { duracion_real: r.duracion_real, completado: r.completado, via_pasos: r.via_pasos }; });
             setCardioRegistrosHoy(mapaCardio);
           }
         }
@@ -1533,10 +1556,14 @@ const [estadoPago, setEstadoPago] = useState(null);
         const meta = rutina?.meta_pasos || 0;
         const actuales = parseInt(pasosHoy) || 0;
         const pct = meta > 0 ? Math.min(100, Math.round((actuales / meta) * 100)) : 0;
+        // Solo suma el equivalente en pasos cuando el alumno realmente hizo el
+        // cardio (no cuando ya reemplazó la sesión por caminar los pasos --
+        // esos pasos ya están contados directamente en su registro diario, y
+        // sumarlos de nuevo acá los duplicaría).
         const cardioEquivalenteHoy = Array.isArray(rutina?.cardio)
           ? rutina.cardio.reduce((acc, c, i) => {
               const reg = cardioRegistrosHoy[i];
-              if (reg?.completado) return acc + estimarPasosEquivalentes(reg.duracion_real ?? c.duracionMin);
+              if (reg?.completado && !reg.via_pasos) return acc + estimarPasosEquivalentes(reg.duracion_real ?? c.duracionMin);
               return acc;
             }, 0)
           : 0;
@@ -1636,23 +1663,33 @@ function RutinaScreen({ onNav }) {
 
   useEffect(() => {
     if (!userId) return;
-    supabase.from("cardio_registros").select("cardio_index, duracion_real, distancia_real, completado").eq("usuario_id", userId).eq("fecha", hoyStrRutina)
+    supabase.from("cardio_registros").select("cardio_index, duracion_real, distancia_real, completado, via_pasos").eq("usuario_id", userId).eq("fecha", hoyStrRutina)
       .then(({ data }) => {
         const mapa = {};
-        (data || []).forEach(r => { mapa[r.cardio_index] = { duracion_real: r.duracion_real, distancia_real: r.distancia_real, completado: r.completado }; });
+        (data || []).forEach(r => { mapa[r.cardio_index] = { duracion_real: r.duracion_real, distancia_real: r.distancia_real, completado: r.completado, via_pasos: r.via_pasos }; });
         setCardioRegistros(mapa);
       });
   }, [userId, hoyStrRutina]);
 
-  const marcarCardio = async (idx, item, patch) => {
+  // modo: "cardio" (hizo el cardio en sí), "pasos" (lo reemplazó por los pasos
+  // equivalentes) o null (desmarcar). Son mutuamente excluyentes -- no tiene
+  // sentido marcar ambos para la misma sesión de cardio del día.
+  const marcarCardio = async (idx, item, modo) => {
     if (!userId) return;
-    const actual = { ...(cardioRegistros[idx] || {}), ...patch };
+    const yaEstaEnEseModo = modo && cardioRegistros[idx]?.completado && (cardioRegistros[idx]?.via_pasos ? "pasos" : "cardio") === modo;
+    const actual = {
+      ...(cardioRegistros[idx] || {}),
+      completado: !yaEstaEnEseModo && !!modo,
+      via_pasos: !yaEstaEnEseModo && modo === "pasos",
+      duracion_real: cardioRegistros[idx]?.duracion_real ?? item.duracionMin,
+    };
     setCardioRegistros(prev => ({ ...prev, [idx]: actual }));
     const { error } = await supabase.from("cardio_registros").upsert({
       usuario_id: userId, fecha: hoyStrRutina, cardio_index: idx, tipo: item.tipo,
       duracion_real: actual.duracion_real != null && actual.duracion_real !== "" ? parseFloat(actual.duracion_real) : null,
       distancia_real: actual.distancia_real != null && actual.distancia_real !== "" ? parseFloat(actual.distancia_real) : null,
       completado: !!actual.completado,
+      via_pasos: !!actual.via_pasos,
     }, { onConflict: "usuario_id,fecha,cardio_index" });
     if (error) alert("No se pudo guardar el cardio: " + error.message);
   };
@@ -1689,6 +1726,42 @@ function RutinaScreen({ onNav }) {
   }, [rutinaActiva]);
 
   const [ultimasCargas, setUltimasCargas] = useState({});
+
+  // Precarga el KG y las REPS de cada serie de aproximación con el valor
+  // sugerido (reps objetivo del coach, kg calculado según el % y el último
+  // peso efectivo registrado) para que el alumno no tenga que escribirlos
+  // de cero -- aparecen ya cargados y puede editarlos si quiere, igual que
+  // cualquier otro campo. _autoKg/_autoReps distinguen un valor autocompletado
+  // de uno que el alumno ya tocó a mano, para no pisarlo cuando este efecto
+  // se vuelve a correr (por ejemplo cuando termina de cargar el historial de
+  // cargas, que llega después del primer render).
+  useEffect(() => {
+    if (!rutinaActiva) return;
+    const ejerciciosRutina = rutinaActiva.ejercicios || [];
+    setRegistros(prev => {
+      let cambio = false;
+      const next = { ...prev };
+      ejerciciosRutina.forEach(ej => {
+        const series = Array.isArray(ej.series) ? ej.series : [];
+        series.forEach((s, idx) => {
+          if ((s.tipo || "efectiva") !== "aproximacion") return;
+          const key = `${ej.id}-${idx}`;
+          const actual = next[key] || {};
+          const refEfectiva = ultimasCargas[`${ej.id}-1`];
+          const kgSugerido = (refEfectiva?.kg && s.pctDesde) ? Math.round((parseFloat(s.pctDesde) / 100) * refEfectiva.kg) : null;
+          const kgEditadoAMano = actual.kg && !actual._autoKg;
+          const repsEditadoAMano = actual.reps && !actual._autoReps;
+          const nuevoKg = kgEditadoAMano ? actual.kg : (kgSugerido != null ? String(kgSugerido) : (actual.kg || ""));
+          const nuevoReps = repsEditadoAMano ? actual.reps : (s.reps != null ? String(s.reps) : (actual.reps || ""));
+          if (nuevoKg !== actual.kg || nuevoReps !== actual.reps || (!kgEditadoAMano && !actual._autoKg && nuevoKg) || (!repsEditadoAMano && !actual._autoReps && nuevoReps)) {
+            next[key] = { ...actual, kg: nuevoKg, reps: nuevoReps, _autoKg: !kgEditadoAMano, _autoReps: !repsEditadoAMano };
+            cambio = true;
+          }
+        });
+      });
+      return cambio ? next : prev;
+    });
+  }, [rutinaActiva, ultimasCargas]);
 
   const cargarUltimasCargas = async (userId) => {
     const { data: historico } = await supabase
@@ -1740,11 +1813,40 @@ function RutinaScreen({ onNav }) {
 
   const setReg = (ejId, sIdx, campo, val) => {
     const key = `${ejId}-${sIdx}`;
-    setRegistros(prev => ({ ...prev, [key]: { ...prev[key], [campo]: val } }));
+    setRegistros(prev => {
+      const patch = { [campo]: val };
+      // El alumno tocó el campo a mano -- deja de considerarse autocompletado,
+      // así el efecto de precarga de aproximación ya no lo vuelve a pisar.
+      if (campo === "kg") patch._autoKg = false;
+      if (campo === "reps") patch._autoReps = false;
+      return { ...prev, [key]: { ...prev[key], ...patch } };
+    });
   };
 
   const getRirColor = (rir) => rir === 0 ? "#EF4444" : rir === 1 ? "#F59E0B" : "#39FF88";
   const getRirLabel = (rir) => rir === 0 ? "Fallo" : rir === 1 ? "RIR 1" : "RIR 2";
+
+  // Al cumplirse el descanso mínimo, se pasa solo (sin necesidad de tocar el
+  // botón) de "descansando" a "idle" mostrando ya el botón azul de "Iniciar
+  // serie" -- antes había que tocar el botón en verde para volver a "idle" y
+  // recién ahí aparecía el azul, lo que se sentía como un paso de más.
+  // Este hook va ANTES de los "return" condicionales de abajo (loading /
+  // bloqueado / sin rutina) para no romper el orden de hooks entre renders
+  // -- por eso calcula el descanso mínimo de forma autónoma en vez de
+  // reusar "ejercicios" / "descansoParaSerie", que se definen más abajo.
+  useEffect(() => {
+    if (estadoSerie !== "descansando") return;
+    const ej = rutinaActiva?.ejercicios?.find(e => e.id === serieObjetivo?.ejId);
+    const serie = ej?.series?.[serieObjetivo?.idx];
+    const tipo = serie?.tipo || "efectiva";
+    const min = tipo === "aproximacion" ? 60 : (ej?.descanso_desde || 60);
+    if (segDescanso >= min) {
+      limpiarIntervaloDescanso();
+      setEstadoSerie("idle");
+      setSerieObjetivo(null);
+      setSegDescanso(0);
+    }
+  }, [estadoSerie, segDescanso, serieObjetivo, rutinaActiva]);
 
   if (loading) return (
     <div style={{ padding: "20px 16px 90px", height: "100%", boxSizing: "border-box", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -1823,15 +1925,15 @@ function RutinaScreen({ onNav }) {
   const siguientePendiente = todasLasSeries.find(x => !seriesHechas[x.key]);
 
   // Descanso a aplicar según el TIPO de la serie recién terminada: las de
-  // calentamiento y aproximación siempre descansan 60-90s fijo (no hace
-  // falta tanto como en una serie efectiva pesada); las efectivas usan el
-  // descanso_desde/descanso_hasta que el coach definió para el ejercicio.
+  // aproximación siempre descansan 60-90s fijo (no hace falta tanto como en
+  // una serie efectiva pesada); las efectivas usan el descanso_desde/
+  // descanso_hasta que el coach definió para el ejercicio.
   const descansoParaSerie = (objetivo) => {
     if (!objetivo) return { min: 60, max: 90 };
     const ej = ejercicios.find(e => e.id === objetivo.ejId);
     const serie = ej?.series?.[objetivo.idx];
     const tipo = serie?.tipo || "efectiva";
-    if (tipo === "calentamiento" || tipo === "aproximacion") return { min: 60, max: 90 };
+    if (tipo === "aproximacion") return { min: 60, max: 90 };
     const min = ej?.descanso_desde || 60;
     const max = ej?.descanso_hasta || Math.max(min, 90);
     return { min, max };
@@ -1892,6 +1994,7 @@ function RutinaScreen({ onNav }) {
   };
 
   let textoBotonSerie, bgBotonSerie, sombraBotonSerie, bottomLabelSerie, bottomLabelColorSerie;
+  let progresoDescansoPct = 0;
   if (estadoSerie === "activa") {
     textoBotonSerie = "⏸ Fin de serie";
     bgBotonSerie = "linear-gradient(135deg, #EF4444, #b91c1c)";
@@ -1899,19 +2002,17 @@ function RutinaScreen({ onNav }) {
     bottomLabelSerie = "Serie en curso...";
     bottomLabelColorSerie = theme.muted;
   } else if (estadoSerie === "descansando") {
-    if (segDescanso < descansoMinActivo) {
-      textoBotonSerie = `⏱ Descansando... ${segDescanso}s`;
-      bgBotonSerie = `linear-gradient(135deg, ${theme.warning}, #b45309)`;
-      sombraBotonSerie = "0 0 18px rgba(245,158,11,0.4)";
-      bottomLabelSerie = `Meta: ${descansoMinActivo}-${descansoMaxActivo}s antes de la próxima`;
-      bottomLabelColorSerie = theme.muted;
-    } else {
-      textoBotonSerie = `▶ Iniciar serie (${segDescanso}s de descanso)`;
-      bgBotonSerie = `linear-gradient(135deg, ${theme.success}, #047857)`;
-      sombraBotonSerie = "0 0 18px rgba(16,185,129,0.45)";
-      bottomLabelSerie = "✅ Ya puedes partir cuando quieras";
-      bottomLabelColorSerie = theme.success;
-    }
+    // La barra se rellena de verde oscuro a verde flúor a medida que pasa el
+    // tiempo (estilo futurista); al llegar al descanso mínimo pasa sola a
+    // "idle" (ver useEffect arriba), así que este estado casi siempre se ve
+    // avanzando, sin requerir un toque extra para "confirmar" que ya se puede
+    // seguir.
+    progresoDescansoPct = Math.min(100, (segDescanso / Math.max(1, descansoMinActivo)) * 100);
+    bgBotonSerie = `linear-gradient(135deg, ${interpolarColor("#0B3D2E", "#39FF88", progresoDescansoPct / 100)}, #052e1c)`;
+    sombraBotonSerie = `0 0 18px rgba(57,255,136,${0.15 + 0.25 * (progresoDescansoPct / 100)})`;
+    textoBotonSerie = `⏱ Descansando... ${formatearDescanso(segDescanso)}`;
+    bottomLabelSerie = `Meta: ${formatearDescanso(descansoMinActivo)}-${formatearDescanso(descansoMaxActivo)} antes de la próxima`;
+    bottomLabelColorSerie = theme.muted;
   } else {
     textoBotonSerie = "▶ Iniciar serie";
     bgBotonSerie = `linear-gradient(135deg, ${theme.accentLight}, ${theme.accent})`;
@@ -1969,17 +2070,13 @@ function RutinaScreen({ onNav }) {
 
                   <div style={infoTitBig}>📋 CÓMO USAR TU RUTINA</div>
                   <div style={infoSec}>
-                    Un ejercicio puede pasar por hasta 3 etapas antes de llegar al peso que realmente cuenta para tu progreso. Ojo: esto no aplica siempre a todos los ejercicios — normalmente se hace completo solo en el primero de cada grupo muscular, porque después tu cuerpo ya está a temperatura óptima para movimientos parecidos y no hace falta repetirlo, a menos que quieras aproximar o buscar la carga de otro grupo muscular distinto.
+                    Un ejercicio puede pasar por hasta 2 etapas antes de llegar al peso que realmente cuenta para tu progreso. Ojo: esto no aplica siempre a todos los ejercicios — normalmente la aproximación se hace completa solo en el primero de cada grupo muscular, porque después tu cuerpo ya está a temperatura óptima para movimientos parecidos y no hace falta repetirla, a menos que quieras aproximar o buscar la carga de otro grupo muscular distinto.
                     <div style={infoSub}>
-                      <b style={{ color:theme.text }}>1. Calentamiento inicial</b><br/>
-                      Serie liviana que activa el patrón de movimiento y prepara la articulación específica.
+                      <b style={{ color:theme.text }}>1. Series de aproximación</b><br/>
+                      Suben el peso poco a poco, en % de tu carga efectiva, para acercarte a ella sin llegar cansado. No siempre son 2 — pueden ser más según el ejercicio y cuánto peso haya que subir. Ejemplo típico: aproximación 1 a <span style={infoPct}>~50–60%</span>, aproximación 2 a <span style={infoPct}>~70–80%</span>, subiendo la carga y bajando las repeticiones en cada una. El kg que ves sugerido se calcula solo a partir de tu último peso efectivo — puedes corregirlo si no te calza.
                     </div>
                     <div style={infoSub}>
-                      <b style={{ color:theme.text }}>2. Series de aproximación</b><br/>
-                      Suben el peso poco a poco para acercarte a tu carga efectiva. No siempre son 2 — pueden ser más según el ejercicio y cuánto peso haya que subir. Ejemplo típico: aproximación 1 a <span style={infoPct}>~60–65%</span>, aproximación 2 a <span style={infoPct}>~80–85%</span>, subiendo la carga y bajando las repeticiones en cada una.
-                    </div>
-                    <div style={infoSub}>
-                      <b style={{ color:theme.text }}>3. Series efectivas</b><br/>
+                      <b style={{ color:theme.text }}>2. Series efectivas</b><br/>
                       Las series que <b style={{ color:theme.text }}>sí cuentan</b> para tu progreso — el peso que buscas es el que te permite lograr las repeticiones y el RIR que definió tu coach. No siempre serán 8 repeticiones efectivas, eso varía según cada ejercicio y lo que tu coach determine. Aquí es donde registras tu peso usado.
                     </div>
                   </div>
@@ -2033,18 +2130,14 @@ function RutinaScreen({ onNav }) {
 
                   <div style={infoSec}>
                     <div style={infoTit}>⚡ Técnicas de intensidad</div>
-                    Algunas series efectivas pueden venir marcadas con una técnica especial y una nota de tu coach con la indicación exacta:
+                    Algunas series efectivas pueden venir marcadas con una técnica especial. Los valores son fijos (no los define tu coach caso a caso):
                     <div style={infoSub}>
                       <b style={{ color:theme.text }}>Dropset</b><br/>
-                      Al llegar al fallo o cerca de él, bajas el peso de inmediato (sin descansar) y segues sumando repeticiones.
+                      Al llegar al fallo o cerca de él, bajas el peso <span style={infoPct}>20-30%</span> de inmediato (sin descansar) y segues sumando repeticiones.
                     </div>
                     <div style={infoSub}>
                       <b style={{ color:theme.text }}>Rest-pause</b><br/>
-                      Llegas cerca del fallo, descansas unos segundos (breve, indicado por tu coach) y segues con algunas repeticiones más, repitiendo esa micro-pausa unas veces dentro de la misma serie.
-                    </div>
-                    <div style={infoSub}>
-                      <b style={{ color:theme.text }}>Descendente</b><br/>
-                      Encadenas varias series bajando el peso en cada una, con muy poco o nada de descanso entre ellas.
+                      Llegas cerca del fallo, descansas <span style={infoPct}>10-15 segundos</span> y sacas 3-5 repeticiones más; si tu serie lo pide, hay una segunda pausa opcional de otros 10-15 segundos para 1-3 repeticiones más (máximo 2 pausas en total).
                     </div>
                   </div>
 
@@ -2153,15 +2246,14 @@ function RutinaScreen({ onNav }) {
             </div>
 
             {(() => {
-              let contCalent = 0, contAprox = 0, contEfect = 0;
+              let contAprox = 0, contEfect = 0;
               let seccionAnterior = null;
               return series.map((s, idx) => {
                 const key = `${ej.id}-${idx}`;
                 const reg = registros[key] || {};
                 const tipo = s.tipo || "efectiva";
                 let etiqueta, colorTipo, tituloSeccion;
-                if (tipo === "calentamiento") { contCalent++; etiqueta = `C${contCalent}`; colorTipo = "#60a5fa"; tituloSeccion = "CALENTAMIENTO"; }
-                else if (tipo === "aproximacion") { contAprox++; etiqueta = `A${contAprox}`; colorTipo = "#B0C4DE"; tituloSeccion = "APROXIMACIÓN"; }
+                if (tipo === "aproximacion") { contAprox++; etiqueta = `A${contAprox}`; colorTipo = "#B0C4DE"; tituloSeccion = "APROXIMACIÓN"; }
                 else { contEfect++; etiqueta = `${contEfect}`; colorTipo = theme.accentLight; tituloSeccion = "SERIES EFECTIVAS"; }
                 const mostrarEncabezado = tipo !== seccionAnterior;
                 seccionAnterior = tipo;
@@ -2169,41 +2261,59 @@ function RutinaScreen({ onNav }) {
                 const rc = getRirColor(rir);
                 // La carga "semana anterior" se compara por posición entre series
                 // EFECTIVAS únicamente (contEfect), no por posición en el arreglo
-                // completo, para que calentamiento/aproximación no la desordenen.
+                // completo, para que la aproximación no la desordene.
                 const anterior = tipo === "efectiva" ? ultimasCargas[`${ej.id}-${contEfect}`] : null;
+                // El kg sugerido de aproximación se calcula con el % (extremo
+                // inferior del rango que definió el coach) sobre el último peso
+                // conocido de la PRIMERA serie efectiva de este ejercicio. Si el
+                // alumno todavía no tiene carga registrada ahí, no hay sugerencia
+                // -- igual que la primera vez en una serie efectiva.
+                const refEfectiva = ultimasCargas[`${ej.id}-1`];
+                const kgSugeridoAprox = (refEfectiva?.kg && s.pctDesde) ? Math.round((parseFloat(s.pctDesde) / 100) * refEfectiva.kg) : null;
                 const placeholderKg = tipo === "efectiva"
                   ? (anterior?.kg || "kg")
-                  : (s.kgSugerido || "kg");
+                  : (kgSugeridoAprox || "kg");
                 const esActiva = estadoSerie === "activa" && serieObjetivo && serieObjetivo.ejId === ej.id && serieObjetivo.idx === idx;
-                const hecha = !!seriesHechas[key] || (reg.kg && reg.reps);
+                // Para aproximación, kg/reps vienen precargados automáticamente
+                // (ver efecto de precarga más arriba) -- eso solo no cuenta como
+                // "hecha", si no toda fila de aproximación se vería marcada en
+                // verde desde el principio sin que el alumno hiciera nada. Solo
+                // cuenta si tocó el check, o si escribió algo a mano encima.
+                const hecha = !!seriesHechas[key] || (tipo === "efectiva" ? !!(reg.kg && reg.reps) : !!((reg.kg && !reg._autoKg) || (reg.reps && !reg._autoReps)));
+                // La aproximación no usa columna de RIR (se trabaja en % de la
+                // efectiva, no en esfuerzo percibido) -- 5 columnas en vez de 6.
+                const columnas = tipo === "efectiva" ? "44px 1fr 50px 44px 48px 26px" : "44px 1fr 50px 44px 26px";
                 return (
                   <div key={idx}>
                   {mostrarEncabezado && (
                     <div style={{ marginTop: idx > 0 ? 12 : 0, marginBottom: 6 }}>
                       <div style={{ fontSize: 10, fontWeight: 800, color: colorTipo, background: `${colorTipo}18`, border: `1px solid ${colorTipo}44`, borderRadius: 6, padding: "3px 8px", marginBottom: 6, display: "inline-block" }}>{tituloSeccion}</div>
-                      <div style={{ display: "grid", gridTemplateColumns: "44px 1fr 50px 44px 48px 26px", gap: 3 }}>
-                        {["SERIE", "OBJETIVO", "KG", "REPS", "RIR", "✓"].map(h => (
+                      <div style={{ display: "grid", gridTemplateColumns: columnas, gap: 3 }}>
+                        {(tipo === "efectiva" ? ["SERIE", "OBJETIVO", "KG", "REPS", "RIR", "✓"] : ["SERIE", "OBJETIVO", "KG", "REPS", "✓"]).map(h => (
                           <span key={h} style={{ fontSize: 9, color: theme.muted, textAlign: "center", fontWeight: 700 }}>{h}</span>
                         ))}
                       </div>
                     </div>
                   )}
                   <div style={{
-                    display: "grid", gridTemplateColumns: "44px 1fr 50px 44px 48px 26px", gap: 3, alignItems: "center", marginBottom: 2, borderRadius: 10, padding: "7px 6px",
+                    display: "grid", gridTemplateColumns: columnas, gap: 3, alignItems: "center", marginBottom: 2, borderRadius: 10, padding: tipo === "aproximacion" ? "5px 6px" : "7px 6px",
                     background: esActiva ? `${theme.accentLight}29` : hecha ? `${theme.success}12` : `${colorTipo}0d`,
                     border: `1px solid ${esActiva ? theme.accentLight : hecha ? theme.success + "44" : colorTipo + "33"}`,
                     boxShadow: esActiva ? `0 0 0 1px ${theme.accentLight}, 0 0 14px ${theme.accentLight}59` : "none",
                   }}>
                     <div style={{ textAlign: "center", fontSize: 11, fontWeight: 800, color: colorTipo }}>{etiqueta}</div>
-                    <div style={{ fontSize: 12, color: theme.muted, paddingLeft: 4 }}>{s.reps} reps</div>
+                    <div style={{ fontSize: 12, color: theme.muted, paddingLeft: 4, lineHeight: 1.15 }}>
+                      <span style={{ color: theme.text, fontWeight: 700, display: "block", lineHeight: 1.1 }}>{s.reps} reps</span>
+                      {tipo === "aproximacion" && (s.pctDesde || s.pctHasta) && (
+                        <div style={{ fontSize: 8.5, color: colorTipo, fontWeight: 700, marginTop: 2, lineHeight: 1.1 }}>{s.pctDesde}-{s.pctHasta}% de tu efectiva</div>
+                      )}
+                    </div>
                     <input value={reg.kg || ""} onChange={e => setReg(ej.id, idx, "kg", e.target.value)} placeholder={placeholderKg}
                       style={{ background: theme.card, border: `1px solid ${reg.kg ? theme.accent + "66" : theme.border}`, borderRadius: 6, padding: "5px 2px", color: theme.text, fontSize: 12, fontWeight: 700, width: "100%", textAlign: "center", outline: "none", boxSizing: "border-box" }} />
                     <input value={reg.reps || ""} onChange={e => setReg(ej.id, idx, "reps", e.target.value)} placeholder={s.reps}
                       style={{ background: theme.card, border: `1px solid ${reg.reps ? theme.accent + "66" : theme.border}`, borderRadius: 6, padding: "5px 2px", color: theme.text, fontSize: 12, fontWeight: 700, width: "100%", textAlign: "center", outline: "none", boxSizing: "border-box" }} />
-                    {tipo === "efectiva" ? (
+                    {tipo === "efectiva" && (
                       <div style={{ background: `${rc}18`, border: `1px solid ${rc}55`, borderRadius: 6, padding: "4px 2px", textAlign: "center", fontSize: 10, fontWeight: 800, color: rc }}>{getRirLabel(rir)}</div>
-                    ) : (
-                      <div style={{ textAlign: "center", fontSize: 10, color: theme.muted }}>—</div>
                     )}
                     <div onClick={() => setSeriesHechas({ ...seriesHechas, [key]: !seriesHechas[key] })}
                       style={{ width: 20, height: 20, borderRadius: 6, border: `2px solid ${seriesHechas[key] ? theme.success : theme.border}`, background: seriesHechas[key] ? theme.success : "transparent", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 11, color: "#fff", fontWeight: 800 }}>{seriesHechas[key] ? "✓" : ""}</div>
@@ -2213,10 +2323,14 @@ function RutinaScreen({ onNav }) {
                       🔵 Serie en curso...
                     </div>
                   )}
-                  {tipo === "efectiva" && s.tecnica && s.tecnica !== "normal" && (
+                  {tipo === "efectiva" && s.tecnica === "dropset" && (
                     <div style={{ display:"flex", alignItems:"center", gap:6, fontSize:10, color:theme.warning, fontWeight:700, paddingLeft:6, marginBottom:6, marginTop:-2, lineHeight:1.4 }}>
-                      {s.tecnica === "dropset" ? "⚡ DROPSET" : s.tecnica === "restpause" ? "⚡ REST-PAUSE" : "⚡ DESCENDENTE"}
-                      {s.notaTecnica && <span style={{ color:theme.muted, fontWeight:500 }}>· {s.notaTecnica}</span>}
+                      ⚡ DROPSET <span style={{ color:theme.muted, fontWeight:500 }}>· baja 20-30% del peso al llegar cerca del fallo, sin descanso</span>
+                    </div>
+                  )}
+                  {tipo === "efectiva" && s.tecnica === "restpause" && (
+                    <div style={{ display:"flex", alignItems:"center", gap:6, fontSize:10, color:theme.warning, fontWeight:700, paddingLeft:6, marginBottom:6, marginTop:-2, lineHeight:1.4 }}>
+                      ⚡ REST-PAUSE <span style={{ color:theme.muted, fontWeight:500 }}>· pausa 10-15s → 3-5 reps → pausa opcional 10-15s → 1-3 reps (máx. 2 pausas)</span>
                     </div>
                   )}
                   {anterior && (
@@ -2245,12 +2359,22 @@ function RutinaScreen({ onNav }) {
             const pasosEquivalentes = c.duracionMin ? estimarPasosEquivalentes(c.duracionMin) : 0;
             return (
               <div key={i} style={{ background:theme.surface, borderRadius:8, padding:10, marginTop: i === 0 ? 0 : 8 }}>
-                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6, gap:8, flexWrap:"wrap" }}>
                   <div style={{ fontSize:13, fontWeight:700, color:theme.text }}>{c.tipo || "Cardio"}</div>
-                  <button onClick={() => marcarCardio(i, c, { completado: !reg.completado, duracion_real: reg.duracion_real ?? c.duracionMin })}
-                    style={{ background: reg.completado ? `${theme.success}22` : "transparent", border:`1px solid ${reg.completado ? theme.success : theme.border}`, borderRadius:6, padding:"4px 10px", color: reg.completado ? theme.success : theme.muted, fontSize:11, cursor:"pointer", fontWeight:700 }}>
-                    {reg.completado ? "✅ Hecho" : "Marcar hecho"}
-                  </button>
+                  <div style={{ display:"flex", gap:6 }}>
+                    <button onClick={() => marcarCardio(i, c, (reg.completado && !reg.via_pasos) ? null : "cardio")}
+                      title="Hice el cardio"
+                      style={{ background: (reg.completado && !reg.via_pasos) ? `${theme.success}22` : "transparent", border:`1px solid ${(reg.completado && !reg.via_pasos) ? theme.success : theme.border}`, borderRadius:6, padding:"4px 8px", color: (reg.completado && !reg.via_pasos) ? theme.success : theme.muted, fontSize:10, cursor:"pointer", fontWeight:700, whiteSpace:"nowrap" }}>
+                      {(reg.completado && !reg.via_pasos) ? "✅ Cardio" : "🏃 Cardio"}
+                    </button>
+                    {pasosEquivalentes > 0 && (
+                      <button onClick={() => marcarCardio(i, c, (reg.completado && reg.via_pasos) ? null : "pasos")}
+                        title={`Hice ≈${pasosEquivalentes.toLocaleString("es-CL")} pasos en vez del cardio`}
+                        style={{ background: (reg.completado && reg.via_pasos) ? `${theme.success}22` : "transparent", border:`1px solid ${(reg.completado && reg.via_pasos) ? theme.success : theme.border}`, borderRadius:6, padding:"4px 8px", color: (reg.completado && reg.via_pasos) ? theme.success : theme.muted, fontSize:10, cursor:"pointer", fontWeight:700, whiteSpace:"nowrap" }}>
+                        {(reg.completado && reg.via_pasos) ? "✅ Pasos" : "🚶 Pasos"}
+                      </button>
+                    )}
+                  </div>
                 </div>
                 {c.duracionMin ? (
                   <div style={{ display:"flex", alignItems:"baseline", gap:6, marginBottom:6 }}>
@@ -2271,7 +2395,7 @@ function RutinaScreen({ onNav }) {
                 )}
                 {!reg.completado && pasosEquivalentes > 0 && (
                   <div style={{ fontSize:11, color:theme.warning, lineHeight:1.4 }}>
-                    💡 Si no alcanzas a hacer los {c.duracionMin} min de cardio, puedes sustituirlos con <span style={{ fontWeight:700 }}>≈{pasosEquivalentes.toLocaleString("es-CL")} pasos</span> extra.
+                    💡 Si no alcanzas a hacer los {c.duracionMin} min de cardio, puedes sustituirlos con <span style={{ fontWeight:700 }}>≈{pasosEquivalentes.toLocaleString("es-CL")} pasos</span> extra y marcar "🚶 Pasos" en vez de "🏃 Cardio".
                   </div>
                 )}
               </div>
@@ -2322,21 +2446,19 @@ function RutinaScreen({ onNav }) {
               const hoyStr = fechaOperativaStr();
               ejercicios.forEach(ej => {
                 const series = Array.isArray(ej.series) ? ej.series : [];
-                let serieEfectiva = 0; // numeración independiente del calentamiento/aproximación
+                let serieEfectiva = 0; // numeración independiente de la aproximación
                 series.forEach((s, idx) => {
                   const key = `${ej.id}-${idx}`;
                   const reg = registros[key] || {};
                   const tipo = s.tipo || "efectiva";
                   if (tipo === "efectiva") serieEfectiva++;
-                  const sugerido = tipo === "efectiva"
-                    ? ultimasCargas[`${ej.id}-${serieEfectiva}`]?.kg
-                    : s.kgSugerido;
+                  const sugerido = tipo === "efectiva" ? ultimasCargas[`${ej.id}-${serieEfectiva}`]?.kg : null;
                   const kgFinal = reg.kg || sugerido || null;
                   const repsFinal = reg.reps || s.reps || null;
-                  // Solo se guardan las series efectivas. Calentamiento y aproximación
-                  // no se registran para no distorsionar las cargas reales de trabajo.
+                  // Solo se guardan las series efectivas. La aproximación no se
+                  // registra para no distorsionar las cargas reales de trabajo.
                   // La numeración de "serie" arranca en 1 para las efectivas, sin
-                  // contar las de calentamiento/aproximación que las preceden.
+                  // contar las de aproximación que las preceden.
                   if (tipo === "efectiva" && (kgFinal || repsFinal)) {
                     inserts.push({
                       usuario_id: user.id,
@@ -2438,8 +2560,11 @@ function RutinaScreen({ onNav }) {
             {bottomLabelSerie}
           </div>
           <button onClick={handleBotonSerie}
-            style={{ width:"100%", border:"none", borderRadius:14, padding:15, fontSize:14, fontWeight:800, letterSpacing:0.5, cursor:"pointer", color:"#fff", background:bgBotonSerie, boxShadow:sombraBotonSerie }}>
-            {textoBotonSerie}
+            style={{ width:"100%", position:"relative", overflow:"hidden", border:"none", borderRadius:14, padding:15, fontSize:14, fontWeight:800, letterSpacing:0.5, cursor:"pointer", color:"#fff", background: estadoSerie === "descansando" ? "#0B1F17" : bgBotonSerie, boxShadow:sombraBotonSerie }}>
+            {estadoSerie === "descansando" && (
+              <div style={{ position:"absolute", top:0, left:0, bottom:0, width:`${progresoDescansoPct}%`, background:bgBotonSerie, transition:"width 1s linear, background 1s linear" }} />
+            )}
+            <span style={{ position:"relative" }}>{textoBotonSerie}</span>
           </button>
         </div>
       )}
@@ -4428,14 +4553,16 @@ function RutinaCoach({ alumno }) {
   const [metaPasos, setMetaPasos] = useState("");
   const [ejercicios, setEjercicios] = useState([
     { nombre: "", videoUrl: "", descansoDesde: 60, descansoHasta: 90, grupoSuperserie: "",
-      seriesCalentamiento: [],
-      seriesAproximacion: [],
-      seriesEfectivas: [{ reps: "10", rir: 2, tecnica: "normal", notaTecnica: "" }] }
+      seriesAproximacion: [{ reps: "8", pctDesde: "50", pctHasta: "60" }, { reps: "6", pctDesde: "70", pctHasta: "80" }, { reps: "3", pctDesde: "85", pctHasta: "90" }],
+      seriesEfectivas: [{ reps: "10", rir: 2, tecnica: "normal" }] }
   ]);
   // Ids (_dbId) de ejercicios que existían en la rutina y el coach sacó
   // durante la edición -- se borran de Supabase recién al guardar, para no
   // perder el ejercicio si cancela la edición sin guardar.
   const [ejerciciosEliminados, setEjerciciosEliminados] = useState([]);
+  // Estado (expandido/colapsado) de la sección Aproximación por ejercicio --
+  // por defecto solo el primer ejercicio de la rutina la muestra expandida.
+  const [aproxExpandida, setAproxExpandida] = useState({});
   const [guardando, setGuardando] = useState(false);
   const [exito, setExito] = useState(false);
   const [nombresEjerciciosUsados, setNombresEjerciciosUsados] = useState([]);
@@ -4494,9 +4621,9 @@ function RutinaCoach({ alumno }) {
     setMetaPasos(p.meta_pasos || "");
     const ejerciciosPlantilla = Array.isArray(p.ejercicios) && p.ejercicios.length > 0
       ? p.ejercicios.map(ej => ({ ...ej, _dbId: undefined }))
-      : [{ nombre: "", videoUrl: "", descansoDesde: 60, descansoHasta: 90, grupoSuperserie: "", seriesCalentamiento: [], seriesAproximacion: [], seriesEfectivas: [{ reps: "10", rir: 2, tecnica: "normal", notaTecnica: "" }] }];
+      : [{ nombre: "", videoUrl: "", descansoDesde: 60, descansoHasta: 90, grupoSuperserie: "", seriesAproximacion: [{ reps: "8", pctDesde: "50", pctHasta: "60" }, { reps: "6", pctDesde: "70", pctHasta: "80" }, { reps: "3", pctDesde: "85", pctHasta: "90" }], seriesEfectivas: [{ reps: "10", rir: 2, tecnica: "normal" }] }];
     setEjercicios(ejerciciosPlantilla);
-    setEjerciciosEliminados([]);
+    setEjerciciosEliminados([]); setAproxExpandida({});
     setModoPlantilla(true);
     setModoDuplicar(false);
     setEditandoRutinaId(null);
@@ -4559,9 +4686,8 @@ function RutinaCoach({ alumno }) {
 
   const agregarEjercicio = () => {
     setEjercicios([...ejercicios, { nombre: "", videoUrl: "", descansoDesde: 60, descansoHasta: 90, grupoSuperserie: "",
-      seriesCalentamiento: [],
-      seriesAproximacion: [],
-      seriesEfectivas: [{ reps: "10", rir: 2, tecnica: "normal", notaTecnica: "" }] }]);
+      seriesAproximacion: [{ reps: "8", pctDesde: "50", pctHasta: "60" }, { reps: "6", pctDesde: "70", pctHasta: "80" }, { reps: "3", pctDesde: "85", pctHasta: "90" }],
+      seriesEfectivas: [{ reps: "10", rir: 2, tecnica: "normal" }] }]);
   };
 
   // Sube/baja un ejercicio en la lista -- así se "inserta" uno entremedio:
@@ -4588,20 +4714,29 @@ function RutinaCoach({ alumno }) {
   // final y subirlo a fuerza de flechas.
   const insertarEjercicioDespues = (idx) => {
     const nuevo = { nombre: "", videoUrl: "", descansoDesde: 60, descansoHasta: 90, grupoSuperserie: "",
-      seriesCalentamiento: [],
-      seriesAproximacion: [],
-      seriesEfectivas: [{ reps: "10", rir: 2, tecnica: "normal", notaTecnica: "" }] };
+      seriesAproximacion: [{ reps: "8", pctDesde: "50", pctHasta: "60" }, { reps: "6", pctDesde: "70", pctHasta: "80" }, { reps: "3", pctDesde: "85", pctHasta: "90" }],
+      seriesEfectivas: [{ reps: "10", rir: 2, tecnica: "normal" }] };
     const upd = [...ejercicios];
     upd.splice(idx + 1, 0, nuevo);
     setEjercicios(upd);
   };
 
-  const gruposSerie = { calentamiento: "seriesCalentamiento", aproximacion: "seriesAproximacion", efectiva: "seriesEfectivas" };
+  const gruposSerie = { aproximacion: "seriesAproximacion", efectiva: "seriesEfectivas" };
 
   const agregarSerie = (ejIdx, tipo = "efectiva") => {
     const campo = gruposSerie[tipo];
     const upd = [...ejercicios];
-    const nueva = tipo === "efectiva" ? { reps: "10", rir: 2, tecnica: "normal", notaTecnica: "" } : { reps: tipo === "calentamiento" ? "15" : "8", kgSugerido: "" };
+    let nueva;
+    if (tipo === "efectiva") {
+      // Copia reps y RIR de la última serie efectiva existente, para no
+      // tener que volver a tipear todo -- el coach ajusta a mano si quiere
+      // un valor distinto en esta serie nueva.
+      const anteriores = upd[ejIdx][campo];
+      const ultima = anteriores[anteriores.length - 1];
+      nueva = ultima ? { reps: ultima.reps, rir: ultima.rir, tecnica: "normal" } : { reps: "10", rir: 2, tecnica: "normal" };
+    } else {
+      nueva = { reps: "8", pctDesde: "", pctHasta: "" };
+    }
     upd[ejIdx][campo].push(nueva);
     setEjercicios(upd);
   };
@@ -4642,7 +4777,6 @@ function RutinaCoach({ alumno }) {
         const ej = ejercicios[i];
         if (!ej.nombre) continue;
         const seriesCombinadas = [
-          ...ej.seriesCalentamiento.map(s => ({ ...s, tipo: "calentamiento" })),
           ...ej.seriesAproximacion.map(s => ({ ...s, tipo: "aproximacion" })),
           ...ej.seriesEfectivas.map(s => ({ ...s, tipo: "efectiva" })),
         ];
@@ -4686,7 +4820,6 @@ function RutinaCoach({ alumno }) {
           const ej = ejercicios[i];
           if (ej.nombre) {
             const seriesCombinadas = [
-              ...ej.seriesCalentamiento.map(s => ({ ...s, tipo: "calentamiento" })),
               ...ej.seriesAproximacion.map(s => ({ ...s, tipo: "aproximacion" })),
               ...ej.seriesEfectivas.map(s => ({ ...s, tipo: "efectiva" })),
             ];
@@ -4719,12 +4852,11 @@ function RutinaCoach({ alumno }) {
     setCalentamientoGeneral([]);
     setVueltaCalma([]);
     setCardio([]);
-    setMetaPasos("");
+    setMetaPasos("10000");
     setEjercicios([{ nombre: "", videoUrl: "", descansoDesde: 60, descansoHasta: 90, grupoSuperserie: "",
-      seriesCalentamiento: [],
-      seriesAproximacion: [],
-      seriesEfectivas: [{ reps: "10", rir: 2, tecnica: "normal", notaTecnica: "" }] }]);
-    setEjerciciosEliminados([]);
+      seriesAproximacion: [{ reps: "8", pctDesde: "50", pctHasta: "60" }, { reps: "6", pctDesde: "70", pctHasta: "80" }, { reps: "3", pctDesde: "85", pctHasta: "90" }],
+      seriesEfectivas: [{ reps: "10", rir: 2, tecnica: "normal" }] }]);
+    setEjerciciosEliminados([]); setAproxExpandida({});
     cargarRutinas();
     cargarNombresEjercicios();
     setTimeout(() => setExito(false), 3000);
@@ -4736,11 +4868,14 @@ function RutinaCoach({ alumno }) {
     setCalentamientoGeneral(Array.isArray(rutina.calentamiento_general) ? rutina.calentamiento_general : []);
     setVueltaCalma(Array.isArray(rutina.vuelta_calma) ? rutina.vuelta_calma : []);
     setCardio(Array.isArray(rutina.cardio) ? rutina.cardio : []);
-    setMetaPasos(rutina.meta_pasos || "");
+    setMetaPasos(rutina.meta_pasos || "10000");
     const ejerciciosCargados = (rutina.ejercicios || []).slice().sort((a, b) => (a.orden || 0) - (b.orden || 0)).map(ej => {
       const series = Array.isArray(ej.series) ? ej.series : [];
-      const seriesCalentamiento = series.filter(s => s.tipo === "calentamiento");
-      const seriesAproximacion = series.filter(s => s.tipo === "aproximacion");
+      // Migración defensiva: si esta rutina todavía tiene series con tipo
+      // "calentamiento" (de antes de fusionar esa sección con aproximación),
+      // se tratan como aproximación acá, aunque la migración SQL en la base
+      // de datos no se haya corrido todavía.
+      const seriesAproximacion = series.filter(s => s.tipo === "aproximacion" || s.tipo === "calentamiento");
       const seriesEfectivas = series.filter(s => !s.tipo || s.tipo === "efectiva");
       return {
         _dbId: modo === "editar" ? ej.id : undefined,
@@ -4749,146 +4884,37 @@ function RutinaCoach({ alumno }) {
         descansoDesde: ej.descanso_desde || 60,
         descansoHasta: ej.descanso_hasta || ej.descanso || 90,
         grupoSuperserie: ej.grupo_superserie || "",
-        seriesCalentamiento: seriesCalentamiento,
-        seriesAproximacion: seriesAproximacion,
-        seriesEfectivas: seriesEfectivas.length > 0 ? seriesEfectivas : [{ reps: "10", rir: 2, tecnica: "normal", notaTecnica: "" }],
+        seriesAproximacion: seriesAproximacion.length > 0 ? seriesAproximacion : [{ reps: "8", pctDesde: "50", pctHasta: "60" }, { reps: "6", pctDesde: "70", pctHasta: "80" }, { reps: "3", pctDesde: "85", pctHasta: "90" }],
+        seriesEfectivas: seriesEfectivas.length > 0 ? seriesEfectivas : [{ reps: "10", rir: 2, tecnica: "normal" }],
       };
     });
     setEjercicios(ejerciciosCargados.length > 0 ? ejerciciosCargados : [
       { nombre: "", videoUrl: "", descansoDesde: 60, descansoHasta: 90, grupoSuperserie: "",
-        seriesCalentamiento: [{ reps: "15", kgSugerido: "" }],
-        seriesAproximacion: [{ reps: "8", kgSugerido: "" }, { reps: "5", kgSugerido: "" }],
-        seriesEfectivas: [{ reps: "10", rir: 2, tecnica: "normal", notaTecnica: "" }] }
+        seriesAproximacion: [{ reps: "8", pctDesde: "50", pctHasta: "60" }, { reps: "6", pctDesde: "70", pctHasta: "80" }, { reps: "3", pctDesde: "85", pctHasta: "90" }],
+        seriesEfectivas: [{ reps: "10", rir: 2, tecnica: "normal" }] }
     ]);
-    setEjerciciosEliminados([]);
+    setEjerciciosEliminados([]); setAproxExpandida({});
     setModoDuplicar(modo === "duplicar");
     setModoPlantilla(false);
     setEditandoRutinaId(modo === "editar" ? rutina.id : null);
     setCreando(true);
-    setTimeout(() => formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
+    // En modo "editar" el formulario se abre como acordeón debajo de la misma
+    // rutina en la lista (ya está a la vista) -- el scroll al fondo de la
+    // página solo tiene sentido para nueva rutina / duplicar / plantilla.
+    if (modo !== "editar") {
+      setTimeout(() => formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
+    }
   };
 
   const inputStyle = { background: theme.surface, border: `1px solid ${theme.border}`, borderRadius: 8, padding: "8px 10px", color: theme.text, fontSize: 13, outline: "none", width: "100%", boxSizing: "border-box" };
   const smallInput = { ...inputStyle, width: 60, textAlign: "center", padding: "6px 4px" };
 
-  return (
-    <div>
-      {exito && (
-        <Card style={{ textAlign:"center", padding:16, marginBottom:14, background:`${theme.success}18`, border:`1px solid ${theme.success}44` }}>
-          <div style={{ fontSize:20, marginBottom:4 }}>✅</div>
-          <div style={{ fontSize:13, fontWeight:700, color:theme.success }}>Rutina guardada correctamente</div>
-        </Card>
-      )}
-
-      <Card style={{ marginBottom:14 }}>
-        <div style={{ fontSize:12, color:theme.muted, marginBottom:8 }}>📅 FECHA DE INICIO DEL PLAN</div>
-        <div style={{ fontSize:11, color:theme.muted, marginBottom:10 }}>El conteo de las 4 semanas del ciclo arranca desde acá (por ejemplo, siempre un lunes). Si la dejas vacía, arranca automáticamente desde el primer registro del alumno.</div>
-        <div style={{ display:"flex", gap:8, alignItems:"center" }}>
-          <input type="date" value={fechaInicioPlan} onChange={e => setFechaInicioPlan(e.target.value)}
-            style={{ flex:1, background:theme.bg, border:`1px solid ${theme.border}`, borderRadius:8, padding:"9px 11px", color:theme.text, fontSize:13, outline:"none" }} />
-          <button onClick={guardarFechaInicioPlan} disabled={guardandoFechaInicio}
-            style={{ background:theme.accent, border:"none", borderRadius:8, padding:"9px 14px", color:"#fff", fontSize:12, fontWeight:700, cursor:"pointer" }}>
-            {guardandoFechaInicio ? "Guardando..." : "Guardar"}
-          </button>
-        </div>
-      </Card>
-
-      {/* Rutinas existentes */}
-      {loading ? (
-        <Card style={{ textAlign:"center", padding:20 }}><div style={{ color:theme.muted }}>Cargando...</div></Card>
-      ) : rutinas.length > 0 ? (
-        <div style={{ marginBottom:14 }}>
-          <div style={{ fontSize:12, color:theme.muted, marginBottom:10 }}>RUTINAS ASIGNADAS</div>
-          {rutinas.map(r => (
-            <Card key={r.id} style={{ marginBottom:10 }}>
-              <div style={{ fontSize:14, fontWeight:800, color:theme.text, textTransform:"uppercase", letterSpacing:0.4, lineHeight:1.3, display:"-webkit-box", WebkitLineClamp:2, WebkitBoxOrient:"vertical", overflow:"hidden", marginBottom:6 }}>💪 {r.nombre}</div>
-              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8, gap:8, flexWrap:"wrap" }}>
-                <div style={{ display:"flex", alignItems:"center", gap:6, flexShrink:0 }}>
-                  <Tag>{r.dia || "Sin día"}</Tag>
-                  {r.created_at && <span style={{ fontSize:10, color:theme.muted, whiteSpace:"nowrap" }}>Creada: {new Date(r.created_at).toLocaleDateString("es-CL", { day:"2-digit", month:"short", year:"numeric" })}</span>}
-                </div>
-                <div style={{ display:"flex", gap:6, alignItems:"center", flexShrink:0, flexWrap:"wrap", justifyContent:"flex-end" }}>
-                  <button onClick={() => cargarParaEditar(r, "editar")} style={{ background:`${theme.success}22`, border:`1px solid ${theme.success}44`, borderRadius:6, padding:"4px 8px", color:theme.success, fontSize:11, cursor:"pointer", fontWeight:700 }}>✏️ Editar</button>
-                  <button onClick={() => cargarParaEditar(r, "duplicar")} style={{ background:`${theme.accent}22`, border:`1px solid ${theme.accent}44`, borderRadius:6, padding:"4px 8px", color:theme.accentLight, fontSize:11, cursor:"pointer", fontWeight:700 }}>⧉ Duplicar</button>
-                  <button onClick={async () => {
-                    if (!confirm(`¿Seguro que querés eliminar la rutina "${r.nombre}"? También se borrará el historial de cargas registradas en sus ejercicios.`)) return;
-                    const idsEjercicios = (r.ejercicios || []).map(ej => ej.id);
-                    if (idsEjercicios.length > 0) {
-                      const { error: errReg } = await supabase.from("registros_entreno").delete().in("ejercicio_id", idsEjercicios);
-                      if (errReg) { alert("Error borrando cargas registradas: " + errReg.message); return; }
-                    }
-                    const { error: errEj } = await supabase.from("ejercicios").delete().eq("rutina_id", r.id);
-                    if (errEj) { alert("Error borrando ejercicios: " + errEj.message); return; }
-                    const { error: errRut } = await supabase.from("rutinas").delete().eq("id", r.id);
-                    if (errRut) { alert("Error borrando rutina: " + errRut.message); return; }
-                    cargarRutinas();
-                  }} style={{ background:`${theme.danger}22`, border:`1px solid ${theme.danger}44`, borderRadius:6, padding:"4px 8px", color:theme.danger, fontSize:11, cursor:"pointer", fontWeight:700 }}>× Eliminar</button>
-                </div>
-              </div>
-              <button onClick={() => setRutinaExpandida(prev => ({ ...prev, [r.id]: !prev[r.id] }))}
-                style={{ background:"transparent", border:"none", padding:0, color:theme.accentLight, fontSize:12, cursor:"pointer", display:"flex", alignItems:"center", gap:4 }}>
-                {rutinaExpandida[r.id] ? "▲" : "▼"} {r.ejercicios?.length || 0} ejercicios
-              </button>
-              {rutinaExpandida[r.id] && r.ejercicios?.map((ej, i) => (
-                <div key={i} style={{ marginTop: 6 }}>
-                  <div style={{ fontSize:12, color:theme.muted, paddingLeft:8 }}>· {ej.nombre}</div>
-                  {cargas[ej.id] && (
-                    <div style={{ paddingLeft:16, marginTop:4 }}>
-                      <button onClick={() => setVerCargas(prev => ({ ...prev, [ej.id]: !prev[ej.id] }))}
-                        style={{ background:`${theme.accent}15`, border:`1px solid ${theme.accent}33`, borderRadius:6, padding:"3px 8px", color:theme.accentLight, fontSize:10, cursor:"pointer", marginBottom:4 }}>
-                        {verCargas[ej.id] ? "▲ Ocultar cargas" : `▼ Ver cargas (${cargas[ej.id].length} series)`}
-                      </button>
-                      {verCargas[ej.id] && (
-                        <div style={{ display:"grid", gridTemplateColumns:"repeat(4, 1fr)", gap:6 }}>
-                          {cargas[ej.id].slice(0, 8).map((c, ci) => (
-                            <div key={ci} style={{ minWidth:0, background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:8, padding:"4px 4px", textAlign:"center" }}>
-                              <div style={{ fontSize:9, color:theme.muted, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>S{c.serie} · {c.fecha}</div>
-                              <div style={{ fontSize:12, fontWeight:800, color:theme.text, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{c.kg}kg</div>
-                              <div style={{ fontSize:10, color:theme.muted, whiteSpace:"nowrap" }}>×{c.reps}</div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </Card>
-          ))}
-        </div>
-      ) : null}
-
-      {/* Botón crear / usar plantilla */}
-      {!creando ? (
-        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-          <Btn onClick={() => { setModoDuplicar(false); setModoPlantilla(false); setEditandoRutinaId(null); setCalentamientoGeneral([]); setVueltaCalma([]); setCardio([]); setMetaPasos(""); setEjerciciosEliminados([]); setCreando(true); }}>+ Crear Nueva Rutina</Btn>
-          <Btn variant="ghost" onClick={() => setMostrarPlantillas(!mostrarPlantillas)}>📋 Usar plantilla {mostrarPlantillas ? "▲" : "▼"}</Btn>
-        </div>
-      ) : null}
-
-      {!creando && mostrarPlantillas && (
-        <Card style={{ marginTop:10 }}>
-          <div style={{ fontSize:12, color:theme.muted, marginBottom:10 }}>PLANTILLAS GUARDADAS</div>
-          {plantillas.length === 0 ? (
-            <div style={{ fontSize:13, color:theme.muted }}>Todavía no guardaste ninguna plantilla. Arma una rutina y usa "💾 Guardar como plantilla" para reutilizarla con otros alumnos.</div>
-          ) : plantillas.map(p => (
-            <div key={p.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"8px 0", borderBottom:`1px solid ${theme.border}` }}>
-              <div>
-                <div style={{ fontSize:13, fontWeight:700, color:theme.text }}>{p.nombre}</div>
-                <div style={{ fontSize:11, color:theme.muted }}>{p.dia || "Sin día"} · {(p.ejercicios || []).length} ejercicios</div>
-              </div>
-              <div style={{ display:"flex", gap:6 }}>
-                <button onClick={() => usarPlantilla(p)} style={{ background:`${theme.accent}22`, border:`1px solid ${theme.accent}44`, borderRadius:6, padding:"4px 8px", color:theme.accentLight, fontSize:11, cursor:"pointer", fontWeight:700 }}>Usar</button>
-                <button onClick={() => eliminarPlantilla(p)} style={{ background:`${theme.danger}22`, border:`1px solid ${theme.danger}44`, borderRadius:6, padding:"4px 8px", color:theme.danger, fontSize:11, cursor:"pointer", fontWeight:700 }}>× Eliminar</button>
-              </div>
-            </div>
-          ))}
-        </Card>
-      )}
-
-      {creando && (
-        <div ref={formRef}>
-        <Card>
+  // Contenido del formulario de rutina (crear/editar/duplicar/plantilla), extraído
+  // a una variable para poder mostrarlo en dos lugares: como acordeón debajo de la
+  // rutina que se está editando (dentro de "RUTINAS ASIGNADAS"), o al fondo de la
+  // página para el caso de "+ Crear Nueva Rutina" / plantilla / duplicar.
+  const formularioContenido = (
+    <>
           <div style={{ fontSize:13, fontWeight:800, color:theme.accent, marginBottom:4 }}>
             {editandoRutinaId ? "✏️ EDITANDO RUTINA" : modoPlantilla ? "🗂️ DESDE PLANTILLA" : modoDuplicar ? "⧉ DUPLICANDO RUTINA" : "NUEVA RUTINA"}
           </div>
@@ -4937,33 +4963,134 @@ function RutinaCoach({ alumno }) {
             <button onClick={() => setCalentamientoGeneral([...calentamientoGeneral, { nombre:"", detalle:"" }])} style={{ background:"transparent", border:`1px dashed ${theme.border}`, borderRadius:6, padding:"4px 10px", color:theme.muted, fontSize:11, cursor:"pointer" }}>+ Movimiento</button>
           </div>
 
-          <div style={{ marginBottom:16 }}>
-            <div style={{ fontSize:11, color:theme.muted, marginBottom:6 }}>🧘 Vuelta a la calma (estiramientos post-sesión)</div>
-            <div style={{ display:"flex", gap:6, marginBottom:10, flexWrap:"wrap" }}>
-              {[["piernas","🦵 Piernas"],["push","💪 Push"],["pull","🎯 Pull"]].map(([key,label]) => (
-                <button key={key} onClick={() => setVueltaCalma(VUELTA_CALMA_DEFAULTS[key].map(m => ({...m})))}
-                  style={{ background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:8, padding:"6px 12px", color:theme.text, fontSize:12, cursor:"pointer" }}>{label}</button>
-              ))}
-              {vueltaCalma.length > 0 && (
-                <button onClick={() => setVueltaCalma([])} style={{ background:"transparent", border:`1px solid ${theme.danger}66`, borderRadius:8, padding:"6px 12px", color:theme.danger, fontSize:12, cursor:"pointer" }}>Quitar</button>
-              )}
-            </div>
-            {vueltaCalma.map((m, i) => (
-              <div key={i} style={{ background:theme.card, borderRadius:8, padding:8, marginBottom:8 }}>
-                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 20px", gap:6, alignItems:"center", marginBottom:6 }}>
-                  <input style={inputStyle} placeholder="Nombre" value={m.nombre} onChange={e => { const c=[...vueltaCalma]; c[i]={...c[i], nombre:e.target.value}; setVueltaCalma(c); }} />
-                  <input style={inputStyle} placeholder="Detalle" value={m.detalle} onChange={e => { const c=[...vueltaCalma]; c[i]={...c[i], detalle:e.target.value}; setVueltaCalma(c); }} />
-                  <span onClick={() => setVueltaCalma(vueltaCalma.filter((_,idx)=>idx!==i))} style={{ cursor:"pointer", color:theme.danger, fontSize:14, textAlign:"center" }}>×</span>
+          <div style={{ fontSize:12, fontWeight:800, color:theme.text, marginBottom:10 }}>EJERCICIOS</div>
+
+          {ejercicios.map((ej, ejIdx) => (
+            <Fragment key={ejIdx}>
+            <div style={{ background:theme.surface, borderRadius:10, padding:12, marginBottom:12, border: ej.grupoSuperserie ? `1px solid ${theme.gold}66` : "1px solid transparent" }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8, gap:8 }}>
+                <div style={{ fontSize:11, fontWeight:700, color:theme.accent }}>
+                  Ejercicio {ejIdx + 1}
+                  {ej.grupoSuperserie && <span style={{ marginLeft:8, color:theme.gold, background:`${theme.gold}18`, border:`1px solid ${theme.gold}44`, borderRadius:6, padding:"2px 6px", fontSize:10 }}>🔗 Grupo {ej.grupoSuperserie}</span>}
                 </div>
-                <div style={{ display:"flex", alignItems:"flex-start", gap:10, flexWrap:"wrap" }}>
-                  <ImagenReferenciaEjercicio nombre={m.nombre} mapa={mapaImagenes} size={64} />
-                  <BotonSubirImagenEjercicio nombre={m.nombre} onSubida={({ normalizado, url }) => setMapaImagenes(prev => ({ ...prev, [normalizado]: { ...(prev[normalizado]||{}), url } }))} />
-                  <EditorResenaEjercicio nombre={m.nombre} mapa={mapaImagenes} onGuardado={({ normalizado, resena }) => setMapaImagenes(prev => ({ ...prev, [normalizado]: { ...(prev[normalizado]||{}), resena } }))} />
+                <div style={{ display:"flex", gap:4, alignItems:"center", flexShrink:0 }}>
+                  <button onClick={() => moverEjercicio(ejIdx, -1)} disabled={ejIdx === 0}
+                    style={{ background:theme.card, border:`1px solid ${theme.border}`, borderRadius:6, width:26, height:26, color: ejIdx === 0 ? theme.muted : theme.text, fontSize:12, cursor: ejIdx === 0 ? "default" : "pointer", opacity: ejIdx === 0 ? 0.4 : 1 }} title="Subir">↑</button>
+                  <button onClick={() => moverEjercicio(ejIdx, 1)} disabled={ejIdx === ejercicios.length - 1}
+                    style={{ background:theme.card, border:`1px solid ${theme.border}`, borderRadius:6, width:26, height:26, color: ejIdx === ejercicios.length - 1 ? theme.muted : theme.text, fontSize:12, cursor: ejIdx === ejercicios.length - 1 ? "default" : "pointer", opacity: ejIdx === ejercicios.length - 1 ? 0.4 : 1 }} title="Bajar">↓</button>
+                  <button onClick={() => eliminarEjercicio(ejIdx)}
+                    style={{ background:`${theme.danger}18`, border:`1px solid ${theme.danger}44`, borderRadius:6, padding:"5px 8px", color:theme.danger, fontSize:11, fontWeight:700, cursor:"pointer" }} title="Eliminar ejercicio">× Eliminar</button>
                 </div>
               </div>
-            ))}
-            <button onClick={() => setVueltaCalma([...vueltaCalma, { nombre:"", detalle:"" }])} style={{ background:"transparent", border:`1px dashed ${theme.border}`, borderRadius:6, padding:"4px 10px", color:theme.muted, fontSize:11, cursor:"pointer" }}>+ Estiramiento</button>
-          </div>
+
+              <div style={{ marginBottom:8 }}>
+                <div style={{ fontSize:10, color:theme.muted, marginBottom:3 }}>Nombre</div>
+                <input style={{ ...inputStyle, marginBottom:8 }} placeholder="Ej: Press Banca" value={ej.nombre} onChange={e => updateEj(ejIdx, "nombre", e.target.value)} list="lista-ejercicios" />
+                <datalist id="lista-ejercicios">
+                  {nombresEjerciciosUsados.map(n => <option key={n} value={n} />)}
+                </datalist>
+                <div style={{ display:"flex", alignItems:"flex-start", gap:10, flexWrap:"wrap" }}>
+                  <ImagenReferenciaEjercicio nombre={ej.nombre} mapa={mapaImagenes} size={72} />
+                  <BotonSubirImagenEjercicio nombre={ej.nombre} onSubida={({ normalizado, url }) => setMapaImagenes(prev => ({ ...prev, [normalizado]: { ...(prev[normalizado]||{}), url } }))} />
+                  <EditorResenaEjercicio nombre={ej.nombre} mapa={mapaImagenes} onGuardado={({ normalizado, resena }) => setMapaImagenes(prev => ({ ...prev, [normalizado]: { ...(prev[normalizado]||{}), resena } }))} />
+                </div>
+              </div>
+
+              <div style={{ marginBottom:10 }}>
+                <div style={{ fontSize:10, color:theme.muted, marginBottom:3 }}>Descanso entre series (segundos)</div>
+                <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+                  <input style={{ ...inputStyle, width:80 }} type="number" placeholder="60" value={ej.descansoDesde} onChange={e => updateEj(ejIdx, "descansoDesde", e.target.value)} />
+                  <span style={{ color:theme.muted, fontSize:12 }}>a</span>
+                  <input style={{ ...inputStyle, width:80 }} type="number" placeholder="90" value={ej.descansoHasta} onChange={e => updateEj(ejIdx, "descansoHasta", e.target.value)} />
+                  <span style={{ color:theme.muted, fontSize:11 }}>segundos</span>
+                </div>
+              </div>
+
+              <div style={{ marginBottom:10 }}>
+                <div style={{ fontSize:10, color:theme.muted, marginBottom:3 }}>Grupo (superserie / biserie) — opcional</div>
+                <input style={{ ...inputStyle, width:70 }} placeholder="Ej: A" maxLength={3}
+                  value={ej.grupoSuperserie || ""} onChange={e => updateEj(ejIdx, "grupoSuperserie", e.target.value.toUpperCase())} />
+                <div style={{ fontSize:10, color:theme.muted, marginTop:4, lineHeight:1.4 }}>Ejercicios con la misma letra, uno debajo del otro en la lista, se hacen en superserie/biserie: sin descanso entre ellos, el descanso se aplica recién al cerrar la ronda completa.</div>
+              </div>
+
+              {/* Aproximación (reemplaza al antiguo calentamiento específico del
+                  ejercicio: acá se trabaja en % del peso de la primera serie
+                  efectiva, no en RIR. Colapsada por defecto salvo en el primer
+                  ejercicio de la rutina, porque rara vez se usa en los demás. */}
+              {(() => {
+                const expandidoAprox = aproxExpandida[ejIdx] ?? (ejIdx === 0);
+                return (
+                  <div style={{ marginBottom:12 }}>
+                    <div onClick={() => setAproxExpandida(prev => ({ ...prev, [ejIdx]: !expandidoAprox }))}
+                      style={{ display:"flex", alignItems:"center", gap:6, cursor:"pointer", marginBottom: expandidoAprox ? 6 : 0 }}>
+                      <span style={{ fontSize:10, fontWeight:700, color:"#B0C4DE" }}>📊 APROXIMACIÓN</span>
+                      <span style={{ fontSize:10, color:"#B0C4DE" }}>{expandidoAprox ? "▲" : ej.seriesAproximacion.length > 0 ? `▼ (${ej.seriesAproximacion.length})` : "+"}</span>
+                    </div>
+                    {expandidoAprox && (
+                      <>
+                        <div style={{ display:"grid", gridTemplateColumns:"30px 1fr 46px 10px 46px 20px", gap:4, marginBottom:6 }}>
+                          {["#","REPS","% DESDE","","% HASTA",""].map((h,i) => <span key={i} style={{ fontSize:9, color:theme.muted, textAlign:"center" }}>{h}</span>)}
+                        </div>
+                        {ej.seriesAproximacion.map((s, sIdx) => (
+                          <div key={sIdx} style={{ display:"grid", gridTemplateColumns:"30px 1fr 46px 10px 46px 20px", gap:4, alignItems:"center", marginBottom:6, background:"#B0C4DE14", border:"1px solid #B0C4DE33", borderRadius:8, padding:"4px 4px" }}>
+                            <div style={{ textAlign:"center", fontSize:11, color:"#B0C4DE", fontWeight:700 }}>{sIdx+1}</div>
+                            <input style={inputStyle} placeholder="8" value={s.reps} onChange={e => updateSerie(ejIdx, "aproximacion", sIdx, "reps", e.target.value)} />
+                            <input style={inputStyle} type="number" placeholder="50" value={s.pctDesde} onChange={e => updateSerie(ejIdx, "aproximacion", sIdx, "pctDesde", e.target.value)} />
+                            <span style={{ color:theme.muted, fontSize:10, textAlign:"center" }}>-</span>
+                            <input style={inputStyle} type="number" placeholder="60" value={s.pctHasta} onChange={e => updateSerie(ejIdx, "aproximacion", sIdx, "pctHasta", e.target.value)} />
+                            <span onClick={() => eliminarSerie(ejIdx, "aproximacion", sIdx)} style={{ cursor:"pointer", color:theme.danger, fontSize:14, textAlign:"center" }}>×</span>
+                          </div>
+                        ))}
+                        <button onClick={() => agregarSerie(ejIdx, "aproximacion")} style={{ background:"transparent", border:"1px dashed #B0C4DE66", borderRadius:6, padding:"4px 10px", color:"#B0C4DE", fontSize:11, cursor:"pointer", marginTop:2 }}>+ Serie de aproximación</button>
+                        <div style={{ fontSize:10, color:theme.muted, marginTop:6, lineHeight:1.4 }}>% sobre el peso de la primera serie efectiva. El alumno ve el kg sugerido calculado automáticamente (según su carga previa) y puede corregirlo.</div>
+                      </>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* Efectivas */}
+              <div style={{ fontSize:10, fontWeight:700, color:theme.accentLight, marginBottom:6 }}>💪 SERIES EFECTIVAS</div>
+              <div style={{ display:"grid", gridTemplateColumns:"30px 1fr 60px 50px 20px", gap:4, marginBottom:6 }}>
+                {["#","REPS","RIR","TÉC.",""].map((h,i) => <span key={i} style={{ fontSize:9, color:theme.muted, textAlign:"center" }}>{h}</span>)}
+              </div>
+              {ej.seriesEfectivas.map((s, sIdx) => (
+                <div key={sIdx}>
+                <div style={{ display:"grid", gridTemplateColumns:"30px 1fr 60px 50px 20px", gap:4, alignItems:"center", marginBottom:4, background:`${theme.accent}14`, border:`1px solid ${theme.accent}33`, borderRadius:8, padding:"4px 4px" }}>
+                  <div style={{ textAlign:"center", fontSize:11, color:theme.accentLight, fontWeight:700 }}>{sIdx+1}</div>
+                  <input style={inputStyle} placeholder="10" value={s.reps} onChange={e => updateSerie(ejIdx, "efectiva", sIdx, "reps", e.target.value)} />
+                  <select style={{ ...inputStyle, padding:"6px 4px" }} value={s.rir} onChange={e => updateSerie(ejIdx, "efectiva", sIdx, "rir", e.target.value)}>
+                    <option value={0}>Fallo</option>
+                    <option value={1}>RIR 1</option>
+                    <option value={2}>RIR 2</option>
+                    <option value={3}>RIR 3</option>
+                  </select>
+                  <select value={s.tecnica || "normal"} onChange={e => updateSerie(ejIdx, "efectiva", sIdx, "tecnica", e.target.value)}
+                    title="Técnica de intensidad" style={{ ...inputStyle, padding:"4px 1px", fontSize:9 }}>
+                    <option value="normal">—</option>
+                    <option value="dropset">DS</option>
+                    <option value="restpause">RP</option>
+                  </select>
+                  {ej.seriesEfectivas.length > 1 && (
+                    <span onClick={() => eliminarSerie(ejIdx, "efectiva", sIdx)} style={{ cursor:"pointer", color:theme.danger, fontSize:14, textAlign:"center" }}>×</span>
+                  )}
+                </div>
+                {s.tecnica === "dropset" && (
+                  <div style={{ fontSize:9, color:theme.muted, marginBottom:6, marginTop:-2, paddingLeft:4, lineHeight:1.4 }}>⚡ Dropset: baja 20-30% del peso al llegar cerca del fallo, sin descanso.</div>
+                )}
+                {s.tecnica === "restpause" && (
+                  <div style={{ fontSize:9, color:theme.muted, marginBottom:6, marginTop:-2, paddingLeft:4, lineHeight:1.4 }}>⚡ Rest-pause: pausa 10-15s → 3-5 reps más → pausa opcional 10-15s → 1-3 reps más (máx. 2 pausas).</div>
+                )}
+                </div>
+              ))}
+              <button onClick={() => agregarSerie(ejIdx, "efectiva")} style={{ background:"transparent", border:`1px dashed ${theme.border}`, borderRadius:6, padding:"4px 10px", color:theme.muted, fontSize:11, cursor:"pointer", marginTop:4 }}>+ Serie efectiva</button>
+            </div>
+            <button onClick={() => insertarEjercicioDespues(ejIdx)}
+              style={{ background:"transparent", border:`1px dashed ${theme.border}`, borderRadius:6, padding:"5px 10px", color:theme.muted, fontSize:11, cursor:"pointer", width:"100%", marginBottom:12 }}>+ Insertar ejercicio aquí</button>
+            </Fragment>
+          ))}
+
+          <button onClick={agregarEjercicio} style={{ background:"transparent", border:`1px dashed ${theme.accent}`, borderRadius:8, padding:"8px", color:theme.accentLight, fontSize:12, cursor:"pointer", width:"100%", marginBottom:12 }}>+ Agregar Ejercicio</button>
 
           <div style={{ marginBottom:16 }}>
             <div style={{ fontSize:11, color:theme.muted, marginBottom:6 }}>🏃 Cardio y pasos</div>
@@ -5011,143 +5138,36 @@ function RutinaCoach({ alumno }) {
             <datalist id="lista-tipos-cardio">
               {["Trote","Caminata","Bicicleta","Elíptica","Remo","Natación","Escaladora"].map(t => <option key={t} value={t} />)}
             </datalist>
-            <button onClick={() => setCardio([...cardio, { tipo:"", duracionMin:"", fcMinPct:"", fcMaxPct:"", notas:"" }])} style={{ background:"transparent", border:`1px dashed ${theme.border}`, borderRadius:6, padding:"4px 10px", color:theme.muted, fontSize:11, cursor:"pointer" }}>+ Cardio</button>
+            <button onClick={() => setCardio([...cardio, { tipo:"", duracionMin:"20", fcMinPct:"60", fcMaxPct:"70", notas:"" }])} style={{ background:"transparent", border:`1px dashed ${theme.border}`, borderRadius:6, padding:"4px 10px", color:theme.muted, fontSize:11, cursor:"pointer" }}>+ Cardio</button>
           </div>
 
-          <div style={{ fontSize:12, fontWeight:800, color:theme.text, marginBottom:10 }}>EJERCICIOS</div>
-
-          {ejercicios.map((ej, ejIdx) => (
-            <Fragment key={ejIdx}>
-            <div style={{ background:theme.surface, borderRadius:10, padding:12, marginBottom:12, border: ej.grupoSuperserie ? `1px solid ${theme.gold}66` : "1px solid transparent" }}>
-              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8, gap:8 }}>
-                <div style={{ fontSize:11, fontWeight:700, color:theme.accent }}>
-                  Ejercicio {ejIdx + 1}
-                  {ej.grupoSuperserie && <span style={{ marginLeft:8, color:theme.gold, background:`${theme.gold}18`, border:`1px solid ${theme.gold}44`, borderRadius:6, padding:"2px 6px", fontSize:10 }}>🔗 Grupo {ej.grupoSuperserie}</span>}
-                </div>
-                <div style={{ display:"flex", gap:4, alignItems:"center", flexShrink:0 }}>
-                  <button onClick={() => moverEjercicio(ejIdx, -1)} disabled={ejIdx === 0}
-                    style={{ background:theme.card, border:`1px solid ${theme.border}`, borderRadius:6, width:26, height:26, color: ejIdx === 0 ? theme.muted : theme.text, fontSize:12, cursor: ejIdx === 0 ? "default" : "pointer", opacity: ejIdx === 0 ? 0.4 : 1 }} title="Subir">↑</button>
-                  <button onClick={() => moverEjercicio(ejIdx, 1)} disabled={ejIdx === ejercicios.length - 1}
-                    style={{ background:theme.card, border:`1px solid ${theme.border}`, borderRadius:6, width:26, height:26, color: ejIdx === ejercicios.length - 1 ? theme.muted : theme.text, fontSize:12, cursor: ejIdx === ejercicios.length - 1 ? "default" : "pointer", opacity: ejIdx === ejercicios.length - 1 ? 0.4 : 1 }} title="Bajar">↓</button>
-                  <button onClick={() => eliminarEjercicio(ejIdx)}
-                    style={{ background:`${theme.danger}18`, border:`1px solid ${theme.danger}44`, borderRadius:6, padding:"5px 8px", color:theme.danger, fontSize:11, fontWeight:700, cursor:"pointer" }} title="Eliminar ejercicio">× Eliminar</button>
-                </div>
-              </div>
-
-              <div style={{ marginBottom:8 }}>
-                <div style={{ fontSize:10, color:theme.muted, marginBottom:3 }}>Nombre</div>
-                <input style={{ ...inputStyle, marginBottom:8 }} placeholder="Ej: Press Banca" value={ej.nombre} onChange={e => updateEj(ejIdx, "nombre", e.target.value)} list="lista-ejercicios" />
-                <datalist id="lista-ejercicios">
-                  {nombresEjerciciosUsados.map(n => <option key={n} value={n} />)}
-                </datalist>
-                <div style={{ display:"flex", alignItems:"flex-start", gap:10, flexWrap:"wrap" }}>
-                  <ImagenReferenciaEjercicio nombre={ej.nombre} mapa={mapaImagenes} size={72} />
-                  <BotonSubirImagenEjercicio nombre={ej.nombre} onSubida={({ normalizado, url }) => setMapaImagenes(prev => ({ ...prev, [normalizado]: { ...(prev[normalizado]||{}), url } }))} />
-                  <EditorResenaEjercicio nombre={ej.nombre} mapa={mapaImagenes} onGuardado={({ normalizado, resena }) => setMapaImagenes(prev => ({ ...prev, [normalizado]: { ...(prev[normalizado]||{}), resena } }))} />
-                </div>
-              </div>
-
-              <div style={{ marginBottom:8 }}>
-                <div style={{ fontSize:10, color:theme.muted, marginBottom:3 }}>Link YouTube (opcional)</div>
-                <input style={inputStyle} placeholder="https://youtube.com/..." value={ej.videoUrl} onChange={e => updateEj(ejIdx, "videoUrl", e.target.value)} />
-              </div>
-
-              <div style={{ marginBottom:10 }}>
-                <div style={{ fontSize:10, color:theme.muted, marginBottom:3 }}>Descanso entre series (segundos)</div>
-                <div style={{ display:"flex", gap:8, alignItems:"center" }}>
-                  <input style={{ ...inputStyle, width:80 }} type="number" placeholder="60" value={ej.descansoDesde} onChange={e => updateEj(ejIdx, "descansoDesde", e.target.value)} />
-                  <span style={{ color:theme.muted, fontSize:12 }}>a</span>
-                  <input style={{ ...inputStyle, width:80 }} type="number" placeholder="90" value={ej.descansoHasta} onChange={e => updateEj(ejIdx, "descansoHasta", e.target.value)} />
-                  <span style={{ color:theme.muted, fontSize:11 }}>segundos</span>
-                </div>
-              </div>
-
-              <div style={{ marginBottom:10 }}>
-                <div style={{ fontSize:10, color:theme.muted, marginBottom:3 }}>Grupo (superserie / biserie) — opcional</div>
-                <input style={{ ...inputStyle, width:70 }} placeholder="Ej: A" maxLength={3}
-                  value={ej.grupoSuperserie || ""} onChange={e => updateEj(ejIdx, "grupoSuperserie", e.target.value.toUpperCase())} />
-                <div style={{ fontSize:10, color:theme.muted, marginTop:4, lineHeight:1.4 }}>Ejercicios con la misma letra, uno debajo del otro en la lista, se hacen en superserie/biserie: sin descanso entre ellos, el descanso se aplica recién al cerrar la ronda completa.</div>
-              </div>
-
-              {/* Calentamiento */}
-              <div style={{ fontSize:10, fontWeight:700, color:"#60a5fa", marginBottom:6 }}>🔥 CALENTAMIENTO</div>
-              <div style={{ display:"grid", gridTemplateColumns:"30px 1fr 70px 20px", gap:4, marginBottom:6 }}>
-                {["#","REPS","KG SUG.",""].map((h,i) => <span key={i} style={{ fontSize:9, color:theme.muted, textAlign:"center" }}>{h}</span>)}
-              </div>
-              {ej.seriesCalentamiento.map((s, sIdx) => (
-                <div key={sIdx} style={{ display:"grid", gridTemplateColumns:"30px 1fr 70px 20px", gap:4, alignItems:"center", marginBottom:6, background:"#60a5fa14", border:"1px solid #60a5fa33", borderRadius:8, padding:"4px 4px" }}>
-                  <div style={{ textAlign:"center", fontSize:11, color:"#60a5fa", fontWeight:700 }}>{sIdx+1}</div>
-                  <input style={inputStyle} placeholder="15" value={s.reps} onChange={e => updateSerie(ejIdx, "calentamiento", sIdx, "reps", e.target.value)} />
-                  <input style={inputStyle} placeholder="kg" value={s.kgSugerido} onChange={e => updateSerie(ejIdx, "calentamiento", sIdx, "kgSugerido", e.target.value)} />
-                  {ej.seriesCalentamiento.length > 0 && (
-                    <span onClick={() => eliminarSerie(ejIdx, "calentamiento", sIdx)} style={{ cursor:"pointer", color:theme.danger, fontSize:14, textAlign:"center" }}>×</span>
-                  )}
-                </div>
+          <div style={{ marginBottom:16 }}>
+            <div style={{ fontSize:11, color:theme.muted, marginBottom:6 }}>🧘 Vuelta a la calma (estiramientos post-sesión)</div>
+            <div style={{ display:"flex", gap:6, marginBottom:10, flexWrap:"wrap" }}>
+              {[["piernas","🦵 Piernas"],["push","💪 Push"],["pull","🎯 Pull"]].map(([key,label]) => (
+                <button key={key} onClick={() => setVueltaCalma(VUELTA_CALMA_DEFAULTS[key].map(m => ({...m})))}
+                  style={{ background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:8, padding:"6px 12px", color:theme.text, fontSize:12, cursor:"pointer" }}>{label}</button>
               ))}
-              <button onClick={() => agregarSerie(ejIdx, "calentamiento")} style={{ background:"transparent", border:"1px dashed #60a5fa66", borderRadius:6, padding:"4px 10px", color:"#60a5fa", fontSize:11, cursor:"pointer", marginTop:2, marginBottom:12 }}>+ Serie de calentamiento</button>
-
-              {/* Aproximación */}
-              <div style={{ fontSize:10, fontWeight:700, color:"#B0C4DE", marginBottom:6 }}>📊 APROXIMACIÓN</div>
-              <div style={{ display:"grid", gridTemplateColumns:"30px 1fr 70px 20px", gap:4, marginBottom:6 }}>
-                {["#","REPS","KG SUG.",""].map((h,i) => <span key={i} style={{ fontSize:9, color:theme.muted, textAlign:"center" }}>{h}</span>)}
-              </div>
-              {ej.seriesAproximacion.map((s, sIdx) => (
-                <div key={sIdx} style={{ display:"grid", gridTemplateColumns:"30px 1fr 70px 20px", gap:4, alignItems:"center", marginBottom:6, background:"#B0C4DE14", border:"1px solid #B0C4DE33", borderRadius:8, padding:"4px 4px" }}>
-                  <div style={{ textAlign:"center", fontSize:11, color:"#B0C4DE", fontWeight:700 }}>{sIdx+1}</div>
-                  <input style={inputStyle} placeholder="8" value={s.reps} onChange={e => updateSerie(ejIdx, "aproximacion", sIdx, "reps", e.target.value)} />
-                  <input style={inputStyle} placeholder="kg" value={s.kgSugerido} onChange={e => updateSerie(ejIdx, "aproximacion", sIdx, "kgSugerido", e.target.value)} />
-                  {ej.seriesAproximacion.length > 0 && (
-                    <span onClick={() => eliminarSerie(ejIdx, "aproximacion", sIdx)} style={{ cursor:"pointer", color:theme.danger, fontSize:14, textAlign:"center" }}>×</span>
-                  )}
-                </div>
-              ))}
-              <button onClick={() => agregarSerie(ejIdx, "aproximacion")} style={{ background:"transparent", border:"1px dashed #B0C4DE66", borderRadius:6, padding:"4px 10px", color:"#B0C4DE", fontSize:11, cursor:"pointer", marginTop:2, marginBottom:12 }}>+ Serie de aproximación</button>
-
-              {/* Efectivas */}
-              <div style={{ fontSize:10, fontWeight:700, color:theme.accentLight, marginBottom:6 }}>💪 SERIES EFECTIVAS</div>
-              <div style={{ display:"grid", gridTemplateColumns:"30px 1fr 60px 50px 20px", gap:4, marginBottom:6 }}>
-                {["#","REPS","RIR","TÉC.",""].map((h,i) => <span key={i} style={{ fontSize:9, color:theme.muted, textAlign:"center" }}>{h}</span>)}
-              </div>
-              {ej.seriesEfectivas.map((s, sIdx) => (
-                <div key={sIdx}>
-                <div style={{ display:"grid", gridTemplateColumns:"30px 1fr 60px 50px 20px", gap:4, alignItems:"center", marginBottom:4, background:`${theme.accent}14`, border:`1px solid ${theme.accent}33`, borderRadius:8, padding:"4px 4px" }}>
-                  <div style={{ textAlign:"center", fontSize:11, color:theme.accentLight, fontWeight:700 }}>{sIdx+1}</div>
-                  <input style={inputStyle} placeholder="10" value={s.reps} onChange={e => updateSerie(ejIdx, "efectiva", sIdx, "reps", e.target.value)} />
-                  <select style={{ ...inputStyle, padding:"6px 4px" }} value={s.rir} onChange={e => updateSerie(ejIdx, "efectiva", sIdx, "rir", e.target.value)}>
-                    <option value={0}>Fallo</option>
-                    <option value={1}>RIR 1</option>
-                    <option value={2}>RIR 2</option>
-                    <option value={3}>RIR 3</option>
-                  </select>
-                  <select value={s.tecnica || "normal"} onChange={e => updateSerie(ejIdx, "efectiva", sIdx, "tecnica", e.target.value)}
-                    title="Técnica de intensidad" style={{ ...inputStyle, padding:"4px 1px", fontSize:9 }}>
-                    <option value="normal">—</option>
-                    <option value="dropset">DS</option>
-                    <option value="restpause">RP</option>
-                    <option value="descendente">DESC</option>
-                  </select>
-                  {ej.seriesEfectivas.length > 1 && (
-                    <span onClick={() => eliminarSerie(ejIdx, "efectiva", sIdx)} style={{ cursor:"pointer", color:theme.danger, fontSize:14, textAlign:"center" }}>×</span>
-                  )}
-                </div>
-                {s.tecnica && s.tecnica !== "normal" && (
-                  <input style={{ ...inputStyle, marginBottom:6, fontSize:11 }} placeholder={
-                      s.tecnica === "dropset" ? "Nota (ej: bajar 20% peso al fallo, sin descanso)"
-                      : s.tecnica === "restpause" ? "Nota (ej: 15-20s de pausa, repetir 2-3 veces)"
-                      : "Nota (ej: bajar peso en cada serie, descanso mínimo)"
-                    }
-                    value={s.notaTecnica || ""} onChange={e => updateSerie(ejIdx, "efectiva", sIdx, "notaTecnica", e.target.value)} />
-                )}
-                </div>
-              ))}
-              <button onClick={() => agregarSerie(ejIdx, "efectiva")} style={{ background:"transparent", border:`1px dashed ${theme.border}`, borderRadius:6, padding:"4px 10px", color:theme.muted, fontSize:11, cursor:"pointer", marginTop:4 }}>+ Serie efectiva</button>
+              {vueltaCalma.length > 0 && (
+                <button onClick={() => setVueltaCalma([])} style={{ background:"transparent", border:`1px solid ${theme.danger}66`, borderRadius:8, padding:"6px 12px", color:theme.danger, fontSize:12, cursor:"pointer" }}>Quitar</button>
+              )}
             </div>
-            <button onClick={() => insertarEjercicioDespues(ejIdx)}
-              style={{ background:"transparent", border:`1px dashed ${theme.border}`, borderRadius:6, padding:"5px 10px", color:theme.muted, fontSize:11, cursor:"pointer", width:"100%", marginBottom:12 }}>+ Insertar ejercicio aquí</button>
-            </Fragment>
-          ))}
-
-          <button onClick={agregarEjercicio} style={{ background:"transparent", border:`1px dashed ${theme.accent}`, borderRadius:8, padding:"8px", color:theme.accentLight, fontSize:12, cursor:"pointer", width:"100%", marginBottom:12 }}>+ Agregar Ejercicio</button>
+            {vueltaCalma.map((m, i) => (
+              <div key={i} style={{ background:theme.card, borderRadius:8, padding:8, marginBottom:8 }}>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 20px", gap:6, alignItems:"center", marginBottom:6 }}>
+                  <input style={inputStyle} placeholder="Nombre" value={m.nombre} onChange={e => { const c=[...vueltaCalma]; c[i]={...c[i], nombre:e.target.value}; setVueltaCalma(c); }} />
+                  <input style={inputStyle} placeholder="Detalle" value={m.detalle} onChange={e => { const c=[...vueltaCalma]; c[i]={...c[i], detalle:e.target.value}; setVueltaCalma(c); }} />
+                  <span onClick={() => setVueltaCalma(vueltaCalma.filter((_,idx)=>idx!==i))} style={{ cursor:"pointer", color:theme.danger, fontSize:14, textAlign:"center" }}>×</span>
+                </div>
+                <div style={{ display:"flex", alignItems:"flex-start", gap:10, flexWrap:"wrap" }}>
+                  <ImagenReferenciaEjercicio nombre={m.nombre} mapa={mapaImagenes} size={64} />
+                  <BotonSubirImagenEjercicio nombre={m.nombre} onSubida={({ normalizado, url }) => setMapaImagenes(prev => ({ ...prev, [normalizado]: { ...(prev[normalizado]||{}), url } }))} />
+                  <EditorResenaEjercicio nombre={m.nombre} mapa={mapaImagenes} onGuardado={({ normalizado, resena }) => setMapaImagenes(prev => ({ ...prev, [normalizado]: { ...(prev[normalizado]||{}), resena } }))} />
+                </div>
+              </div>
+            ))}
+            <button onClick={() => setVueltaCalma([...vueltaCalma, { nombre:"", detalle:"" }])} style={{ background:"transparent", border:`1px dashed ${theme.border}`, borderRadius:6, padding:"4px 10px", color:theme.muted, fontSize:11, cursor:"pointer" }}>+ Estiramiento</button>
+          </div>
 
           {!guardarPlantillaAbierto ? (
             <button onClick={() => { setNombrePlantillaNueva(nombreRutina || ""); setGuardarPlantillaAbierto(true); }}
@@ -5167,6 +5187,144 @@ function RutinaCoach({ alumno }) {
             <Btn onClick={guardarRutina} style={{ background:theme.success }}>{guardando ? "Guardando..." : editandoRutinaId ? "✓ Guardar Cambios" : "✓ Guardar Rutina"}</Btn>
             <Btn variant="ghost" onClick={() => { setCreando(false); setModoDuplicar(false); setModoPlantilla(false); setGuardarPlantillaAbierto(false); setEditandoRutinaId(null); }}>Cancelar</Btn>
           </div>
+    </>
+  );
+
+  return (
+    <div>
+      {exito && (
+        <Card style={{ textAlign:"center", padding:16, marginBottom:14, background:`${theme.success}18`, border:`1px solid ${theme.success}44` }}>
+          <div style={{ fontSize:20, marginBottom:4 }}>✅</div>
+          <div style={{ fontSize:13, fontWeight:700, color:theme.success }}>Rutina guardada correctamente</div>
+        </Card>
+      )}
+
+      <Card style={{ marginBottom:14 }}>
+        <div style={{ fontSize:12, color:theme.muted, marginBottom:8 }}>📅 FECHA DE INICIO DEL PLAN</div>
+        <div style={{ fontSize:11, color:theme.muted, marginBottom:10 }}>El conteo de las 4 semanas del ciclo arranca desde acá (por ejemplo, siempre un lunes). Si la dejas vacía, arranca automáticamente desde el primer registro del alumno.</div>
+        <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+          <input type="date" value={fechaInicioPlan} onChange={e => setFechaInicioPlan(e.target.value)}
+            style={{ flex:1, background:theme.bg, border:`1px solid ${theme.border}`, borderRadius:8, padding:"9px 11px", color:theme.text, fontSize:13, outline:"none" }} />
+          <button onClick={guardarFechaInicioPlan} disabled={guardandoFechaInicio}
+            style={{ background:theme.accent, border:"none", borderRadius:8, padding:"9px 14px", color:"#fff", fontSize:12, fontWeight:700, cursor:"pointer" }}>
+            {guardandoFechaInicio ? "Guardando..." : "Guardar"}
+          </button>
+        </div>
+      </Card>
+
+      {/* Rutinas existentes */}
+      {loading ? (
+        <Card style={{ textAlign:"center", padding:20 }}><div style={{ color:theme.muted }}>Cargando...</div></Card>
+      ) : rutinas.length > 0 ? (
+        <div style={{ marginBottom:14 }}>
+          <div style={{ fontSize:12, color:theme.muted, marginBottom:10 }}>RUTINAS ASIGNADAS</div>
+          {rutinas.map(r => (
+            <Card key={r.id} style={{ marginBottom:8 }}>
+              <div style={{ fontSize:14, fontWeight:800, color:theme.text, textTransform:"uppercase", letterSpacing:0.4, lineHeight:1.3, display:"-webkit-box", WebkitLineClamp:2, WebkitBoxOrient:"vertical", overflow:"hidden", marginBottom:6 }}>💪 {r.nombre}</div>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8, gap:6, flexWrap:"nowrap" }}>
+                <div style={{ display:"flex", alignItems:"center", gap:6, minWidth:0, overflow:"hidden" }}>
+                  <Tag>{r.dia || "Sin día"}</Tag>
+                  {r.created_at && <span style={{ fontSize:10, color:theme.muted, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{new Date(r.created_at).toLocaleDateString("es-CL", { day:"2-digit", month:"short" })}</span>}
+                </div>
+                <div style={{ display:"flex", gap:4, alignItems:"center", flexShrink:0 }}>
+                  <button onClick={() => {
+                      if (creando && editandoRutinaId === r.id) {
+                        // Ya está abierto en acordeón: se cierra sin guardar --
+                        // volver a apretar "Editar" es la forma de salir sin
+                        // tener que llegar hasta el botón Guardar/Cancelar.
+                        setCreando(false); setModoDuplicar(false); setModoPlantilla(false); setGuardarPlantillaAbierto(false); setEditandoRutinaId(null);
+                      } else {
+                        cargarParaEditar(r, "editar");
+                      }
+                    }}
+                    style={{ background: creando && editandoRutinaId === r.id ? `${theme.muted}22` : `${theme.success}22`, border:`1px solid ${creando && editandoRutinaId === r.id ? theme.muted : theme.success}44`, borderRadius:6, padding:"4px 7px", color: creando && editandoRutinaId === r.id ? theme.muted : theme.success, fontSize:11, cursor:"pointer", fontWeight:700, whiteSpace:"nowrap" }}>
+                    {creando && editandoRutinaId === r.id ? "▲ Cerrar" : "✏️ Editar"}
+                  </button>
+                  <button onClick={async () => {
+                    if (!confirm(`¿Seguro que querés eliminar la rutina "${r.nombre}"? También se borrará el historial de cargas registradas en sus ejercicios.`)) return;
+                    const idsEjercicios = (r.ejercicios || []).map(ej => ej.id);
+                    if (idsEjercicios.length > 0) {
+                      const { error: errReg } = await supabase.from("registros_entreno").delete().in("ejercicio_id", idsEjercicios);
+                      if (errReg) { alert("Error borrando cargas registradas: " + errReg.message); return; }
+                    }
+                    const { error: errEj } = await supabase.from("ejercicios").delete().eq("rutina_id", r.id);
+                    if (errEj) { alert("Error borrando ejercicios: " + errEj.message); return; }
+                    const { error: errRut } = await supabase.from("rutinas").delete().eq("id", r.id);
+                    if (errRut) { alert("Error borrando rutina: " + errRut.message); return; }
+                    cargarRutinas();
+                  }} title="Eliminar rutina" style={{ background:`${theme.danger}22`, border:`1px solid ${theme.danger}44`, borderRadius:6, padding:"4px 8px", color:theme.danger, fontSize:12, cursor:"pointer", fontWeight:700 }}>×</button>
+                </div>
+              </div>
+              <button onClick={() => setRutinaExpandida(prev => ({ ...prev, [r.id]: !prev[r.id] }))}
+                style={{ background:"transparent", border:"none", padding:0, color:theme.accentLight, fontSize:12, cursor:"pointer", display:"flex", alignItems:"center", gap:4 }}>
+                {rutinaExpandida[r.id] ? "▲" : "▼"} {r.ejercicios?.length || 0} ejercicios
+              </button>
+              {rutinaExpandida[r.id] && (r.ejercicios || []).slice().sort((a, b) => (a.orden || 0) - (b.orden || 0)).map((ej, i) => (
+                <div key={i} style={{ marginTop: 6 }}>
+                  <div style={{ fontSize:12, color:theme.muted, paddingLeft:8 }}>· {ej.nombre}</div>
+                  {cargas[ej.id] && (
+                    <div style={{ paddingLeft:16, marginTop:4 }}>
+                      <button onClick={() => setVerCargas(prev => ({ ...prev, [ej.id]: !prev[ej.id] }))}
+                        style={{ background:`${theme.accent}15`, border:`1px solid ${theme.accent}33`, borderRadius:6, padding:"3px 8px", color:theme.accentLight, fontSize:10, cursor:"pointer", marginBottom:4 }}>
+                        {verCargas[ej.id] ? "▲ Ocultar cargas" : `▼ Ver cargas (${cargas[ej.id].length} series)`}
+                      </button>
+                      {verCargas[ej.id] && (
+                        <div style={{ display:"grid", gridTemplateColumns:"repeat(4, 1fr)", gap:6 }}>
+                          {cargas[ej.id].slice(0, 8).map((c, ci) => (
+                            <div key={ci} style={{ minWidth:0, background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:8, padding:"4px 4px", textAlign:"center" }}>
+                              <div style={{ fontSize:9, color:theme.muted, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>S{c.serie} · {c.fecha}</div>
+                              <div style={{ fontSize:12, fontWeight:800, color:theme.text, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{c.kg}kg</div>
+                              <div style={{ fontSize:10, color:theme.muted, whiteSpace:"nowrap" }}>×{c.reps}</div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+              {creando && editandoRutinaId === r.id && (
+                <div style={{ marginTop:12, borderTop:`1px solid ${theme.border}`, paddingTop:12 }}>
+                  {formularioContenido}
+                </div>
+              )}
+            </Card>
+          ))}
+        </div>
+      ) : null}
+
+      {/* Botón crear / usar plantilla */}
+      {!creando ? (
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+          <Btn onClick={() => { setModoDuplicar(false); setModoPlantilla(false); setEditandoRutinaId(null); setCalentamientoGeneral([]); setVueltaCalma([]); setCardio([]); setMetaPasos("10000"); setEjerciciosEliminados([]); setAproxExpandida({}); setCreando(true); }}>+ Crear Nueva Rutina</Btn>
+          <Btn variant="ghost" onClick={() => setMostrarPlantillas(!mostrarPlantillas)}>📋 Usar plantilla {mostrarPlantillas ? "▲" : "▼"}</Btn>
+        </div>
+      ) : null}
+
+      {!creando && mostrarPlantillas && (
+        <Card style={{ marginTop:10 }}>
+          <div style={{ fontSize:12, color:theme.muted, marginBottom:10 }}>PLANTILLAS GUARDADAS</div>
+          {plantillas.length === 0 ? (
+            <div style={{ fontSize:13, color:theme.muted }}>Todavía no guardaste ninguna plantilla. Arma una rutina y usa "💾 Guardar como plantilla" para reutilizarla con otros alumnos.</div>
+          ) : plantillas.map(p => (
+            <div key={p.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"8px 0", borderBottom:`1px solid ${theme.border}` }}>
+              <div>
+                <div style={{ fontSize:13, fontWeight:700, color:theme.text }}>{p.nombre}</div>
+                <div style={{ fontSize:11, color:theme.muted }}>{p.dia || "Sin día"} · {(p.ejercicios || []).length} ejercicios</div>
+              </div>
+              <div style={{ display:"flex", gap:6 }}>
+                <button onClick={() => usarPlantilla(p)} style={{ background:`${theme.accent}22`, border:`1px solid ${theme.accent}44`, borderRadius:6, padding:"4px 8px", color:theme.accentLight, fontSize:11, cursor:"pointer", fontWeight:700 }}>Usar</button>
+                <button onClick={() => eliminarPlantilla(p)} style={{ background:`${theme.danger}22`, border:`1px solid ${theme.danger}44`, borderRadius:6, padding:"4px 8px", color:theme.danger, fontSize:11, cursor:"pointer", fontWeight:700 }}>× Eliminar</button>
+              </div>
+            </div>
+          ))}
+        </Card>
+      )}
+
+      {creando && editandoRutinaId === null && (
+        <div ref={formRef}>
+        <Card>
+          {formularioContenido}
         </Card>
         </div>
       )}
