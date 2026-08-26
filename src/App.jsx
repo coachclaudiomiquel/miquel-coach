@@ -356,7 +356,7 @@ const SemanaCard = ({ semana, ctx }) => {
                     <div style={{ gridColumn:"2/4", fontSize:10, color:theme.muted }}>Sin registro</div>
                   )}
                   <div style={{ textAlign:"center" }}>
-                    {d.entreno ? <span style={{ fontSize:11 }}>💪</span> : <span style={{ fontSize:11, opacity:0.3 }}>—</span>}
+                    {d.entreno ? "💪" : <span style={{ fontSize:11, opacity:0.3 }}>—</span>}
                   </div>
                 </div>
 
@@ -1567,7 +1567,7 @@ const [estadoPago, setEstadoPago] = useState(null);
           <div style={{ fontSize: 13, fontWeight: 700, color: theme.text, marginBottom: 2 }}>{tieneRutinas ? "Hoy no te toca entrenar" : "Sin rutina asignada"}</div>
           <div style={{ fontSize: 11, color: theme.muted, marginBottom: tieneRutinas ? 8 : 0 }}>{tieneRutinas ? "Día de descanso 🙌" : "Tu coach aún no ha creado tu plan"}</div>
           {tieneRutinas && (
-            <Btn variant="ghost" onClick={() => onNav("rutina")}>¿No entrenaste el día que tocaba? Elegí otra rutina</Btn>
+            <Btn variant="ghost" onClick={() => onNav("rutina")}>¿No entrenaste el día que tocaba? Elige otra rutina</Btn>
           )}
         </Card>
       )}
@@ -1847,21 +1847,22 @@ function RutinaScreen({ onNav }) {
   const getRirColor = (rir) => rir === 0 ? "#EF4444" : rir === 1 ? "#F59E0B" : "#39FF88";
   const getRirLabel = (rir) => rir === 0 ? "Fallo" : rir === 1 ? "RIR 1" : "RIR 2";
 
-  // Al cumplirse el descanso mínimo, se pasa solo (sin necesidad de tocar el
+  // Al cumplirse el descanso MÁXIMO, se pasa solo (sin necesidad de tocar el
   // botón) de "descansando" a "idle" mostrando ya el botón azul de "Iniciar
-  // serie" -- antes había que tocar el botón en verde para volver a "idle" y
-  // recién ahí aparecía el azul, lo que se sentía como un paso de más.
+  // serie" -- el alumno igual puede tocar el botón en cualquier momento
+  // antes de eso para cortar el descanso e iniciar la próxima serie ya
+  // (ver rama "descansando" de handleBotonSerie más abajo).
   // Este hook va ANTES de los "return" condicionales de abajo (loading /
   // bloqueado / sin rutina) para no romper el orden de hooks entre renders
-  // -- por eso calcula el descanso mínimo de forma autónoma en vez de
+  // -- por eso calcula el descanso máximo de forma autónoma en vez de
   // reusar "ejercicios" / "descansoParaSerie", que se definen más abajo.
   useEffect(() => {
     if (estadoSerie !== "descansando") return;
     const ej = rutinaActiva?.ejercicios?.find(e => e.id === serieObjetivo?.ejId);
     const serie = ej?.series?.[serieObjetivo?.idx];
     const tipo = serie?.tipo || "efectiva";
-    const min = tipo === "aproximacion" ? 60 : (ej?.descanso_desde || 60);
-    if (segDescanso >= min) {
+    const max = tipo === "aproximacion" ? 90 : (ej?.descanso_hasta || Math.max(ej?.descanso_desde || 60, 90));
+    if (segDescanso >= max) {
       limpiarIntervaloDescanso();
       setEstadoSerie("idle");
       setSerieObjetivo(null);
@@ -2023,12 +2024,23 @@ function RutinaScreen({ onNav }) {
     bottomLabelSerie = "Serie en curso...";
     bottomLabelColorSerie = theme.muted;
   } else if (estadoSerie === "descansando") {
-    // La barra se rellena de verde oscuro a verde flúor a medida que pasa el
-    // tiempo (estilo futurista); al llegar al descanso mínimo pasa sola a
-    // "idle" (ver useEffect arriba), así que este estado casi siempre se ve
-    // avanzando, sin requerir un toque extra para "confirmar" que ya se puede
-    // seguir.
-    progresoDescansoPct = Math.min(100, (segDescanso / Math.max(1, descansoMinActivo)) * 100);
+    // La barra se rellena de verde oscuro a verde flúor, pero no de una sola
+    // pasada larga: avanza en "tandas" de 30 segundos (0-30, se reinicia y
+    // sigue 30-60, se reinicia y sigue 60-90, etc.) hasta cumplir el
+    // descanso máximo, momento en el que pasa sola a "idle" (ver useEffect
+    // arriba). La última tanda puede ser más corta que 30s si el máximo no
+    // es múltiplo de 30, para que la barra siempre llegue justo al 100% al
+    // cumplirse el máximo. El alumno puede tocar el botón en cualquier
+    // momento para saltarse el resto del descanso e iniciar antes.
+    const TANDA = 30;
+    const maxDescanso = Math.max(1, descansoMaxActivo);
+    if (segDescanso > 0) {
+      const inicioTanda = Math.floor((segDescanso - 1) / TANDA) * TANDA;
+      const finTanda = Math.min(inicioTanda + TANDA, maxDescanso);
+      const duracionTanda = Math.max(1, finTanda - inicioTanda);
+      const avanceTanda = segDescanso - inicioTanda;
+      progresoDescansoPct = Math.min(100, (avanceTanda / duracionTanda) * 100);
+    }
     bgBotonSerie = `linear-gradient(135deg, ${interpolarColor("#0B3D2E", "#39FF88", progresoDescansoPct / 100)}, #052e1c)`;
     sombraBotonSerie = `0 0 18px rgba(57,255,136,${0.15 + 0.25 * (progresoDescansoPct / 100)})`;
     textoBotonSerie = `⏱ Descansando... ${formatearDescanso(segDescanso)}`;
@@ -2084,21 +2096,25 @@ function RutinaScreen({ onNav }) {
                 <>
                   <div style={infoTitBig}>🔥 CALENTAMIENTO GENERAL</div>
                   <div style={infoSec}>
-                    Es la entrada en calor de <b style={{ color:theme.text }}>toda la sesión</b>, antes de tocar cualquier ejercicio con peso: movilidad articular, y según el día puede incluir algo de cardio suave, banda elástica, o ninguno de los dos. No usa el peso de ningún ejercicio en particular — es general, para preparar todo tu cuerpo.
+                    Es la entrada en calor antes de ejecutar cualquier ejercicio con peso: se realiza movilidad articular y, según el día suele ocuparse banda elástica y/o algo de cardio suave. Lo realizamos para preparar tu cuerpo para la sesión y prevenir lesiones.
                   </div>
 
                   <div style={infoDiv} />
 
                   <div style={infoTitBig}>📋 CÓMO USAR TU RUTINA</div>
                   <div style={infoSec}>
-                    Un ejercicio puede pasar por hasta 2 etapas antes de llegar al peso que realmente cuenta para tu progreso. Ojo: esto no aplica siempre a todos los ejercicios — normalmente la aproximación se hace completa solo en el primero de cada grupo muscular, porque después tu cuerpo ya está a temperatura óptima para movimientos parecidos y no hace falta repetirla, a menos que quieras aproximar o buscar la carga de otro grupo muscular distinto.
+                    Siempre el primer ejercicio de cada grupo muscular pasa por una fase de aproximación: se ejecuta el mismo movimiento pero a menor carga, en los % que indica tu coach, buscando la carga óptima para las series efectivas. Los ejercicios que siguen para ese mismo grupo muscular normalmente no la repiten, porque tu cuerpo ya está a temperatura para movimientos parecidos — a menos que cambies de grupo muscular o busques otra carga.
                     <div style={infoSub}>
                       <b style={{ color:theme.text }}>1. Series de aproximación</b><br/>
-                      Suben el peso poco a poco, en % de tu carga efectiva, para acercarte a ella sin llegar cansado. No siempre son 2 — pueden ser más según el ejercicio y cuánto peso haya que subir. Ejemplo típico: aproximación 1 a <span style={infoPct}>~50–60%</span>, aproximación 2 a <span style={infoPct}>~70–80%</span>, subiendo la carga y bajando las repeticiones en cada una. El kg que ves sugerido se calcula solo a partir de tu último peso efectivo — puedes corregirlo si no te calza.
+                      Debes subir el peso poco a poco, en % de tu carga efectiva, para acercarte a ella sin llegar cansado. No siempre son 3 — pueden ser más según el ejercicio y cuánto peso haya que subir. Ejemplo típico: aproximación 1 a <span style={infoPct}>~50–60%</span>, aproximación 2 a <span style={infoPct}>~70–80%</span>, aproximación 3 a <span style={infoPct}>~85–90%</span>, subiendo la carga y bajando las repeticiones en cada una. El kg que ves sugerido se calcula a partir del último peso efectivo que registraste la semana anterior — la primera vez que hagas la rutina no vas a tener carga sugerida y tienes que colocarla tú; después, puedes corregirla si no te calza.
                     </div>
                     <div style={infoSub}>
                       <b style={{ color:theme.text }}>2. Series efectivas</b><br/>
-                      Las series que <b style={{ color:theme.text }}>sí cuentan</b> para tu progreso — el peso que buscas es el que te permite lograr las repeticiones y el RIR que definió tu coach. No siempre serán 8 repeticiones efectivas, eso varía según cada ejercicio y lo que tu coach determine. Aquí es donde registras tu peso usado.
+                      Las series que <b style={{ color:theme.text }}>sí cuentan</b> para tu progreso — el peso que buscas es el que te permite lograr las repeticiones y el RIR que definió tu coach. No siempre serán 8 repeticiones efectivas, eso varía según cada ejercicio y lo que tu coach determine. Aquí es donde registras tu peso usado, y puedes ir viendo semana a semana las cargas que ya usaste.
+                    </div>
+                    <div style={infoSub}>
+                      <b style={{ color:theme.text }}>3. Tempo (cadencia)</b><br/>
+                      Justo al lado del tiempo de descanso, abajo del nombre del ejercicio, vas a ver un cartel como <b style={{ color:theme.text }}>🆃 3-1-1</b>: son los segundos de bajada (fase negativa o excéntrica), pausa abajo (isométrica) y subida (fase positiva o concéntrica) en cada repetición. Te ayuda a controlar la velocidad del movimiento — ese ejemplo es bajar en 3 segundos, pausar 1 segundo abajo y subir en 1 segundo.
                     </div>
                   </div>
 
@@ -2151,18 +2167,18 @@ function RutinaScreen({ onNav }) {
 
                   <div style={infoSec}>
                     <div style={infoTit}>⚡ Técnicas de intensidad</div>
-                    Algunas series efectivas pueden venir marcadas con una técnica especial. Estos son los valores aproximados de cada una, pero tu coach los ajusta caso a caso -- el valor exacto para esa serie lo vas a ver junto a ella:
+                    Algunas series efectivas pueden venir marcadas con una técnica especial. Tu coach define el valor exacto para cada serie — lo vas a ver junto a ella. Estos son solo ejemplos de referencia:
                     <div style={infoSub}>
-                      <b style={{ color:theme.text }}>Dropset</b><br/>
-                      Al llegar al fallo o cerca de él, bajas el peso <span style={infoPct}>20-30%</span> de inmediato (sin descansar) y segues sumando repeticiones.
+                      <b style={{ color:COLORES_TECNICA.dropset }}>Dropset</b><br/>
+                      Al llegar al fallo o cerca de él, bajas el peso <span style={infoPct}>ej. 20-30%</span> de inmediato (sin descansar) y sigues sumando repeticiones.
                     </div>
                     <div style={infoSub}>
-                      <b style={{ color:theme.text }}>Pausa isométrica</b><br/>
-                      Bajas controlado y te quedas quieto abajo <span style={infoPct}>3-5 segundos</span> antes de subir explosivo.
+                      <b style={{ color:COLORES_TECNICA.isometrica }}>Pausa isométrica</b><br/>
+                      Bajas controlado y te quedas quieto abajo <span style={infoPct}>ej. 3-5 seg</span> antes de subir explosivo.
                     </div>
                     <div style={infoSub}>
-                      <b style={{ color:theme.text }}>Rest-pause</b><br/>
-                      Llegas cerca del fallo, descansas <span style={infoPct}>10-15 segundos</span> y sacas algunas repeticiones más con el mismo peso; puede haber una segunda pausa igual de corta para sumar unas pocas más.
+                      <b style={{ color:COLORES_TECNICA.restpause }}>Rest-pause</b><br/>
+                      Llegas cerca del fallo, descansas <span style={infoPct}>ej. 10-15 seg</span> y sacas algunas repeticiones más con el mismo peso; puede haber una segunda pausa igual de corta para sumar unas pocas más.
                     </div>
                   </div>
 
@@ -2264,7 +2280,7 @@ function RutinaScreen({ onNav }) {
                   <div style={{ fontSize: 14, fontWeight: 800, color: theme.text, marginBottom: 4, textTransform:"uppercase", letterSpacing:0.4, lineHeight:1.3, display:"-webkit-box", WebkitLineClamp:2, WebkitBoxOrient:"vertical", overflow:"hidden" }}>{ej.nombre}</div>
                   <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
                     <div style={{ fontSize: 11, color: theme.muted }}>⏱ Descanso: {ej.descanso_desde && ej.descanso_hasta ? `${ej.descanso_desde}-${ej.descanso_hasta}s` : `${ej.descanso}s`}</div>
-                    <div style={{ fontSize: 9.5, fontWeight:800, color: theme.muted, background:theme.card, border:`1px solid ${theme.border}`, borderRadius:6, padding:"2px 6px" }} title="Tempo: bajada-pausa-subida">⏱ {ej.tempo || "3-1-1"}</div>
+                    <div style={{ fontSize: 9.5, fontWeight:800, color: theme.muted, background:theme.card, border:`1px solid ${theme.border}`, borderRadius:6, padding:"2px 6px" }} title="Tempo: bajada-pausa-subida">🆃 {ej.tempo || "3-1-1"}</div>
                   </div>
                 </div>
               </div>
@@ -2315,7 +2331,7 @@ function RutinaScreen({ onNav }) {
                 const hecha = !!seriesHechas[key] || (tipo === "efectiva" ? !!(reg.kg && reg.reps) : !!((reg.kg && !reg._autoKg) || (reg.reps && !reg._autoReps)));
                 // La aproximación no usa columna de RIR (se trabaja en % de la
                 // efectiva, no en esfuerzo percibido) -- 5 columnas en vez de 6.
-                const columnas = tipo === "efectiva" ? "44px 1fr 50px 44px 48px 26px" : "44px 1fr 50px 44px 26px";
+                const columnas = tipo === "efectiva" ? "38px 1fr 46px 40px 44px 24px" : "38px 1fr 46px 40px 24px";
                 return (
                   <div key={idx}>
                   {mostrarEncabezado && (
@@ -2335,19 +2351,19 @@ function RutinaScreen({ onNav }) {
                     boxShadow: esActiva ? `0 0 0 1px ${theme.accentLight}, 0 0 14px ${theme.accentLight}59` : "none",
                   }}>
                     <div style={{ textAlign: "center", fontSize: 11, fontWeight: 800, color: colorTipo }}>{etiqueta}</div>
-                    <div style={{ fontSize: 12, color: theme.muted, paddingLeft: 4, lineHeight: 1.15 }}>
+                    <div style={{ fontSize: 12, color: theme.muted, paddingLeft: 4, lineHeight: 1.15, minWidth: 0 }}>
                       <span style={{ color: theme.text, fontWeight: 700, display: "block", lineHeight: 1.1 }}>{s.reps} reps</span>
                       {tipo === "aproximacion" && (s.pctDesde || s.pctHasta) && (
                         <div style={{ fontSize: 8.5, color: colorTipo, fontWeight: 700, marginTop: 2, lineHeight: 1.1 }}>{s.pctDesde}-{s.pctHasta}% de tu efectiva</div>
                       )}
                       {tipo === "efectiva" && s.tecnica === "dropset" && (
-                        <div style={{ fontSize: 9, color: colorTecnica, fontWeight: 700, marginTop: 4, lineHeight: 1.1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>⚡ {s.dropsetCantidad || 2} drops -{s.dropsetPct || 25}%</div>
+                        <div style={{ fontSize: 9, color: colorTecnica, fontWeight: 700, marginTop: 4, marginLeft: -10, lineHeight: 1.1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{s.dropsetCantidad || 2} drops -{s.dropsetPct || 25}%</div>
                       )}
                       {tipo === "efectiva" && s.tecnica === "isometrica" && (
-                        <div style={{ fontSize: 9, color: colorTecnica, fontWeight: 700, marginTop: 4, lineHeight: 1.1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>⚡ pausa {s.isoSegundos || 4}s</div>
+                        <div style={{ fontSize: 9, color: colorTecnica, fontWeight: 700, marginTop: 4, marginLeft: -10, lineHeight: 1.1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>Pausa {s.isoSegundos || 4}s (iso)</div>
                       )}
                       {tipo === "efectiva" && s.tecnica === "restpause" && (
-                        <div style={{ fontSize: 9, color: colorTecnica, fontWeight: 700, marginTop: 4, lineHeight: 1.1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>⚡ {s.rpCantidad || 2}×{s.rpSegundos || 15}s</div>
+                        <div style={{ fontSize: 9, color: colorTecnica, fontWeight: 700, marginTop: 4, marginLeft: -10, lineHeight: 1.1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>R-pause {s.rpCantidad || 2}×{s.rpSegundos || 15}s</div>
                       )}
                     </div>
                     <input value={reg.kg || ""} onChange={e => setReg(ej.id, idx, "kg", e.target.value)} placeholder={placeholderKg}
