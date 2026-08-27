@@ -1656,6 +1656,168 @@ const [estadoPago, setEstadoPago] = useState(null);
   );
 }
 
+// --- Minijuego durante el descanso ---------------------------------------
+// Se ofrece un minijuego distinto según cuánto dure el descanso de la serie
+// (mientras más corto, más simple/rápido tiene que ser para que alcance a
+// jugarse). El descanso real sigue corriendo de fondo mientras el minijuego
+// está abierto -- este modal es puramente una distracción opcional, no
+// reemplaza ni pausa la cuenta regresiva.
+const TRIVIA_PREGUNTAS = [
+  { q: "¿Cuántos segundos de pausa suele llevar una técnica de rest-pause?", opciones: ["10-15 segundos", "45 segundos", "2 minutos"], correcta: 0 },
+  { q: "¿Qué significa RIR?", opciones: ["Repeticiones en reserva", "Repeticiones en ritmo", "Resistencia interna real"], correcta: 0 },
+  { q: "En un dropset, ¿qué se hace al llegar cerca del fallo?", opciones: ["Bajar el peso y seguir sumando repeticiones", "Aumentar el peso", "Descansar 2 minutos"], correcta: 0 },
+  { q: "¿Qué mide el tempo 3-1-1 de un ejercicio?", opciones: ["Bajada, pausa y subida en segundos", "Series, repeticiones y descanso", "Peso, reps y RIR"], correcta: 0 },
+  { q: "¿Para qué sirven las series de aproximación?", opciones: ["Para llegar preparado a la carga de las series efectivas", "Para descansar entre ejercicios", "Para medir tu frecuencia cardíaca"], correcta: 0 },
+  { q: "En una superserie, ¿cuánto descanso hay entre los ejercicios que la componen?", opciones: ["Sin descanso entre ellos", "El descanso máximo normal", "5 minutos"], correcta: 0 },
+];
+const NOMBRE_JUEGO = { speedtap: "Speed Tap", target: "Atina al Ícono", trivia: "Trivia Fitness", salta: "Salta la Pesa" };
+function juegoParaDescanso(segMax) {
+  if (segMax <= 45) return "speedtap";
+  if (segMax <= 70) return "target";
+  if (segMax <= 100) return "trivia";
+  return "salta";
+}
+
+function JuegoSpeedTap({ puntos, setPuntos }) {
+  return (
+    <div onClick={() => setPuntos(p => p + 1)}
+      style={{ width:230, height:150, borderRadius:12, background:`linear-gradient(135deg, ${theme.accent}33, ${theme.accentLight}22)`, border:`1.5px solid ${theme.accentLight}`, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", cursor:"pointer", userSelect:"none" }}>
+      <div style={{ fontSize:34, fontWeight:900, color:"#39FF88" }}>{puntos}</div>
+      <div style={{ fontSize:11, fontWeight:700, color:theme.text, marginTop:4 }}>TOCA RÁPIDO</div>
+    </div>
+  );
+}
+
+function JuegoTarget({ setPuntos }) {
+  const iconos = ["💪","🏋️","🏃","🎯","🔥"];
+  const [pos, setPos] = useState({ top: 55, left: 95, icon: iconos[0] });
+  const moverTarget = () => {
+    setPos({ top: 10 + Math.random() * 110, left: 10 + Math.random() * 180, icon: iconos[Math.floor(Math.random() * iconos.length)] });
+  };
+  useEffect(() => {
+    const id = setInterval(moverTarget, 1100);
+    return () => clearInterval(id);
+  }, []);
+  const tocar = () => { setPuntos(p => p + 1); moverTarget(); };
+  return (
+    <div style={{ width:230, height:150, borderRadius:12, background:theme.surface, border:`1.5px solid ${theme.accentLight}55`, position:"relative", overflow:"hidden" }}>
+      <div onClick={tocar} style={{ position:"absolute", top:pos.top, left:pos.left, fontSize:28, cursor:"pointer", filter:"drop-shadow(0 0 8px #39FF88)" }}>{pos.icon}</div>
+    </div>
+  );
+}
+
+function JuegoTrivia({ setPuntos }) {
+  const [idx, setIdx] = useState(() => Math.floor(Math.random() * TRIVIA_PREGUNTAS.length));
+  const [orden, setOrden] = useState(null);
+  const [elegida, setElegida] = useState(null);
+  useEffect(() => {
+    const p = TRIVIA_PREGUNTAS[idx];
+    setOrden(p.opciones.map((_, i) => i).sort(() => Math.random() - 0.5));
+    setElegida(null);
+  }, [idx]);
+  if (!orden) return null;
+  const p = TRIVIA_PREGUNTAS[idx];
+  const elegir = (i) => {
+    if (elegida !== null) return;
+    setElegida(i);
+    if (i === p.correcta) setPuntos(pt => pt + 1);
+    setTimeout(() => setIdx(Math.floor(Math.random() * TRIVIA_PREGUNTAS.length)), 1300);
+  };
+  return (
+    <div style={{ width:250, borderRadius:12, background:theme.surface, border:`1.5px solid ${theme.accentLight}55`, padding:14, boxSizing:"border-box" }}>
+      <div style={{ fontSize:12, color:theme.text, fontWeight:700, textAlign:"center", marginBottom:12, lineHeight:1.4 }}>{p.q}</div>
+      {orden.map(i => {
+        const activo = elegida !== null;
+        const esCorrecta = i === p.correcta;
+        const esElegida = i === elegida;
+        let bg = theme.card, border = theme.border, color = "#B0C4DE";
+        if (activo && esCorrecta) { bg = `${theme.success}22`; border = theme.success; color = theme.success; }
+        else if (activo && esElegida && !esCorrecta) { bg = `${theme.danger}22`; border = theme.danger; color = theme.danger; }
+        return (
+          <div key={i} onClick={() => elegir(i)}
+            style={{ padding:"8px 10px", borderRadius:8, background:bg, border:`1px solid ${border}`, color, fontSize:11, marginBottom:6, cursor: activo ? "default" : "pointer", textAlign:"center", fontWeight:600 }}>
+            {p.opciones[i]}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function JuegoSalta({ setPuntos }) {
+  const [saltando, setSaltando] = useState(false);
+  const [obstaculoPct, setObstaculoPct] = useState(100);
+  const [perdido, setPerdido] = useState(false);
+  const saltandoRef = useRef(false);
+  const perdidoRef = useRef(false);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (perdidoRef.current) return;
+      setObstaculoPct(prev => {
+        const next = prev - 3;
+        if (next <= 13 && next >= 4 && !saltandoRef.current) {
+          perdidoRef.current = true;
+          setPerdido(true);
+          return next;
+        }
+        if (next <= -10) {
+          setPuntos(p => p + 1);
+          return 100;
+        }
+        return next;
+      });
+    }, 60);
+    return () => clearInterval(id);
+  }, [setPuntos]);
+
+  const saltar = () => {
+    if (saltando || perdidoRef.current) return;
+    setSaltando(true);
+    saltandoRef.current = true;
+    setTimeout(() => { setSaltando(false); saltandoRef.current = false; }, 450);
+  };
+  const reiniciar = () => { perdidoRef.current = false; setPerdido(false); setObstaculoPct(100); };
+
+  return (
+    <div onClick={perdido ? undefined : saltar}
+      style={{ width:250, height:150, borderRadius:12, background:theme.surface, border:`1.5px solid ${theme.accentLight}55`, position:"relative", overflow:"hidden", cursor: perdido ? "default" : "pointer" }}>
+      <div style={{ position:"absolute", top:6, left:0, right:0, textAlign:"center", fontSize:8, color:theme.muted }}>Toca para saltar</div>
+      <div style={{ position:"absolute", bottom:26, left:0, right:0, height:1.5, background:theme.border }} />
+      <div style={{ position:"absolute", bottom: saltando ? 62 : 24, left:24, fontSize:28, transition:"bottom 0.22s ease-out" }}>🏋️</div>
+      <div style={{ position:"absolute", bottom:24, left:`${obstaculoPct}%`, fontSize:22 }}>🧱</div>
+      {perdido && (
+        <div onClick={e => { e.stopPropagation(); reiniciar(); }}
+          style={{ position:"absolute", inset:0, background:"rgba(5,5,10,0.85)", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:8 }}>
+          <div style={{ color:theme.danger, fontWeight:800, fontSize:13 }}>¡Chocaste!</div>
+          <div style={{ color:theme.text, fontSize:11, border:`1px solid ${theme.border}`, borderRadius:8, padding:"6px 12px" }}>Toca para reintentar</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MinijuegoModal({ tipo, onCerrar }) {
+  const [puntos, setPuntos] = useState(0);
+  return (
+    <div onClick={onCerrar}
+      style={{ position:"absolute", inset:0, background:"rgba(5,5,10,0.94)", zIndex:2600, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:20, cursor:"pointer" }}>
+      <div onClick={e => e.stopPropagation()} style={{ width:"100%", maxWidth:340, cursor:"default", display:"flex", flexDirection:"column", alignItems:"center" }}>
+        <div style={{ color:theme.muted, fontSize:10, letterSpacing:1.5, marginBottom:4 }}>MINIJUEGO · {NOMBRE_JUEGO[tipo].toUpperCase()}</div>
+        <div style={{ color:theme.gold, fontSize:12, fontWeight:800, marginBottom:14 }}>Puntos: {puntos}</div>
+        {tipo === "speedtap" && <JuegoSpeedTap puntos={puntos} setPuntos={setPuntos} />}
+        {tipo === "target" && <JuegoTarget puntos={puntos} setPuntos={setPuntos} />}
+        {tipo === "trivia" && <JuegoTrivia puntos={puntos} setPuntos={setPuntos} />}
+        {tipo === "salta" && <JuegoSalta puntos={puntos} setPuntos={setPuntos} />}
+        <button onClick={onCerrar}
+          style={{ marginTop:16, background:"transparent", border:`1px solid ${theme.border}`, borderRadius:10, padding:"10px 18px", color:theme.text, fontSize:12, fontWeight:700, cursor:"pointer" }}>
+          Cerrar minijuego ✕
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function RutinaScreen({ onNav }) {
   const [rutinas, setRutinas] = useState([]);
   const [rutinaActiva, setRutinaActiva] = useState(null);
@@ -1668,6 +1830,7 @@ function RutinaScreen({ onNav }) {
   const [userId, setUserId] = useState(null);
   const [cardioRegistros, setCardioRegistros] = useState({});
   const [verInfoRutina, setVerInfoRutina] = useState(false);
+  const [minijuegoAbierto, setMinijuegoAbierto] = useState(false);
   const [edadAlumno, setEdadAlumno] = useState(null);
   const hoyStrRutina = fechaOperativaStr();
 
@@ -1679,6 +1842,15 @@ function RutinaScreen({ onNav }) {
     return () => window.removeEventListener("popstate", onPop);
   }, [verInfoRutina]);
   const cerrarInfoRutina = () => window.history.back();
+
+  useEffect(() => {
+    if (!minijuegoAbierto) return;
+    window.history.pushState({ minijuego: true }, "");
+    const onPop = () => setMinijuegoAbierto(false);
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [minijuegoAbierto]);
+  const cerrarMinijuego = () => window.history.back();
 
   useEffect(() => { cargarMapaImagenesEjercicios().then(setMapaImagenes); }, []);
 
@@ -2024,23 +2196,12 @@ function RutinaScreen({ onNav }) {
     bottomLabelSerie = "Serie en curso...";
     bottomLabelColorSerie = theme.muted;
   } else if (estadoSerie === "descansando") {
-    // La barra se rellena de verde oscuro a verde flúor, pero no de una sola
-    // pasada larga: avanza en "tandas" de 30 segundos (0-30, se reinicia y
-    // sigue 30-60, se reinicia y sigue 60-90, etc.) hasta cumplir el
-    // descanso máximo, momento en el que pasa sola a "idle" (ver useEffect
-    // arriba). La última tanda puede ser más corta que 30s si el máximo no
-    // es múltiplo de 30, para que la barra siempre llegue justo al 100% al
-    // cumplirse el máximo. El alumno puede tocar el botón en cualquier
+    // La barra se rellena de verde oscuro a verde flúor de forma continua
+    // (sin reinicios ni tandas) a lo largo de todo el descanso, hasta
+    // cumplir el descanso máximo, momento en el que pasa sola a "idle" (ver
+    // useEffect arriba). El alumno puede tocar el botón en cualquier
     // momento para saltarse el resto del descanso e iniciar antes.
-    const TANDA = 30;
-    const maxDescanso = Math.max(1, descansoMaxActivo);
-    if (segDescanso > 0) {
-      const inicioTanda = Math.floor((segDescanso - 1) / TANDA) * TANDA;
-      const finTanda = Math.min(inicioTanda + TANDA, maxDescanso);
-      const duracionTanda = Math.max(1, finTanda - inicioTanda);
-      const avanceTanda = segDescanso - inicioTanda;
-      progresoDescansoPct = Math.min(100, (avanceTanda / duracionTanda) * 100);
-    }
+    progresoDescansoPct = Math.min(100, (segDescanso / Math.max(1, descansoMaxActivo)) * 100);
     bgBotonSerie = `linear-gradient(135deg, ${interpolarColor("#0B3D2E", "#39FF88", progresoDescansoPct / 100)}, #052e1c)`;
     sombraBotonSerie = `0 0 18px rgba(57,255,136,${0.15 + 0.25 * (progresoDescansoPct / 100)})`;
     textoBotonSerie = `⏱ Descansando... ${formatearDescanso(segDescanso)}`;
@@ -2438,7 +2599,7 @@ function RutinaScreen({ onNav }) {
                 {(lpmMin || lpmMax) && (
                   <div style={{ fontSize:11, color:theme.accentLight, marginBottom:8, textAlign:"center" }}>
                     <div>🎯 Zona quema grasa: {lpmMin || "—"}{lpmMax ? `-${lpmMax}` : ""} lpm</div>
-                    <div style={{ color:theme.muted, fontSize:10, marginTop:2 }}>(latidos por minuto)</div>
+                    <div style={{ color:theme.muted, fontSize:12, marginTop:0 }}>(latidos por minuto)</div>
                   </div>
                 )}
                 {!reg.completado && pasosEquivalentes > 0 && (
@@ -2614,7 +2775,16 @@ function RutinaScreen({ onNav }) {
             )}
             <span style={{ position:"relative" }}>{textoBotonSerie}</span>
           </button>
+          {estadoSerie === "descansando" && (
+            <button onClick={() => setMinijuegoAbierto(true)}
+              style={{ width:"100%", marginTop:8, borderRadius:12, padding:11, fontSize:12.5, fontWeight:800, cursor:"pointer", border:`1.5px solid ${theme.accentLight}`, background:`${theme.accentLight}22`, color:"#8FA6FF", display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
+              🎮 Abrir minijuego
+            </button>
+          )}
         </div>
+      )}
+      {minijuegoAbierto && (
+        <MinijuegoModal tipo={juegoParaDescanso(descansoMaxActivo)} onCerrar={cerrarMinijuego} />
       )}
       <NavBar active="rutina" onNav={onNav} />
     </div>
