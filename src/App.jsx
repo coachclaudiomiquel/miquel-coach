@@ -1657,158 +1657,787 @@ const [estadoPago, setEstadoPago] = useState(null);
 }
 
 // --- Minijuego durante el descanso ---------------------------------------
-// Se ofrece un minijuego distinto según cuánto dure el descanso de la serie
-// (mientras más corto, más simple/rápido tiene que ser para que alcance a
-// jugarse). El descanso real sigue corriendo de fondo mientras el minijuego
-// está abierto -- este modal es puramente una distracción opcional, no
-// reemplaza ni pausa la cuenta regresiva.
-const TRIVIA_PREGUNTAS = [
-  { q: "¿Cuántos segundos de pausa suele llevar una técnica de rest-pause?", opciones: ["10-15 segundos", "45 segundos", "2 minutos"], correcta: 0 },
-  { q: "¿Qué significa RIR?", opciones: ["Repeticiones en reserva", "Repeticiones en ritmo", "Resistencia interna real"], correcta: 0 },
-  { q: "En un dropset, ¿qué se hace al llegar cerca del fallo?", opciones: ["Bajar el peso y seguir sumando repeticiones", "Aumentar el peso", "Descansar 2 minutos"], correcta: 0 },
-  { q: "¿Qué mide el tempo 3-1-1 de un ejercicio?", opciones: ["Bajada, pausa y subida en segundos", "Series, repeticiones y descanso", "Peso, reps y RIR"], correcta: 0 },
-  { q: "¿Para qué sirven las series de aproximación?", opciones: ["Para llegar preparado a la carga de las series efectivas", "Para descansar entre ejercicios", "Para medir tu frecuencia cardíaca"], correcta: 0 },
-  { q: "En una superserie, ¿cuánto descanso hay entre los ejercicios que la componen?", opciones: ["Sin descanso entre ellos", "El descanso máximo normal", "5 minutos"], correcta: 0 },
-];
-const NOMBRE_JUEGO = { speedtap: "Speed Tap", target: "Atina al Ícono", trivia: "Trivia Fitness", salta: "Salta la Pesa" };
-function juegoParaDescanso(segMax) {
-  if (segMax <= 45) return "speedtap";
-  if (segMax <= 70) return "target";
-  if (segMax <= 100) return "trivia";
-  return "salta";
+// Se ofrece uno de 3 minijuegos, elegido al azar cada vez que se abre: Salta
+// la Pesa (reflejos), Memoria (memoria visual, 4 etapas encadenadas) y
+// Conecta (conectar puntos con el tablero 100% lleno, 6 etapas encadenadas).
+// El descanso real sigue corriendo de fondo mientras el minijuego está
+// abierto -- este modal es puramente una distracción opcional, no reemplaza
+// ni pausa la cuenta regresiva (ver aviso de descanso cumplido más abajo).
+function fmtTiempoJuego(ms) { return (ms / 1000).toFixed(1) + "s"; }
+function lsGetJuego(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+function lsSetJuego(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+function heartsJuego(n, max = 3) { return "❤️".repeat(Math.max(0, n)) + "🖤".repeat(Math.max(0, max - n)); }
+function shuffleJuego(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
 }
 
-function JuegoSpeedTap({ puntos, setPuntos }) {
-  return (
-    <div onClick={() => setPuntos(p => p + 1)}
-      style={{ width:230, height:150, borderRadius:12, background:`linear-gradient(135deg, ${theme.accent}33, ${theme.accentLight}22)`, border:`1.5px solid ${theme.accentLight}`, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", cursor:"pointer", userSelect:"none" }}>
-      <div style={{ fontSize:34, fontWeight:900, color:"#39FF88" }}>{puntos}</div>
-      <div style={{ fontSize:11, fontWeight:700, color:theme.text, marginTop:4 }}>TOCA RÁPIDO</div>
-    </div>
-  );
-}
-
-function JuegoTarget({ setPuntos }) {
-  const iconos = ["💪","🏋️","🏃","🎯","🔥"];
-  const [pos, setPos] = useState({ top: 55, left: 95, icon: iconos[0] });
-  const moverTarget = () => {
-    setPos({ top: 10 + Math.random() * 110, left: 10 + Math.random() * 180, icon: iconos[Math.floor(Math.random() * iconos.length)] });
-  };
-  useEffect(() => {
-    const id = setInterval(moverTarget, 1100);
-    return () => clearInterval(id);
-  }, []);
-  const tocar = () => { setPuntos(p => p + 1); moverTarget(); };
-  return (
-    <div style={{ width:230, height:150, borderRadius:12, background:theme.surface, border:`1.5px solid ${theme.accentLight}55`, position:"relative", overflow:"hidden" }}>
-      <div onClick={tocar} style={{ position:"absolute", top:pos.top, left:pos.left, fontSize:28, cursor:"pointer", filter:"drop-shadow(0 0 8px #39FF88)" }}>{pos.icon}</div>
-    </div>
-  );
-}
-
-function JuegoTrivia({ setPuntos }) {
-  const [idx, setIdx] = useState(() => Math.floor(Math.random() * TRIVIA_PREGUNTAS.length));
-  const [orden, setOrden] = useState(null);
-  const [elegida, setElegida] = useState(null);
-  useEffect(() => {
-    const p = TRIVIA_PREGUNTAS[idx];
-    setOrden(p.opciones.map((_, i) => i).sort(() => Math.random() - 0.5));
-    setElegida(null);
-  }, [idx]);
-  if (!orden) return null;
-  const p = TRIVIA_PREGUNTAS[idx];
-  const elegir = (i) => {
-    if (elegida !== null) return;
-    setElegida(i);
-    if (i === p.correcta) setPuntos(pt => pt + 1);
-    setTimeout(() => setIdx(Math.floor(Math.random() * TRIVIA_PREGUNTAS.length)), 1300);
-  };
-  return (
-    <div style={{ width:250, borderRadius:12, background:theme.surface, border:`1.5px solid ${theme.accentLight}55`, padding:14, boxSizing:"border-box" }}>
-      <div style={{ fontSize:12, color:theme.text, fontWeight:700, textAlign:"center", marginBottom:12, lineHeight:1.4 }}>{p.q}</div>
-      {orden.map(i => {
-        const activo = elegida !== null;
-        const esCorrecta = i === p.correcta;
-        const esElegida = i === elegida;
-        let bg = theme.card, border = theme.border, color = "#B0C4DE";
-        if (activo && esCorrecta) { bg = `${theme.success}22`; border = theme.success; color = theme.success; }
-        else if (activo && esElegida && !esCorrecta) { bg = `${theme.danger}22`; border = theme.danger; color = theme.danger; }
-        return (
-          <div key={i} onClick={() => elegir(i)}
-            style={{ padding:"8px 10px", borderRadius:8, background:bg, border:`1px solid ${border}`, color, fontSize:11, marginBottom:6, cursor: activo ? "default" : "pointer", textAlign:"center", fontWeight:600 }}>
-            {p.opciones[i]}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function JuegoSalta({ setPuntos }) {
-  const [saltando, setSaltando] = useState(false);
-  const [obstaculoPct, setObstaculoPct] = useState(100);
+// ---------- Salta la Pesa: colisión real por superposición + récord guardado ----------
+// La posición del corredor/obstáculos se anima con requestAnimationFrame escribiendo
+// directamente sobre los nodos del DOM (vía refs) en vez de por estado de React en cada
+// frame -- necesario para que se vea fluido a 60fps. El puntaje/récord/mensaje sí son
+// estado de React porque cambian poco (una vez por pasada, no por frame).
+function JuegoSalta() {
+  const boxRef = useRef(null);
+  const runnerRef = useRef(null);
+  const obsRef = useRef(null);
+  const obs2Ref = useRef(null);
+  const initRef = useRef(() => {});
+  const gRef = useRef({ pctPerSec: 0, avance: 0, gapPct: 0, saltando: false, perdido: false, lastTs: null, rafId: null, record: 0 });
+  const [puntos, setPuntos] = useState(0);
+  const [record, setRecord] = useState(0);
   const [perdido, setPerdido] = useState(false);
-  const saltandoRef = useRef(false);
-  const perdidoRef = useRef(false);
+  const [flash, setFlash] = useState("");
 
   useEffect(() => {
-    const id = setInterval(() => {
-      if (perdidoRef.current) return;
-      setObstaculoPct(prev => {
-        const next = prev - 3;
-        if (next <= 13 && next >= 4 && !saltandoRef.current) {
-          perdidoRef.current = true;
-          setPerdido(true);
-          return next;
-        }
-        if (next <= -10) {
-          setPuntos(p => p + 1);
-          return 100;
-        }
-        return next;
-      });
-    }, 60);
-    return () => clearInterval(id);
-  }, [setPuntos]);
+    const BASE_PCT_PER_SEC = 42, CRECIMIENTO = 1.07, TOPE_MULT = 4.2;
+    // separación entre los 2 obstáculos, definida en TIEMPO (ms) para que sea justa a
+    // cualquier velocidad: o el hueco es chico (un solo salto cubre los 2) o es grande
+    // (tiempo de sobra para saltar dos veces) -- se evita la franja intermedia injusta.
+    const GAP_JUNTOS_MIN_MS = 120, GAP_JUNTOS_MAX_MS = 200;
+    const GAP_SEPARADOS_MIN_MS = 920, GAP_SEPARADOS_MAX_MS = 1420;
+    const ICONS2 = ["🧱", "🏃"];
+    const g = gRef.current;
+
+    function shrink(rect, factor) {
+      const w = rect.width * factor, h = rect.height * factor;
+      const cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2;
+      return { left: cx - w / 2, right: cx + w / 2, top: cy - h / 2, bottom: cy + h / 2 };
+    }
+    function chocaCon(el) {
+      const rRect = shrink(runnerRef.current.getBoundingClientRect(), 0.45);
+      const oRect = shrink(el.getBoundingClientRect(), 0.5);
+      return rRect.left < oRect.right && rRect.right > oRect.left && rRect.top < oRect.bottom && rRect.bottom > oRect.top;
+    }
+    function nuevaOla() {
+      const juntos = Math.random() < 0.5;
+      const gapMs = juntos
+        ? GAP_JUNTOS_MIN_MS + Math.random() * (GAP_JUNTOS_MAX_MS - GAP_JUNTOS_MIN_MS)
+        : GAP_SEPARADOS_MIN_MS + Math.random() * (GAP_SEPARADOS_MAX_MS - GAP_SEPARADOS_MIN_MS);
+      g.gapPct = Math.max(4, (gapMs / 1000) * g.pctPerSec);
+      if (obs2Ref.current) obs2Ref.current.textContent = ICONS2[Math.floor(Math.random() * ICONS2.length)];
+    }
+    function loop(ts) {
+      if (g.perdido) return;
+      if (g.lastTs === null) g.lastTs = ts;
+      const dt = ts - g.lastTs; g.lastTs = ts;
+      const bw = boxRef.current.clientWidth;
+      g.avance += (g.pctPerSec * dt) / 1000;
+      const pct1 = 100 - g.avance;
+      const pct2 = 100 - g.avance + g.gapPct;
+      if (g.avance >= 110 + g.gapPct) {
+        g.avance = 0;
+        setPuntos(p => {
+          const np = p + 1;
+          if (np > g.record) {
+            g.record = np;
+            setRecord(np);
+            lsSetJuego("mc_salta_record", String(np));
+            setFlash("¡Nuevo récord!");
+          }
+          return np;
+        });
+        if (g.pctPerSec < BASE_PCT_PER_SEC * TOPE_MULT) g.pctPerSec = Math.min(BASE_PCT_PER_SEC * TOPE_MULT, g.pctPerSec * CRECIMIENTO);
+        nuevaOla();
+      }
+      if (obsRef.current) obsRef.current.style.left = (pct1 / 100 * bw) + "px";
+      if (obs2Ref.current) obs2Ref.current.style.left = (pct2 / 100 * bw) + "px";
+      if (chocaCon(obsRef.current) || chocaCon(obs2Ref.current)) {
+        g.perdido = true;
+        setPerdido(true);
+        return;
+      }
+      g.rafId = requestAnimationFrame(loop);
+    }
+    function init() {
+      g.pctPerSec = BASE_PCT_PER_SEC; g.avance = 0; g.saltando = false; g.perdido = false; g.lastTs = null;
+      g.record = parseInt(lsGetJuego("mc_salta_record") || "0", 10);
+      setRecord(g.record); setPuntos(0); setFlash(""); setPerdido(false);
+      nuevaOla();
+      if (runnerRef.current) runnerRef.current.style.bottom = "22px";
+      cancelAnimationFrame(g.rafId);
+      g.rafId = requestAnimationFrame(loop);
+    }
+    initRef.current = init;
+    init();
+    return () => cancelAnimationFrame(g.rafId);
+  }, []);
 
   const saltar = () => {
-    if (saltando || perdidoRef.current) return;
-    setSaltando(true);
-    saltandoRef.current = true;
-    setTimeout(() => { setSaltando(false); saltandoRef.current = false; }, 450);
+    const g = gRef.current;
+    if (g.saltando || g.perdido) return;
+    g.saltando = true;
+    if (runnerRef.current) runnerRef.current.style.bottom = "58px";
+    setTimeout(() => {
+      if (runnerRef.current) runnerRef.current.style.bottom = "22px";
+      g.saltando = false;
+    }, 620);
   };
-  const reiniciar = () => { perdidoRef.current = false; setPerdido(false); setObstaculoPct(100); };
 
   return (
-    <div onClick={perdido ? undefined : saltar}
-      style={{ width:250, height:150, borderRadius:12, background:theme.surface, border:`1.5px solid ${theme.accentLight}55`, position:"relative", overflow:"hidden", cursor: perdido ? "default" : "pointer" }}>
-      <div style={{ position:"absolute", top:6, left:0, right:0, textAlign:"center", fontSize:8, color:theme.muted }}>Toca para saltar</div>
-      <div style={{ position:"absolute", bottom:26, left:0, right:0, height:1.5, background:theme.border }} />
-      <div style={{ position:"absolute", bottom: saltando ? 62 : 24, left:24, fontSize:28, transition:"bottom 0.22s ease-out" }}>🏋️</div>
-      <div style={{ position:"absolute", bottom:24, left:`${obstaculoPct}%`, fontSize:22 }}>🧱</div>
-      {perdido && (
-        <div onClick={e => { e.stopPropagation(); reiniciar(); }}
-          style={{ position:"absolute", inset:0, background:"rgba(5,5,10,0.85)", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:8 }}>
-          <div style={{ color:theme.danger, fontWeight:800, fontSize:13 }}>¡Chocaste!</div>
-          <div style={{ color:theme.text, fontSize:11, border:`1px solid ${theme.border}`, borderRadius:8, padding:"6px 12px" }}>Toca para reintentar</div>
+    <div style={{ width: "100%", maxWidth: 280 }}>
+      <div style={{ textAlign: "center", color: theme.text, fontSize: 12, fontWeight: 800, marginBottom: 2 }}>SALTA LA PESA</div>
+      <div style={{ textAlign: "center", color: "#39FF88", fontSize: 9, fontWeight: 700, marginBottom: 6 }}>Toca para saltar los obstáculos</div>
+      <div style={{ display: "flex", justifyContent: "center", gap: 20, marginBottom: 6 }}>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ color: theme.muted, fontSize: 8, letterSpacing: 0.5 }}>PUNTOS</div>
+          <div style={{ color: theme.gold, fontSize: 15, fontWeight: 800 }}>{puntos}</div>
         </div>
-      )}
+        <div style={{ textAlign: "center" }}>
+          <div style={{ color: theme.muted, fontSize: 8, letterSpacing: 0.5 }}>RÉCORD</div>
+          <div style={{ color: "#39FF88", fontSize: 15, fontWeight: 800 }}>{record}</div>
+        </div>
+      </div>
+      <div style={{ textAlign: "center", fontSize: 10, fontWeight: 800, color: "#39FF88", height: 14, marginBottom: 2 }}>{flash}</div>
+      <div ref={boxRef} onClick={() => { if (!perdido) saltar(); }}
+        style={{ width: "100%", height: 150, borderRadius: 12, background: theme.surface, border: `1.5px solid ${theme.accentLight}55`, position: "relative", overflow: "hidden", cursor: perdido ? "default" : "pointer" }}>
+        <div style={{ position: "absolute", top: 6, left: 0, right: 0, textAlign: "center", fontSize: 8, color: theme.muted }}>Toca para saltar</div>
+        <div style={{ position: "absolute", bottom: 24, left: 0, right: 0, height: 1.5, background: theme.border }} />
+        <div ref={runnerRef} style={{ position: "absolute", bottom: 22, left: 26, fontSize: 26, transition: "bottom 0.22s ease-out" }}>🏋️</div>
+        <div ref={obsRef} style={{ position: "absolute", bottom: 24, fontSize: 22 }}>🧱</div>
+        <div ref={obs2Ref} style={{ position: "absolute", bottom: 24, fontSize: 22 }}>🧱</div>
+        {perdido && (
+          <div onClick={e => { e.stopPropagation(); initRef.current(); }}
+            style={{ position: "absolute", inset: 0, background: "rgba(5,5,10,0.85)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8 }}>
+            <div style={{ color: theme.danger, fontWeight: 800, fontSize: 13 }}>¡Chocaste!</div>
+            <div style={{ color: theme.text, fontSize: 11, border: `1px solid ${theme.border}`, borderRadius: 8, padding: "6px 12px" }}>Toca para reintentar</div>
+          </div>
+        )}
+      </div>
+      <div style={{ textAlign: "center", color: "#666", fontSize: 8.5, padding: "8px 12px 0" }}>Dos obstáculos por pasada -- a veces puedes saltar los dos juntos, a veces no</div>
+    </div>
+  );
+}
+
+// ---------- Memoria: 4 etapas encadenadas (12/16/20/24 cartas), vidas, tiempo total ----------
+const MEMORIA_ICONS_ALL = ["💪", "🏋️", "🏃", "🎯", "🔥", "⏱️", "🥇", "🧘", "🚴", "🤸", "🏊", "🤾"];
+const MEMORIA_ETAPAS = [
+  { cards: 12, cols: 4, boxH: 170 },
+  { cards: 16, cols: 4, boxH: 220 },
+  { cards: 20, cols: 5, boxH: 210 },
+  { cards: 24, cols: 6, boxH: 200 },
+];
+const MEMORIA_LIVES_START = 5;
+
+function JuegoMemoria() {
+  // El estado "real" del juego vive en este ref (igual que variables mutables) -- las
+  // funciones lo leen/escriben de forma síncrona y recién después reflejan lo necesario
+  // en estado de React (setXxxD) para volver a pintar. Evita condiciones de carrera con
+  // closures viejos de setTimeout, que acá se usan harto (parpadeo de error, avance de etapa).
+  const gRef = useRef({
+    etapaIdx: 0, cardsData: [], revealed: [], matched: new Set(), lock: false,
+    runStartTime: null, running: false, over: false, lives: MEMORIA_LIVES_START, runToken: 0, timerId: null,
+  });
+  const [etapaIdx, setEtapaIdxD] = useState(0);
+  const [cardsView, setCardsView] = useState([]);
+  const [lives, setLivesD] = useState(MEMORIA_LIVES_START);
+  const [tiempoMs, setTiempoMsD] = useState(0);
+  const [mejor, setMejorD] = useState(null);
+  const [over, setOverD] = useState(false);
+  const [exito, setExitoD] = useState(false);
+  const [showWin, setShowWinD] = useState(false);
+  const [winMsg, setWinMsg] = useState({ t: "", s: "" });
+  const [goMsg, setGoMsg] = useState("");
+
+  function tickTimer() {
+    const g = gRef.current;
+    if (g.running) setTiempoMsD(Date.now() - g.runStartTime);
+  }
+
+  function cargarEtapa() {
+    const g = gRef.current;
+    const et = MEMORIA_ETAPAS[g.etapaIdx];
+    const pairsNeeded = et.cards / 2;
+    const icons = MEMORIA_ICONS_ALL.slice(0, pairsNeeded);
+    g.cardsData = shuffleJuego([...icons, ...icons]).map(icon => ({ icon, status: "hidden" }));
+    g.revealed = []; g.matched = new Set(); g.lock = false;
+    setEtapaIdxD(g.etapaIdx);
+    setShowWinD(false);
+    setCardsView(g.cardsData.slice());
+  }
+
+  function iniciarRun() {
+    const g = gRef.current;
+    g.runToken++;
+    g.etapaIdx = 0; g.lives = MEMORIA_LIVES_START; g.runStartTime = null; g.running = false; g.over = false;
+    clearInterval(g.timerId);
+    setLivesD(g.lives);
+    setTiempoMsD(0);
+    setOverD(false);
+    const best = lsGetJuego("mc_memoria_best");
+    setMejorD(best ? parseFloat(best) : null);
+    cargarEtapa();
+  }
+
+  useEffect(() => { iniciarRun(); return () => clearInterval(gRef.current.timerId); }, []);
+
+  function finDeRun(exitoFlag) {
+    const g = gRef.current;
+    g.running = false; clearInterval(g.timerId); g.over = true;
+    const elapsed = Date.now() - g.runStartTime;
+    setTiempoMsD(elapsed);
+    setOverD(true);
+    setExitoD(exitoFlag);
+    if (exitoFlag) {
+      const bestRaw = lsGetJuego("mc_memoria_best");
+      const best = bestRaw ? parseFloat(bestRaw) : null;
+      let msg = `¡Completaste las ${MEMORIA_ETAPAS.length} etapas en ${fmtTiempoJuego(elapsed)}!`;
+      if (best === null || elapsed < best) {
+        lsSetJuego("mc_memoria_best", String(elapsed));
+        setMejorD(elapsed);
+        msg += " -- ¡nuevo mejor tiempo!";
+      }
+      setWinMsg({ t: "¡Recorrido completo!", s: msg });
+    } else {
+      setGoMsg(`Llegaste a la etapa ${g.etapaIdx + 1} de ${MEMORIA_ETAPAS.length}, en ${fmtTiempoJuego(elapsed)}.`);
+    }
+  }
+
+  function avanzarEtapa() {
+    const g = gRef.current;
+    if (g.etapaIdx < MEMORIA_ETAPAS.length - 1) {
+      setWinMsg({ t: "¡Etapa superada!", s: "Pasando a la siguiente…" });
+      setShowWinD(true);
+      const myToken = g.runToken;
+      setTimeout(() => {
+        if (myToken !== g.runToken) return; // se reinició mientras esperaba -- ignorar
+        g.etapaIdx++;
+        cargarEtapa();
+      }, 900);
+    } else {
+      finDeRun(true);
+    }
+  }
+
+  function tap(i) {
+    const g = gRef.current;
+    if (g.over || g.lock || g.matched.has(i) || g.revealed.includes(i)) return;
+    if (!g.running) {
+      g.running = true;
+      g.runStartTime = Date.now();
+      g.timerId = setInterval(tickTimer, 100);
+    }
+    g.cardsData[i] = { ...g.cardsData[i], status: "front" };
+    setCardsView(g.cardsData.slice());
+    g.revealed = [...g.revealed, i];
+    if (g.revealed.length === 2) {
+      g.lock = true;
+      const [a, b] = g.revealed;
+      if (g.cardsData[a].icon === g.cardsData[b].icon) {
+        g.matched.add(a); g.matched.add(b);
+        g.cardsData[a] = { ...g.cardsData[a], status: "matched" };
+        g.cardsData[b] = { ...g.cardsData[b], status: "matched" };
+        setCardsView(g.cardsData.slice());
+        g.revealed = []; g.lock = false;
+        if (g.matched.size === g.cardsData.length) avanzarEtapa();
+      } else {
+        g.cardsData[a] = { ...g.cardsData[a], status: "bad" };
+        g.cardsData[b] = { ...g.cardsData[b], status: "bad" };
+        setCardsView(g.cardsData.slice());
+        const myToken = g.runToken;
+        setTimeout(() => {
+          if (myToken !== g.runToken) return; // se reinició mientras esperaba -- ignorar
+          g.lives--;
+          setLivesD(g.lives);
+          g.cardsData[a] = { ...g.cardsData[a], status: "hidden" };
+          g.cardsData[b] = { ...g.cardsData[b], status: "hidden" };
+          setCardsView(g.cardsData.slice());
+          g.revealed = []; g.lock = false;
+          if (g.lives <= 0) finDeRun(false);
+        }, 650);
+      }
+    }
+  }
+
+  const et = MEMORIA_ETAPAS[etapaIdx];
+
+  return (
+    <div style={{ width: "100%", maxWidth: 280 }}>
+      <div style={{ textAlign: "center", color: theme.text, fontSize: 12, fontWeight: 800, marginBottom: 2 }}>MEMORIA · PARES DE GYM</div>
+      <div style={{ textAlign: "center", color: "#39FF88", fontSize: 9, fontWeight: 700, marginBottom: 6 }}>Etapa {etapaIdx + 1} · {et.cards} cartas ({et.cards / 2} pares)</div>
+      <div style={{ display: "flex", gap: 4, justifyContent: "center", flexWrap: "wrap", marginBottom: 8 }}>
+        {MEMORIA_ETAPAS.map((e, i) => (
+          <div key={i} style={{
+            width: 20, height: 20, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 8.5, fontWeight: 800,
+            background: i === etapaIdx ? theme.accentLight : "#1A1A24",
+            border: `1px solid ${i < etapaIdx ? theme.success : (i === etapaIdx ? theme.accentLight : theme.border)}`,
+            color: i === etapaIdx ? "#fff" : (i < etapaIdx ? "#39FF88" : theme.muted),
+          }}>{e.cards}</div>
+        ))}
+      </div>
+      <div style={{ display: "flex", justifyContent: "center", gap: 16, marginBottom: 6, flexWrap: "wrap" }}>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ color: theme.muted, fontSize: 8, letterSpacing: 0.5 }}>TIEMPO TOTAL</div>
+          <div style={{ color: theme.gold, fontSize: 13, fontWeight: 800 }}>{fmtTiempoJuego(tiempoMs)}</div>
+        </div>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ color: theme.muted, fontSize: 8, letterSpacing: 0.5 }}>VIDAS</div>
+          <div style={{ color: theme.danger, fontSize: 12, fontWeight: 800 }}>{heartsJuego(lives, MEMORIA_LIVES_START)}</div>
+        </div>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ color: theme.muted, fontSize: 8, letterSpacing: 0.5 }}>MEJOR</div>
+          <div style={{ color: "#39FF88", fontSize: 13, fontWeight: 800 }}>{mejor !== null ? fmtTiempoJuego(mejor) : "—"}</div>
+        </div>
+      </div>
+      <div style={{ width: "100%", height: et.boxH, borderRadius: 12, background: theme.surface, border: `1.5px solid ${theme.accentLight}55`, position: "relative", overflow: "hidden", padding: 8, boxSizing: "border-box" }}>
+        <div style={{ display: "grid", gridTemplateColumns: `repeat(${et.cols}, 1fr)`, gap: 4, height: "100%" }}>
+          {cardsView.map((c, i) => {
+            let bg = "linear-gradient(135deg,#4361EE33,#0C239733)", border = `${theme.accentLight}55`;
+            if (c.status === "front") { bg = "#1A1A24"; border = "#39FF8855"; }
+            else if (c.status === "matched") { bg = `${theme.success}22`; border = theme.success; }
+            else if (c.status === "bad") { bg = `${theme.danger}33`; border = theme.danger; }
+            return (
+              <div key={i} onClick={() => tap(i)}
+                style={{ borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, cursor: c.status === "matched" ? "default" : "pointer", background: bg, border: `1px solid ${border}`, transition: "background 0.15s, border-color 0.15s" }}>
+                {(c.status === "front" || c.status === "matched" || c.status === "bad") && <span>{c.icon}</span>}
+              </div>
+            );
+          })}
+        </div>
+        {showWin && (
+          <div style={{ position: "absolute", inset: 0, background: "rgba(5,5,10,0.9)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 4, zIndex: 5, padding: 10, textAlign: "center" }}>
+            <div style={{ color: "#39FF88", fontWeight: 800, fontSize: 13 }}>{winMsg.t}</div>
+            <div style={{ color: theme.muted, fontSize: 10 }}>{winMsg.s}</div>
+          </div>
+        )}
+        {over && (
+          <div style={{ position: "absolute", inset: 0, background: "rgba(5,5,10,0.94)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6, zIndex: 8, padding: 14, textAlign: "center" }}>
+            {exito ? (
+              <>
+                <div style={{ color: "#39FF88", fontWeight: 800, fontSize: 14 }}>{winMsg.t}</div>
+                <div style={{ color: "#B0C4DE", fontSize: 11, lineHeight: 1.5 }}>{winMsg.s}</div>
+              </>
+            ) : (
+              <>
+                <div style={{ color: theme.danger, fontWeight: 800, fontSize: 14 }}>Sin vidas 💔</div>
+                <div style={{ color: "#B0C4DE", fontSize: 11, lineHeight: 1.5 }}>{goMsg}</div>
+                <div onClick={iniciarRun} style={{ marginTop: 8, border: `1px solid ${theme.accentLight}`, background: `${theme.accentLight}22`, color: "#8FA6FF", borderRadius: 8, padding: "8px 16px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>Empezar de nuevo</div>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+      <div style={{ textAlign: "center", marginTop: 10 }}>
+        <div onClick={iniciarRun} style={{ display: "inline-block", border: `1px solid ${theme.border}`, borderRadius: 8, padding: "6px 12px", color: "#B0C4DE", fontSize: 10, fontWeight: 700, background: "#1A1A24", cursor: "pointer" }}>Reiniciar todo</div>
+      </div>
+      <div style={{ textAlign: "center", color: "#666", fontSize: 8.5, padding: "8px 12px 0" }}>Cada par equivocado resta una vida -- al completar una etapa avanzas a la otra</div>
+    </div>
+  );
+}
+
+// ---------- Conecta: 6 etapas encadenadas, tablero 100% lleno desde la 1, vidas, tiempo total ----------
+// El tablero nunca deja casilleros libres: se genera UN solo recorrido que cubre TODO el
+// grid (regla de Warnsdorff -- en cada paso avanza al vecino libre con menos salidas
+// propias, para cubrir el 100% del grid de forma confiable) y se reparte en tramos
+// consecutivos, uno por color. Como no queda espacio libre, un camino mal pensado puede
+// dejarte sin espacio para llegar al otro punto del mismo color.
+const CONECTA_PALETTE = ["#4361EE", "#C9A84C", "#10B981", "#EF4444", "#22D3EE", "#A78BFA", "#F59E0B"];
+const CONECTA_BOX = 230;
+const CONECTA_LIVES_START = 3;
+const CONECTA_ETAPAS = [
+  { n: 8, colors: 7, label: "Difícil" },
+  { n: 8, colors: 7, label: "Muy difícil" },
+  { n: 9, colors: 7, label: "Muy difícil" },
+  { n: 9, colors: 7, label: "Súper difícil" },
+  { n: 10, colors: 7, label: "Súper difícil" },
+  { n: 11, colors: 7, label: "Extrema" },
+];
+function conectaKey(r, c) { return r + "-" + c; }
+function conectaNeighbors(r, c, n) {
+  return [[r - 1, c], [r + 1, c], [r, c - 1], [r, c + 1]].filter(([rr, cc]) => rr >= 0 && rr < n && cc >= 0 && cc < n);
+}
+function conectaWarnsdorffFullPath(n) {
+  let best = null;
+  for (let attempt = 0; attempt < 90; attempt++) {
+    const sr = Math.floor(Math.random() * n), sc = Math.floor(Math.random() * n);
+    const visited = new Set([conectaKey(sr, sc)]);
+    const path = [{ r: sr, c: sc }];
+    let cur = { r: sr, c: sc };
+    while (true) {
+      const cands = conectaNeighbors(cur.r, cur.c, n).filter(([r, c]) => !visited.has(conectaKey(r, c)));
+      if (cands.length === 0) break;
+      const scored = cands.map(([r, c]) => ({
+        r, c,
+        deg: conectaNeighbors(r, c, n).filter(([rr, cc]) => !visited.has(conectaKey(rr, cc))).length,
+        rnd: Math.random(),
+      }));
+      scored.sort((a, b) => (a.deg - b.deg) || (a.rnd - b.rnd));
+      cur = { r: scored[0].r, c: scored[0].c };
+      visited.add(conectaKey(cur.r, cur.c));
+      path.push(cur);
+    }
+    if (!best || path.length > best.length) best = path;
+    if (best.length === n * n) break;
+  }
+  return best;
+}
+function conectaSplitIntoColors(path, numColors) {
+  const total = path.length;
+  const lens = new Array(numColors).fill(Math.floor(total / numColors));
+  let rem = total - lens.reduce((a, b) => a + b, 0);
+  const order = shuffleJuego([...Array(numColors).keys()]);
+  for (let i = 0; i < rem; i++) lens[order[i % numColors]]++;
+  // variación suave entre tramos: nunca deja un tramo trivialmente corto (mínimo 3
+  // casilleros) para que ningún color sea "obvio"
+  const MIN_LEN = 3;
+  const passes = Math.max(1, Math.round(numColors / 3));
+  for (let p = 0; p < passes; p++) {
+    const i = Math.floor(Math.random() * numColors), j = Math.floor(Math.random() * numColors);
+    if (i === j) continue;
+    const mv = 1 + Math.floor(Math.random() * 2);
+    if (lens[i] - mv >= MIN_LEN) { lens[i] -= mv; lens[j] += mv; }
+  }
+  const segments = [];
+  let idx = 0;
+  for (const len of lens) { segments.push(path.slice(idx, idx + len)); idx += len; }
+  return segments;
+}
+function conectaGenerateStage(n, numColors) {
+  const full = conectaWarnsdorffFullPath(n);
+  if (!full || full.length < numColors * 2) return null; // no debería pasar, guard defensivo
+  const segments = conectaSplitIntoColors(full, numColors);
+  return segments.map((seg, ci) => ({ key: "c" + ci, hex: CONECTA_PALETTE[ci % CONECTA_PALETTE.length], a: seg[0], b: seg[seg.length - 1] }));
+}
+
+function JuegoConecta() {
+  const wrapRef = useRef(null);
+  const gRef = useRef({
+    etapaIdx: 0, N: CONECTA_ETAPAS[0].n, CELL: CONECTA_BOX / CONECTA_ETAPAS[0].n, colorDefs: [], paths: {}, occupied: {},
+    solved: new Set(), dragging: null, dotCellColor: {}, runStartTime: null, running: false, over: false,
+    lives: CONECTA_LIVES_START, runToken: 0, timerId: null,
+  });
+  const [etapaIdx, setEtapaIdxD] = useState(0);
+  const [N, setND] = useState(CONECTA_ETAPAS[0].n);
+  const [colorDefs, setColorDefsD] = useState([]);
+  const [pathsView, setPathsViewD] = useState({});
+  const [solvedView, setSolvedViewD] = useState([]);
+  const [lives, setLivesD] = useState(CONECTA_LIVES_START);
+  const [tiempoMs, setTiempoMsD] = useState(0);
+  const [mejor, setMejorD] = useState(null);
+  const [over, setOverD] = useState(false);
+  const [exito, setExitoD] = useState(false);
+  const [showWin, setShowWinD] = useState(false);
+  const [winMsg, setWinMsg] = useState({ t: "", s: "" });
+  const [goMsg, setGoMsg] = useState("");
+
+  function tickTimer() {
+    const g = gRef.current;
+    if (g.running) setTiempoMsD(Date.now() - g.runStartTime);
+  }
+  function syncView() {
+    const g = gRef.current;
+    setColorDefsD(g.colorDefs.slice());
+    setPathsViewD({ ...g.paths });
+    setSolvedViewD(Array.from(g.solved));
+  }
+  function cargarEtapa() {
+    const g = gRef.current;
+    const et = CONECTA_ETAPAS[g.etapaIdx];
+    g.N = et.n; g.CELL = CONECTA_BOX / g.N;
+    g.colorDefs = conectaGenerateStage(g.N, et.colors) || conectaGenerateStage(g.N, Math.max(2, et.colors - 1));
+    g.paths = {}; g.occupied = {}; g.solved = new Set(); g.dragging = null; g.dotCellColor = {};
+    g.colorDefs.forEach(cl => {
+      g.paths[cl.key] = [];
+      g.occupied[conectaKey(cl.a.r, cl.a.c)] = cl.key;
+      g.occupied[conectaKey(cl.b.r, cl.b.c)] = cl.key;
+      g.dotCellColor[conectaKey(cl.a.r, cl.a.c)] = cl.key;
+      g.dotCellColor[conectaKey(cl.b.r, cl.b.c)] = cl.key;
+    });
+    setEtapaIdxD(g.etapaIdx);
+    setND(g.N);
+    setShowWinD(false);
+    syncView();
+  }
+  function iniciarRun() {
+    const g = gRef.current;
+    g.runToken++;
+    g.etapaIdx = 0; g.lives = CONECTA_LIVES_START; g.runStartTime = null; g.running = false; g.over = false;
+    clearInterval(g.timerId);
+    setLivesD(g.lives);
+    setTiempoMsD(0);
+    setOverD(false);
+    const best = lsGetJuego("mc_conecta_best");
+    setMejorD(best ? parseFloat(best) : null);
+    cargarEtapa();
+  }
+  useEffect(() => { iniciarRun(); return () => clearInterval(gRef.current.timerId); }, []);
+
+  function finDeRun(exitoFlag) {
+    const g = gRef.current;
+    g.running = false; clearInterval(g.timerId); g.over = true;
+    const elapsed = Date.now() - g.runStartTime;
+    setTiempoMsD(elapsed);
+    setOverD(true);
+    setExitoD(exitoFlag);
+    if (exitoFlag) {
+      const bestRaw = lsGetJuego("mc_conecta_best");
+      const best = bestRaw ? parseFloat(bestRaw) : null;
+      let msg = `¡Completaste las ${CONECTA_ETAPAS.length} etapas en ${fmtTiempoJuego(elapsed)}!`;
+      if (best === null || elapsed < best) {
+        lsSetJuego("mc_conecta_best", String(elapsed));
+        setMejorD(elapsed);
+        msg += " -- ¡nuevo mejor tiempo!";
+      }
+      setWinMsg({ t: "¡Recorrido completo!", s: msg });
+    } else {
+      setGoMsg(`Llegaste a la etapa ${g.etapaIdx + 1} de ${CONECTA_ETAPAS.length}, en ${fmtTiempoJuego(elapsed)}.`);
+    }
+  }
+  function avanzarEtapa() {
+    const g = gRef.current;
+    if (g.etapaIdx < CONECTA_ETAPAS.length - 1) {
+      setWinMsg({ t: "¡Etapa superada!", s: "Pasando a la siguiente…" });
+      setShowWinD(true);
+      const myToken = g.runToken;
+      setTimeout(() => {
+        if (myToken !== g.runToken) return; // se reinició/reintentó mientras esperaba -- ignorar
+        g.etapaIdx++;
+        cargarEtapa();
+      }, 900);
+    } else {
+      finDeRun(true);
+    }
+  }
+  function clearColorPath(colorKey) {
+    const g = gRef.current;
+    g.paths[colorKey].forEach(cell => {
+      const k = conectaKey(cell.r, cell.c);
+      if (g.dotCellColor[k] !== colorKey) delete g.occupied[k];
+    });
+    g.paths[colorKey] = [];
+    g.solved.delete(colorKey);
+  }
+  function cellFromClientXY(clientX, clientY) {
+    const g = gRef.current;
+    const rect = wrapRef.current.getBoundingClientRect();
+    const x = clientX - rect.left, y = clientY - rect.top;
+    let c = Math.floor(x / g.CELL), r = Math.floor(y / g.CELL);
+    r = Math.max(0, Math.min(g.N - 1, r));
+    c = Math.max(0, Math.min(g.N - 1, c));
+    return { r, c };
+  }
+  function onDown(e) {
+    const g = gRef.current;
+    if (g.over) return;
+    if (!g.running) { g.running = true; g.runStartTime = Date.now(); g.timerId = setInterval(tickTimer, 100); }
+    const { r, c } = cellFromClientXY(e.clientX, e.clientY);
+    const k = conectaKey(r, c);
+    const dc = g.dotCellColor[k];
+    if (!dc) return;
+    if (g.solved.has(dc)) return; // ya conectado -- no se puede volver a tomar y deshacer
+    clearColorPath(dc);
+    g.paths[dc] = [{ r, c }];
+    g.occupied[k] = dc;
+    g.dragging = dc;
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch (err) {}
+    syncView();
+  }
+  // Aplica un único paso (a una celda ORTOGONALMENTE ADYACENTE a la última del camino actual).
+  // Devuelve false si hay que detener el procesamiento (paso inválido, o color recién resuelto).
+  function stepConectaCell(r, c) {
+    const g = gRef.current;
+    const p = g.paths[g.dragging];
+    const last = p[p.length - 1];
+    if (last.r === r && last.c === c) return true; // ya está ahí, seguir
+    if (p.length >= 2 && p[p.length - 2].r === r && p[p.length - 2].c === c) {
+      const removed = p.pop();
+      const rk = conectaKey(removed.r, removed.c);
+      if (g.dotCellColor[rk] !== g.dragging) delete g.occupied[rk];
+      return true;
+    }
+    const dr = Math.abs(r - last.r), dc2 = Math.abs(c - last.c);
+    if (dr + dc2 !== 1) return false; // no adyacente (no debería pasar tras interpolar)
+    const k = conectaKey(r, c);
+    const occ = g.occupied[k];
+    if (occ && occ !== g.dragging) return false;
+    p.push({ r, c });
+    g.occupied[k] = g.dragging;
+    const cl = g.colorDefs.find(x => x.key === g.dragging);
+    const startCell = p[0];
+    const reachedOther = (r === cl.a.r && c === cl.a.c && !(startCell.r === cl.a.r && startCell.c === cl.a.c)) ||
+                          (r === cl.b.r && c === cl.b.c && !(startCell.r === cl.b.r && startCell.c === cl.b.c));
+    if (reachedOther) {
+      g.solved.add(g.dragging);
+      g.dragging = null;
+      return false; // color resuelto, detener el procesamiento de este movimiento
+    }
+    return true;
+  }
+  // Avanza (interpolando celda a celda si hace falta) desde la última celda del camino actual
+  // hasta (r, c). Devuelve false si hay que dejar de procesar más eventos de este movimiento
+  // (paso inválido, o el color se acaba de resolver).
+  function moveConectaTo(r, c) {
+    const g = gRef.current;
+    const p = g.paths[g.dragging];
+    const last = p[p.length - 1];
+    if (last.r === r && last.c === c) return true;
+    let curR = last.r, curC = last.c;
+    let guard = 0;
+    while ((curR !== r || curC !== c) && guard < 400) {
+      guard++;
+      const remR = r - curR, remC = c - curC;
+      if (Math.abs(remR) >= Math.abs(remC) && remR !== 0) curR += remR > 0 ? 1 : -1;
+      else if (remC !== 0) curC += remC > 0 ? 1 : -1;
+      if (!stepConectaCell(curR, curC)) return false;
+    }
+    return true;
+  }
+  function onMove(e) {
+    const g = gRef.current;
+    if (!g.dragging || g.over) return;
+    // En touch rápido el navegador puede "coalescer" varios eventos táctiles reales en un solo
+    // pointermove. getCoalescedEvents() recupera esas muestras intermedias reales (la trayectoria
+    // que el dedo realmente recorrió) para no perder celdas del trazo; si no está disponible,
+    // moveConectaTo interpola geométricamente como respaldo. Esto es lo que permite marcar fluido,
+    // sin que se "trabe" o rechace el trazo al mover el dedo rápido.
+    const events = (typeof e.getCoalescedEvents === "function" && e.getCoalescedEvents().length)
+      ? e.getCoalescedEvents() : [e];
+    for (const ev of events) {
+      if (!g.dragging) break; // el color ya se resolvió con un evento anterior de este mismo lote
+      const { r, c } = cellFromClientXY(ev.clientX, ev.clientY);
+      if (!moveConectaTo(r, c)) break;
+    }
+    if (!g.dragging && g.solved.size === g.colorDefs.length) { syncView(); avanzarEtapa(); return; }
+    syncView();
+  }
+  function onUp() {
+    const g = gRef.current;
+    if (!g.dragging) return;
+    const colorKey = g.dragging;
+    const avanzo = g.paths[colorKey].length >= 2; // se despegó del punto de partida sin llegar al otro
+    g.dragging = null;
+    if (g.over) return;
+    clearColorPath(colorKey); // suelta sin terminar = se borra ese camino, hay que reintentarlo
+    if (avanzo) {
+      g.lives--;
+      setLivesD(g.lives);
+      if (g.lives <= 0) { finDeRun(false); syncView(); return; }
+    }
+    syncView();
+  }
+  function reintentarEtapa() {
+    const g = gRef.current;
+    if (g.over) return;
+    g.runToken++; // invalida cualquier transición de etapa pendiente
+    g.lives--;
+    setLivesD(g.lives);
+    if (g.lives <= 0) { finDeRun(false); return; }
+    cargarEtapa();
+  }
+
+  const et = CONECTA_ETAPAS[etapaIdx];
+  const CELL = CONECTA_BOX / N;
+  const PIPE = CELL * 0.46, DOT = CELL * 0.58;
+
+  return (
+    <div style={{ width: "100%", maxWidth: 280 }}>
+      <div style={{ textAlign: "center", color: theme.text, fontSize: 12, fontWeight: 800, marginBottom: 2 }}>CONECTA · UNE LOS PARES</div>
+      <div style={{ textAlign: "center", color: "#39FF88", fontSize: 9, fontWeight: 700, marginBottom: 6 }}>Etapa {etapaIdx + 1} de {CONECTA_ETAPAS.length} · {et.label} ({N}×{N}, {colorDefs.length} pares)</div>
+      <div style={{ display: "flex", gap: 4, justifyContent: "center", flexWrap: "wrap", marginBottom: 8 }}>
+        {CONECTA_ETAPAS.map((e, i) => (
+          <div key={i} style={{
+            width: 20, height: 20, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 8.5, fontWeight: 800,
+            background: i === etapaIdx ? theme.accentLight : "#1A1A24",
+            border: `1px solid ${i < etapaIdx ? theme.success : (i === etapaIdx ? theme.accentLight : theme.border)}`,
+            color: i === etapaIdx ? "#fff" : (i < etapaIdx ? "#39FF88" : theme.muted),
+          }}>{i + 1}</div>
+        ))}
+      </div>
+      <div style={{ display: "flex", justifyContent: "center", gap: 16, marginBottom: 6, flexWrap: "wrap" }}>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ color: theme.muted, fontSize: 8, letterSpacing: 0.5 }}>TIEMPO TOTAL</div>
+          <div style={{ color: theme.gold, fontSize: 13, fontWeight: 800 }}>{fmtTiempoJuego(tiempoMs)}</div>
+        </div>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ color: theme.muted, fontSize: 8, letterSpacing: 0.5 }}>VIDAS</div>
+          <div style={{ color: theme.danger, fontSize: 12, fontWeight: 800 }}>{heartsJuego(lives, CONECTA_LIVES_START)}</div>
+        </div>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ color: theme.muted, fontSize: 8, letterSpacing: 0.5 }}>MEJOR</div>
+          <div style={{ color: "#39FF88", fontSize: 13, fontWeight: 800 }}>{mejor !== null ? fmtTiempoJuego(mejor) : "—"}</div>
+        </div>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: 8, borderRadius: 12, background: theme.surface, border: `1.5px solid ${theme.accentLight}55`, position: "relative" }}>
+        <div ref={wrapRef}
+          onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}
+          style={{ position: "relative", width: CONECTA_BOX, height: CONECTA_BOX, touchAction: "none" }}>
+          {Array.from({ length: N }).map((_, r) => Array.from({ length: N }).map((_, c) => (
+            <div key={`bg-${r}-${c}`} style={{ position: "absolute", left: c * CELL, top: r * CELL, width: CELL, height: CELL, border: "1px solid #21212c", boxSizing: "border-box" }} />
+          )))}
+          {colorDefs.map(cl => {
+            const p = pathsView[cl.key] || [];
+            const segs = [];
+            for (let i = 0; i < p.length - 1; i++) {
+              const c1 = p[i], c2 = p[i + 1];
+              if (c1.r === c2.r) {
+                segs.push({ top: c1.r * CELL + (CELL - PIPE) / 2, left: Math.min(c1.c, c2.c) * CELL + CELL / 2, width: CELL, height: PIPE });
+              } else {
+                segs.push({ left: c1.c * CELL + (CELL - PIPE) / 2, top: Math.min(c1.r, c2.r) * CELL + CELL / 2, height: CELL, width: PIPE });
+              }
+            }
+            const isSolved = solvedView.includes(cl.key);
+            return (
+              <Fragment key={cl.key}>
+                {segs.map((s, i) => (
+                  <div key={`s-${i}`} style={{ position: "absolute", zIndex: 2, background: cl.hex, top: s.top, left: s.left, width: s.width, height: s.height }} />
+                ))}
+                {p.map((cell, i) => (
+                  <div key={`j-${i}`} style={{ position: "absolute", zIndex: 2, borderRadius: "50%", background: cl.hex, left: cell.c * CELL + (CELL - PIPE) / 2, top: cell.r * CELL + (CELL - PIPE) / 2, width: PIPE, height: PIPE }} />
+                ))}
+                {[cl.a, cl.b].map((d, i) => (
+                  <div key={`d-${i}`} style={{
+                    position: "absolute", zIndex: 3, borderRadius: "50%", background: cl.hex, boxShadow: "0 0 6px currentColor",
+                    left: d.c * CELL + (CELL - DOT) / 2, top: d.r * CELL + (CELL - DOT) / 2, width: DOT, height: DOT,
+                    display: "flex", alignItems: "center", justifyContent: "center", fontSize: Math.max(7, DOT * 0.4), fontWeight: 900, color: "#0A0A0F",
+                  }}>{isSolved ? "✓" : ""}</div>
+                ))}
+              </Fragment>
+            );
+          })}
+        </div>
+        {showWin && (
+          <div style={{ position: "absolute", inset: 0, background: "rgba(5,5,10,0.9)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 4, zIndex: 5, padding: 10, textAlign: "center" }}>
+            <div style={{ color: "#39FF88", fontWeight: 800, fontSize: 13 }}>{winMsg.t}</div>
+            <div style={{ color: theme.muted, fontSize: 10 }}>{winMsg.s}</div>
+          </div>
+        )}
+        {over && (
+          <div style={{ position: "absolute", inset: 0, background: "rgba(5,5,10,0.94)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6, zIndex: 8, padding: 14, textAlign: "center" }}>
+            {exito ? (
+              <>
+                <div style={{ color: "#39FF88", fontWeight: 800, fontSize: 14 }}>{winMsg.t}</div>
+                <div style={{ color: "#B0C4DE", fontSize: 11, lineHeight: 1.5 }}>{winMsg.s}</div>
+              </>
+            ) : (
+              <>
+                <div style={{ color: theme.danger, fontWeight: 800, fontSize: 14 }}>Sin vidas 💔</div>
+                <div style={{ color: "#B0C4DE", fontSize: 11, lineHeight: 1.5 }}>{goMsg}</div>
+                <div onClick={iniciarRun} style={{ marginTop: 8, border: `1px solid ${theme.accentLight}`, background: `${theme.accentLight}22`, color: "#8FA6FF", borderRadius: 8, padding: "8px 16px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>Empezar de nuevo</div>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+      <div style={{ textAlign: "center", marginTop: 10 }}>
+        <div onClick={reintentarEtapa} style={{ display: "inline-block", border: `1px solid ${theme.border}`, borderRadius: 8, padding: "6px 12px", color: "#B0C4DE", fontSize: 10, fontWeight: 700, background: "#1A1A24", cursor: "pointer" }}>Me trabé, reintentar (-1 vida)</div>
+      </div>
+      <div style={{ textAlign: "center", color: "#666", fontSize: 8.5, padding: "8px 12px 0" }}>Tablero 100% lleno -- si sueltas un color a medio camino sin llegar al otro punto, pierdes una vida</div>
     </div>
   );
 }
 
 function MinijuegoModal({ tipo, onCerrar }) {
-  const [puntos, setPuntos] = useState(0);
   return (
     <div onClick={onCerrar}
       style={{ position:"absolute", inset:0, background:"rgba(5,5,10,0.94)", zIndex:2600, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:20, cursor:"pointer" }}>
-      <div onClick={e => e.stopPropagation()} style={{ width:"100%", maxWidth:340, cursor:"default", display:"flex", flexDirection:"column", alignItems:"center" }}>
-        <div style={{ color:theme.muted, fontSize:10, letterSpacing:1.5, marginBottom:4 }}>MINIJUEGO · {NOMBRE_JUEGO[tipo].toUpperCase()}</div>
-        <div style={{ color:theme.gold, fontSize:12, fontWeight:800, marginBottom:14 }}>Puntos: {puntos}</div>
-        {tipo === "speedtap" && <JuegoSpeedTap puntos={puntos} setPuntos={setPuntos} />}
-        {tipo === "target" && <JuegoTarget puntos={puntos} setPuntos={setPuntos} />}
-        {tipo === "trivia" && <JuegoTrivia puntos={puntos} setPuntos={setPuntos} />}
-        {tipo === "salta" && <JuegoSalta puntos={puntos} setPuntos={setPuntos} />}
+      <div onClick={e => e.stopPropagation()} style={{ width:"100%", maxWidth:320, cursor:"default", display:"flex", flexDirection:"column", alignItems:"center" }}>
+        {tipo === "salta" && <JuegoSalta />}
+        {tipo === "memoria" && <JuegoMemoria />}
+        {tipo === "conecta" && <JuegoConecta />}
         <button onClick={onCerrar}
           style={{ marginTop:16, background:"transparent", border:`1px solid ${theme.border}`, borderRadius:10, padding:"10px 18px", color:theme.text, fontSize:12, fontWeight:700, cursor:"pointer" }}>
           Cerrar minijuego ✕
@@ -1831,6 +2460,7 @@ function RutinaScreen({ onNav }) {
   const [cardioRegistros, setCardioRegistros] = useState({});
   const [verInfoRutina, setVerInfoRutina] = useState(false);
   const [minijuegoAbierto, setMinijuegoAbierto] = useState(false);
+  const [tipoMinijuego, setTipoMinijuego] = useState(null); // se sortea al abrir, no en cada render
   const [edadAlumno, setEdadAlumno] = useState(null);
   const hoyStrRutina = fechaOperativaStr();
 
@@ -2041,6 +2671,17 @@ function RutinaScreen({ onNav }) {
       setSegDescanso(0);
     }
   }, [estadoSerie, segDescanso, serieObjetivo, rutinaActiva]);
+
+  // Si el descanso se cumple mientras el minijuego está abierto (tapando la pantalla),
+  // el alumno no ve el botón pasar a "Iniciar serie" -- así que además vibra y se
+  // muestra un aviso encima del minijuego (ver render más abajo). Este efecto solo
+  // dispara la vibración (un evento puntual); el aviso en pantalla se calcula
+  // directamente en el render a partir de minijuegoAbierto + estadoSerie.
+  useEffect(() => {
+    if (minijuegoAbierto && estadoSerie === "idle") {
+      try { navigator.vibrate?.([200, 100, 200, 100, 200]); } catch (e) {}
+    }
+  }, [estadoSerie, minijuegoAbierto]);
 
   if (loading) return (
     <div style={{ padding: "20px 16px 90px", height: "100%", boxSizing: "border-box", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -2776,7 +3417,11 @@ function RutinaScreen({ onNav }) {
             <span style={{ position:"relative" }}>{textoBotonSerie}</span>
           </button>
           {estadoSerie === "descansando" && (
-            <button onClick={() => setMinijuegoAbierto(true)}
+            <button onClick={() => {
+              const opciones = ["salta", "memoria", "conecta"];
+              setTipoMinijuego(opciones[Math.floor(Math.random() * opciones.length)]);
+              setMinijuegoAbierto(true);
+            }}
               style={{ width:"100%", marginTop:8, borderRadius:12, padding:11, fontSize:12.5, fontWeight:800, cursor:"pointer", border:`1.5px solid ${theme.accentLight}`, background:`${theme.accentLight}22`, color:"#8FA6FF", display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
               🎮 Abrir minijuego
             </button>
@@ -2784,7 +3429,20 @@ function RutinaScreen({ onNav }) {
         </div>
       )}
       {minijuegoAbierto && (
-        <MinijuegoModal tipo={juegoParaDescanso(descansoMaxActivo)} onCerrar={cerrarMinijuego} />
+        <MinijuegoModal tipo={tipoMinijuego} onCerrar={cerrarMinijuego} />
+      )}
+      {minijuegoAbierto && estadoSerie === "idle" && (
+        <div style={{ position:"absolute", inset:0, background:"rgba(5,5,10,0.95)", zIndex:2700, display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
+          <div style={{ background:theme.surface, border:`2px solid ${theme.success}`, borderRadius:18, padding:"26px 22px", textAlign:"center", maxWidth:280 }}>
+            <div style={{ fontSize:34, marginBottom:8 }}>⏰</div>
+            <div style={{ color:theme.success, fontWeight:800, fontSize:15, marginBottom:6 }}>¡Tu descanso terminó!</div>
+            <div style={{ color:"#B0C4DE", fontSize:11.5, lineHeight:1.5, marginBottom:14 }}>Es hora de tu siguiente serie. Vuelve a la rutina cuando quieras.</div>
+            <button onClick={cerrarMinijuego}
+              style={{ border:"none", background:theme.success, color:"#052e1c", borderRadius:10, padding:"11px 22px", fontSize:12.5, fontWeight:800, cursor:"pointer" }}>
+              Volver a la rutina
+            </button>
+          </div>
+        </div>
       )}
       <NavBar active="rutina" onNav={onNav} />
     </div>
