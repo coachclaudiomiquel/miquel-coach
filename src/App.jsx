@@ -670,6 +670,38 @@ async function guardarResenaEjercicio(nombreOriginal, resena) {
   if (error) { alert("No se pudo guardar la reseña: " + error.message); return null; }
   return { normalizado, resena };
 }
+
+// Grupo muscular del día de rutina: texto LIBRE (igual que el nombre de un
+// ejercicio -- el coach escribe lo que quiera, ej "Femoral"), y si ya subió
+// una imagen para ese nombre alguna vez, se acopla sola por nombre
+// normalizado (tabla "grupo_muscular_imagenes" + bucket
+// "grupo-muscular-imagenes"). Mismo patrón que las imágenes de ejercicio de
+// arriba, reutilizando la misma normalización.
+// "mapa" es un objeto { nombreNormalizado: url } cargado por cada pantalla
+// que lo necesita (ver cargarMapaImagenesGrupoMuscular), y pasado como prop.
+async function cargarMapaImagenesGrupoMuscular() {
+  const { data } = await supabase.from("grupo_muscular_imagenes").select("nombre_normalizado, url");
+  const mapa = {};
+  (data || []).forEach(r => { mapa[r.nombre_normalizado] = r.url; });
+  return mapa;
+}
+// Sube (o reemplaza) la imagen de referencia de un grupo muscular, y la
+// guarda ligada a su nombre normalizado para que quede disponible en
+// cualquier rutina, de cualquier alumno, que escriba ese mismo nombre.
+async function subirImagenGrupoMuscular(nombreOriginal, file) {
+  if (!file || !nombreOriginal?.trim()) return null;
+  const normalizado = normalizarNombreEjercicio(nombreOriginal);
+  if (!normalizado) return null;
+  const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
+  const path = `${normalizado}.${ext}`;
+  const { error: errUpload } = await supabase.storage.from("grupo-muscular-imagenes").upload(path, file, { upsert: true, contentType: file.type || undefined });
+  if (errUpload) { alert("No se pudo subir la imagen: " + errUpload.message); return null; }
+  const url = `https://srlucwsakjuivogvunzx.supabase.co/storage/v1/object/public/grupo-muscular-imagenes/${path}?t=${new Date().getTime()}`;
+  const { error: errDb } = await supabase.from("grupo_muscular_imagenes").upsert({ nombre_normalizado: normalizado, nombre_original: nombreOriginal.trim(), url }, { onConflict: "nombre_normalizado" });
+  if (errDb) { alert("Se subió la imagen pero no se pudo guardar la referencia: " + errDb.message); return null; }
+  return { normalizado, url };
+}
+
 // Miniatura de referencia de un ejercicio/movimiento de calentamiento. No
 // renderiza nada si todavía no hay una imagen cargada para ese nombre. Al
 // tocarla, se agranda y muestra la reseña de técnica (si el coach la cargó).
@@ -725,6 +757,36 @@ const BotonSubirImagenEjercicio = ({ nombre, onSubida }) => {
     if (!nombre?.trim()) { alert("Primero escribe el nombre del ejercicio."); return; }
     setSubiendo(true);
     const res = await subirImagenEjercicio(nombre, file);
+    setSubiendo(false);
+    if (res) onSubida?.(res);
+  };
+  return (
+    <label style={{ display:"inline-flex", alignItems:"center", gap:4, background:theme.surface, border:`1px dashed ${theme.border}`, borderRadius:6, padding:"4px 8px", color:theme.accentLight, fontSize:10, cursor:"pointer", whiteSpace:"nowrap", flexShrink:0 }}>
+      {subiendo ? "Subiendo..." : "📎 Imagen"}
+      <input type="file" accept="image/*" style={{ display:"none" }} disabled={subiendo} onChange={e => handleChange(e.target.files[0])} />
+    </label>
+  );
+};
+// Imagen de referencia de un grupo muscular escrito libremente (ej.
+// "Femoral"): se busca por nombre normalizado, igual que las imágenes de
+// ejercicio. Sin fondo ni recuadro detrás -- si no hay imagen cargada
+// todavía para ese nombre, no se renderiza nada (nada que "limpiar" en la
+// pantalla mientras el coach no subió nada).
+const ImagenGrupoMuscular = ({ nombre, mapa, size = 44 }) => {
+  const normalizado = normalizarNombreEjercicio(nombre);
+  const url = normalizado ? mapa?.[normalizado] : null;
+  if (!url) return null;
+  return <img src={url} alt={nombre} style={{ width:size, height:size, objectFit:"contain", flexShrink:0 }} />;
+};
+// Botón para que el coach suba/reemplace la imagen de referencia de un
+// grupo muscular, ligada al nombre que haya escrito en ese momento.
+const BotonSubirImagenGrupoMuscular = ({ nombre, onSubida }) => {
+  const [subiendo, setSubiendo] = useState(false);
+  const handleChange = async (file) => {
+    if (!file) return;
+    if (!nombre?.trim()) { alert("Primero escribe el grupo muscular."); return; }
+    setSubiendo(true);
+    const res = await subirImagenGrupoMuscular(nombre, file);
     setSubiendo(false);
     if (res) onSubida?.(res);
   };
@@ -2456,6 +2518,7 @@ function RutinaScreen({ onNav }) {
   const [verCalentamiento, setVerCalentamiento] = useState(false);
   const [verVueltaCalma, setVerVueltaCalma] = useState(false);
   const [mapaImagenes, setMapaImagenes] = useState({});
+  const [mapaImagenesGrupoMuscular, setMapaImagenesGrupoMuscular] = useState({});
   const [userId, setUserId] = useState(null);
   const [cardioRegistros, setCardioRegistros] = useState({});
   const [verInfoRutina, setVerInfoRutina] = useState(false);
@@ -2483,6 +2546,7 @@ function RutinaScreen({ onNav }) {
   const cerrarMinijuego = () => window.history.back();
 
   useEffect(() => { cargarMapaImagenesEjercicios().then(setMapaImagenes); }, []);
+  useEffect(() => { cargarMapaImagenesGrupoMuscular().then(setMapaImagenesGrupoMuscular); }, []);
 
   useEffect(() => {
     if (!userId) return;
@@ -2869,6 +2933,7 @@ function RutinaScreen({ onNav }) {
       <div style={{ marginBottom: 16, display:"flex", alignItems:"center", gap:10 }}>
         <button onClick={() => onNav("alumno_home")} aria-label="Volver a Inicio"
           style={{ flexShrink:0, width:34, height:34, borderRadius:"50%", background:theme.surface, border:`1px solid ${theme.border}`, color:theme.text, fontSize:17, fontWeight:800, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" }}>←</button>
+        {rutinaActiva.grupo_muscular && <ImagenGrupoMuscular nombre={rutinaActiva.grupo_muscular} mapa={mapaImagenesGrupoMuscular} size={40} />}
         <div style={{ flex:1, minWidth:0, textAlign:"center" }}>
           <div style={{ color: theme.muted, fontSize: 12, marginBottom: 2 }}>ENTRENAMIENTO · {rutinaActiva.dia?.toUpperCase() || ""}</div>
           <div style={{ fontSize: 20, fontWeight: 800, color: theme.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{rutinaActiva.nombre} 💪</div>
@@ -3035,9 +3100,12 @@ function RutinaScreen({ onNav }) {
             const activa = rutinaActiva.id === r.id;
             return (
               <button key={r.id} onClick={() => { setRutinaActiva(r); setCompletado(false); setRegistros({}); }}
-                style={{ textAlign: "left", background: activa ? theme.accent : theme.surface, border: `1px solid ${activa ? theme.accent : theme.border}`, borderRadius: 10, padding: "8px 12px", cursor: "pointer", minWidth: 0 }}>
-                <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.4, textTransform: "uppercase", color: activa ? "rgba(255,255,255,0.75)" : theme.muted }}>{r.dia || "Sin día"}</div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: activa ? "#fff" : theme.text, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.nombre}</div>
+                style={{ textAlign: "left", display:"flex", alignItems:"center", gap:8, background: activa ? theme.accent : theme.surface, border: `1px solid ${activa ? theme.accent : theme.border}`, borderRadius: 10, padding: "8px 12px", cursor: "pointer", minWidth: 0 }}>
+                {r.grupo_muscular && <ImagenGrupoMuscular nombre={r.grupo_muscular} mapa={mapaImagenesGrupoMuscular} size={26} />}
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.4, textTransform: "uppercase", color: activa ? "rgba(255,255,255,0.75)" : theme.muted }}>{r.dia || "Sin día"}</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: activa ? "#fff" : theme.text, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.nombre}</div>
+                </div>
               </button>
             );
           })}
@@ -5423,6 +5491,9 @@ function RutinaCoach({ alumno }) {
   const [cargas, setCargas] = useState({});
   const [nombreRutina, setNombreRutina] = useState("");
   const [diaRutina, setDiaRutina] = useState("");
+  const [grupoMuscularRutina, setGrupoMuscularRutina] = useState("");
+  const [mapaImagenesGrupoMuscular, setMapaImagenesGrupoMuscular] = useState({});
+  const [nombresGruposMuscularesUsados, setNombresGruposMuscularesUsados] = useState([]);
   const [calentamientoGeneral, setCalentamientoGeneral] = useState([]);
   const [vueltaCalma, setVueltaCalma] = useState([]);
   const [cardio, setCardio] = useState([]);
@@ -5456,11 +5527,17 @@ function RutinaCoach({ alumno }) {
   useEffect(() => {
     cargarRutinas();
     cargarNombresEjercicios();
+    cargarNombresGruposMusculares();
     cargarPlantillas();
     setFechaInicioPlan(alumno?.fecha_inicio_plan || "");
   }, [alumno]);
 
   useEffect(() => { cargarMapaImagenesEjercicios().then(setMapaImagenes); }, []);
+  useEffect(() => { cargarMapaImagenesGrupoMuscular().then(setMapaImagenesGrupoMuscular); }, []);
+  const recargarMapaImagenesGrupoMuscular = () => {
+    cargarMapaImagenesGrupoMuscular().then(setMapaImagenesGrupoMuscular);
+    cargarNombresGruposMusculares();
+  };
 
   // El conteo de las 4 semanas del ciclo (ver Diario) arranca automáticamente desde
   // el primer registro del alumno. Si el coach prefiere que arranque un día puntual
@@ -5480,6 +5557,10 @@ function RutinaCoach({ alumno }) {
       setNombresEjerciciosUsados(unicos);
     }
   };
+  const cargarNombresGruposMusculares = async () => {
+    const { data } = await supabase.from("grupo_muscular_imagenes").select("nombre_original");
+    if (data) setNombresGruposMuscularesUsados([...new Set(data.map(g => g.nombre_original).filter(Boolean))].sort());
+  };
 
   // Plantillas de rutina: no son de ningún alumno en particular, se
   // reutilizan como punto de partida al armar la rutina de cualquiera.
@@ -5491,6 +5572,7 @@ function RutinaCoach({ alumno }) {
   const usarPlantilla = (p) => {
     setNombreRutina(p.nombre || "");
     setDiaRutina(p.dia || "");
+    setGrupoMuscularRutina(p.grupo_muscular || "");
     setCalentamientoGeneral(Array.isArray(p.calentamiento_general) ? p.calentamiento_general : []);
     setVueltaCalma(Array.isArray(p.vuelta_calma) ? p.vuelta_calma : []);
     setCardio(Array.isArray(p.cardio) ? p.cardio : []);
@@ -5515,6 +5597,7 @@ function RutinaCoach({ alumno }) {
     const { error } = await supabase.from("rutina_plantillas").insert({
       nombre: nombrePlantillaNueva.trim(),
       dia: diaRutina,
+      grupo_muscular: grupoMuscularRutina || null,
       calentamiento_general: calentamientoGeneral,
       vuelta_calma: vueltaCalma,
       cardio: cardio,
@@ -5658,7 +5741,7 @@ function RutinaCoach({ alumno }) {
       // Edición real: actualiza la rutina y sus ejercicios existentes, sin perder el historial de cargas
       const { error: errRutina } = await supabase
         .from("rutinas")
-        .update({ nombre: nombreRutina, dia: diaRutina, calentamiento_general: calentamientoGeneral, vuelta_calma: vueltaCalma, cardio: cardio, meta_pasos: metaPasos ? parseInt(metaPasos) : null })
+        .update({ nombre: nombreRutina, dia: diaRutina, grupo_muscular: grupoMuscularRutina || null, calentamiento_general: calentamientoGeneral, vuelta_calma: vueltaCalma, cardio: cardio, meta_pasos: metaPasos ? parseInt(metaPasos) : null })
         .eq("id", editandoRutinaId);
       if (errRutina) { alert("Error actualizando rutina: " + errRutina.message); setGuardando(false); return; }
 
@@ -5701,7 +5784,7 @@ function RutinaCoach({ alumno }) {
       // Rutina nueva o duplicada: se crea desde cero
       const { data: rutina, error: errRutina } = await supabase
         .from("rutinas")
-        .insert({ usuario_id: alumno.id, nombre: nombreRutina, dia: diaRutina, calentamiento_general: calentamientoGeneral, vuelta_calma: vueltaCalma, cardio: cardio, meta_pasos: metaPasos ? parseInt(metaPasos) : null })
+        .insert({ usuario_id: alumno.id, nombre: nombreRutina, dia: diaRutina, grupo_muscular: grupoMuscularRutina || null, calentamiento_general: calentamientoGeneral, vuelta_calma: vueltaCalma, cardio: cardio, meta_pasos: metaPasos ? parseInt(metaPasos) : null })
         .select().single();
       if (errRutina) { alert("Error creando rutina: " + errRutina.message); setGuardando(false); return; }
 
@@ -5740,6 +5823,7 @@ function RutinaCoach({ alumno }) {
     setEditandoRutinaId(null);
     setNombreRutina("");
     setDiaRutina("");
+    setGrupoMuscularRutina("");
     setCalentamientoGeneral([]);
     setVueltaCalma([]);
     setCardio([]);
@@ -5756,6 +5840,7 @@ function RutinaCoach({ alumno }) {
   const cargarParaEditar = (rutina, modo) => {
     setNombreRutina(modo === "editar" ? rutina.nombre : rutina.nombre + " (copia)");
     setDiaRutina(rutina.dia || "");
+    setGrupoMuscularRutina(rutina.grupo_muscular || "");
     setCalentamientoGeneral(Array.isArray(rutina.calentamiento_general) ? rutina.calentamiento_general : []);
     setVueltaCalma(Array.isArray(rutina.vuelta_calma) ? rutina.vuelta_calma : []);
     setCardio(Array.isArray(rutina.cardio) ? rutina.cardio : []);
@@ -5827,6 +5912,19 @@ function RutinaCoach({ alumno }) {
               <option value="">Selecciona...</option>
               {["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"].map(d => <option key={d} value={d}>{d}</option>)}
             </select>
+          </div>
+
+          <div style={{ marginBottom:16 }}>
+            <div style={{ fontSize:11, color:theme.muted, marginBottom:4 }}>Grupo muscular</div>
+            <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+              <input style={{ ...inputStyle, flex:1 }} placeholder="Ej: Femoral" value={grupoMuscularRutina}
+                onChange={e => setGrupoMuscularRutina(e.target.value)} list="lista-grupos-musculares" />
+              <datalist id="lista-grupos-musculares">
+                {nombresGruposMuscularesUsados.map(n => <option key={n} value={n} />)}
+              </datalist>
+              <ImagenGrupoMuscular nombre={grupoMuscularRutina} mapa={mapaImagenesGrupoMuscular} size={44} />
+              <BotonSubirImagenGrupoMuscular nombre={grupoMuscularRutina} onSubida={recargarMapaImagenesGrupoMuscular} />
+            </div>
           </div>
 
           <div style={{ marginBottom:16 }}>
@@ -6160,10 +6258,14 @@ function RutinaCoach({ alumno }) {
           <div style={{ fontSize:12, color:theme.muted, marginBottom:10 }}>RUTINAS ASIGNADAS</div>
           {rutinas.map(r => (
             <Card key={r.id} style={{ marginBottom:8 }}>
-              <div style={{ fontSize:14, fontWeight:800, color:theme.text, textTransform:"uppercase", letterSpacing:0.4, lineHeight:1.3, display:"-webkit-box", WebkitLineClamp:2, WebkitBoxOrient:"vertical", overflow:"hidden", marginBottom:6 }}>💪 {r.nombre}</div>
+              <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
+                {r.grupo_muscular && <ImagenGrupoMuscular nombre={r.grupo_muscular} mapa={mapaImagenesGrupoMuscular} size={30} />}
+                <div style={{ fontSize:14, fontWeight:800, color:theme.text, textTransform:"uppercase", letterSpacing:0.4, lineHeight:1.3, display:"-webkit-box", WebkitLineClamp:2, WebkitBoxOrient:"vertical", overflow:"hidden" }}>💪 {r.nombre}</div>
+              </div>
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8, gap:6, flexWrap:"nowrap" }}>
                 <div style={{ display:"flex", alignItems:"center", gap:6, minWidth:0, overflow:"hidden" }}>
                   <Tag>{r.dia || "Sin día"}</Tag>
+                  {r.grupo_muscular && <Tag>{r.grupo_muscular}</Tag>}
                   {r.created_at && <span style={{ fontSize:10, color:theme.muted, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{new Date(r.created_at).toLocaleDateString("es-CL", { day:"2-digit", month:"short" })}</span>}
                 </div>
                 <div style={{ display:"flex", gap:4, alignItems:"center", flexShrink:0 }}>
