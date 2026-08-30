@@ -2933,7 +2933,6 @@ function RutinaScreen({ onNav }) {
       <div style={{ marginBottom: 16, display:"flex", alignItems:"center", gap:10 }}>
         <button onClick={() => onNav("alumno_home")} aria-label="Volver a Inicio"
           style={{ flexShrink:0, width:34, height:34, borderRadius:"50%", background:theme.surface, border:`1px solid ${theme.border}`, color:theme.text, fontSize:17, fontWeight:800, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" }}>←</button>
-        {rutinaActiva.grupo_muscular && <ImagenGrupoMuscular nombre={rutinaActiva.grupo_muscular} mapa={mapaImagenesGrupoMuscular} size={76} />}
         <div style={{ flex:1, minWidth:0, textAlign:"center" }}>
           <div style={{ color: theme.muted, fontSize: 12, marginBottom: 2 }}>ENTRENAMIENTO · {rutinaActiva.dia?.toUpperCase() || ""}</div>
           <div style={{ fontSize: 20, fontWeight: 800, color: theme.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{rutinaActiva.nombre} 💪</div>
@@ -3095,16 +3094,16 @@ function RutinaScreen({ onNav }) {
           en grilla pareja (en vez de una fila de pastillas de ancho variable)
           para que quede prolijo sin importar cuántas rutinas tenga el día. */}
       {rutinas.length > 1 && (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 14 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 14 }}>
           {rutinas.slice().sort((a, b) => ORDEN_DIAS_SEMANA.indexOf(a.dia) - ORDEN_DIAS_SEMANA.indexOf(b.dia)).map(r => {
             const activa = rutinaActiva.id === r.id;
             return (
               <button key={r.id} onClick={() => { setRutinaActiva(r); setCompletado(false); setRegistros({}); }}
-                style={{ textAlign: "left", display:"flex", alignItems:"center", gap:8, background: activa ? theme.accent : theme.surface, border: `1px solid ${activa ? theme.accent : theme.border}`, borderRadius: 10, padding: "8px 12px", cursor: "pointer", minWidth: 0 }}>
-                {r.grupo_muscular && <ImagenGrupoMuscular nombre={r.grupo_muscular} mapa={mapaImagenesGrupoMuscular} size={44} />}
+                style={{ textAlign: "left", display:"flex", alignItems:"center", gap:6, background: activa ? theme.accent : theme.surface, border: `1px solid ${activa ? theme.accent : theme.border}`, borderRadius: 10, padding: "8px 8px", cursor: "pointer", minWidth: 0 }}>
+                {r.grupo_muscular && <ImagenGrupoMuscular nombre={r.grupo_muscular} mapa={mapaImagenesGrupoMuscular} size={32} />}
                 <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.4, textTransform: "uppercase", color: activa ? "rgba(255,255,255,0.75)" : theme.muted }}>{r.dia || "Sin día"}</div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: activa ? "#fff" : theme.text, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.nombre}</div>
+                  <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: 0.4, textTransform: "uppercase", color: activa ? "rgba(255,255,255,0.75)" : theme.muted }}>{r.dia || "Sin día"}</div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: activa ? "#fff" : theme.text, marginTop: 2, lineHeight: 1.2, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{r.nombre}</div>
                 </div>
               </button>
             );
