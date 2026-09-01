@@ -52,6 +52,26 @@ function estimarPasosEquivalentes(minutos) {
 }
 // Nombre del día de la semana operativo actual (ej: "Lunes"), considerando el corte de las 4 AM.
 function nombreDiaOperativo(base = new Date()) { return DIAS_SEMANA_NOMBRES[fechaOperativa(base).getDay()]; }
+// Agua sugerida para el día: 35 ml por kg de peso corporal, redondeado a los
+// 0.5 L más cercanos, +1 L extra si el alumno tiene rutina asignada hoy.
+// Devuelve null si no hay peso cargado (en ese caso la tarjeta de agua queda
+// a la espera de que el coach cargue un valor manual).
+function calcularAguaSugerida(pesoKg, tieneEntrenoHoy) {
+  if (!pesoKg || pesoKg <= 0) return null;
+  let litros = Math.round(((pesoKg * 35) / 1000) * 2) / 2;
+  if (tieneEntrenoHoy) litros += 1;
+  return litros;
+}
+// Igual que calcularAguaSugerida, pero devuelve el detalle paso a paso
+// (peso × 35ml, redondeo, ajuste por entreno) para mostrar la ecuación
+// completa en el panel de coach, no solo el resultado final.
+function calcularAguaSugeridaDetalle(pesoKg, tieneEntrenoHoy) {
+  if (!pesoKg || pesoKg <= 0) return null;
+  const mlBase = Math.round(pesoKg * 35);
+  const litrosRedondeados = Math.round((mlBase / 1000) * 2) / 2;
+  const total = tieneEntrenoHoy ? litrosRedondeados + 1 : litrosRedondeados;
+  return { pesoKg, mlBase, litrosRedondeados, tieneEntrenoHoy, total };
+}
 // Interpola linealmente entre dos colores hex (#RRGGBB) según t (0 a 1).
 // Se usa en la barra de descanso para que el relleno vaya degradando de
 // verde oscuro a verde flúor a medida que avanza el tiempo.
@@ -479,7 +499,20 @@ const SemanaCard = ({ semana, ctx }) => {
 };
 // Texto por defecto de las notas del coach en cada plan de dieta nuevo.
 // Queda precargado pero el coach lo puede editar libremente (agregar algo puntual al alumno).
-const NOTAS_DIETA_DEFAULT = "Respeta todas las comidas del plan. Si te saltas alguna, puedes juntarla con la siguiente. Para reemplazar un alimento, revisa primero las equivalencias permitidas. Ante cualquier duda, consulta directamente con tu coach.";
+const NOTAS_DIETA_DEFAULT = "Completa todas las comidas para cumplir con los macros y calorías propuestas. Si te saltas alguna, puedes juntarla con otra durante el día.\nPara reemplazar alimentos, utiliza las equivalencias permitidas y respeta las cantidades indicadas para mantener los aportes nutricionales.\nMantén la constancia y adherencia al plan día a día, ya que la regularidad es clave para alcanzar tus objetivos.\nAnte cualquier duda, consulta directamente con tu Coach.";
+// Texto por defecto de hábitos generales, igual que las notas: queda
+// precargado en cada plan nuevo pero el coach lo puede editar libremente por
+// alumno (ej: agregar algo puntual). El agua se sacó de acá: ahora tiene su
+// propia tarjeta ("Agua de hoy") en NutricionScreen. Una línea = una viñeta.
+const HABITOS_DIETA_DEFAULT = "Prioriza el agua durante el día. Evita bebidas y jugos azucarados; puedes optar por versiones sin azúcar o zero.\nPrefiere stevia u otros endulzantes sin azúcar en reemplazo del azúcar añadida.\nPrioriza alimentos naturales y minimiza el consumo de alimentos procesados y ultraprocesados.\nMantén horarios de alimentación lo más regulares posible, ya que esto facilita el cumplimiento del plan y favorece una mejor regularidad digestiva.";
+// Suplementación: lista libre que el coach arma por alumno (nombre, dosis y
+// momento), agrupada en 4 momentos del día fijos.
+const MOMENTOS_SUPLEMENTO_OPCIONAL = [
+  { key: "manana", label: "Por la mañana" },
+  { key: "pre_entreno", label: "Pre entreno" },
+  { key: "post_entreno", label: "Post entreno" },
+  { key: "dormir", label: "Antes de dormir" },
+];
 const DIAS_SEMANA_ABREV = ["Dom","Lun","Mar","Mié","Jue","Vie","Sáb"];
 function getMondayGlobal(d) {
   const date = new Date(d);
@@ -1561,7 +1594,7 @@ const [estadoPago, setEstadoPago] = useState(null);
         }
         const { data: checkins } = await supabase.from("checkins").select("peso").eq("usuario_id", user.id).order("fecha", { ascending: false }).limit(1);
         if (checkins && checkins.length > 0) setCheckin(checkins[0]);
-        const { data: dietas } = await supabase.from("dietas").select("calorias, suplementos, dias").eq("usuario_id", user.id).order("created_at", { ascending: false });
+        const { data: dietas } = await supabase.from("dietas").select("calorias, suplementos_opcionales, dias").eq("usuario_id", user.id).order("created_at", { ascending: false });
         if (dietas && dietas.length > 0) {
           // Mismo criterio que usa NutricionScreen para elegir el plan: el que
           // esté asignado al día de hoy (campo "dias"); si ninguno calza con hoy,
@@ -1572,7 +1605,7 @@ const [estadoPago, setEstadoPago] = useState(null);
           const nombreHoyDieta = nombreDiaOperativo();
           const dietaHoy = dietas.find(d => Array.isArray(d.dias) && d.dias.includes(nombreHoyDieta)) || dietas[0];
           setDieta(dietaHoy);
-          const suplementosPlan = Array.isArray(dietaHoy.suplementos) ? dietaHoy.suplementos : [];
+          const suplementosPlan = Array.isArray(dietaHoy.suplementos_opcionales) ? dietaHoy.suplementos_opcionales : [];
           if (suplementosPlan.some(s => s.nombre)) {
             const hoyStr = fechaOperativaStr();
             const { data: suplRegs } = await supabase.from("suplemento_registros").select("suplemento_index, tomado").eq("usuario_id", user.id).eq("fecha", hoyStr);
@@ -3601,6 +3634,10 @@ function NutricionScreen({ onNav }) {
   const [modalSubiendoFoto, setModalSubiendoFoto] = useState(false);
   const [mapaAlimentos, setMapaAlimentos] = useState({});
   const [lightbox, setLightbox] = useState(null);
+  const [pesoAlumno, setPesoAlumno] = useState(null);
+  const [tieneRutinaHoy, setTieneRutinaHoy] = useState(false);
+  const [notasAbierta, setNotasAbierta] = useState(false);
+  const [habitosAbierta, setHabitosAbierta] = useState(false);
   const hoyStr = fechaOperativaStr();
 
   useEffect(() => {
@@ -3619,6 +3656,17 @@ function NutricionScreen({ onNav }) {
         const mapa = {};
         alimentosBiblioteca.forEach(al => { mapa[al.id] = al; });
         setMapaAlimentos(mapa);
+
+        // Peso actual (para calcular el agua sugerida) y si hoy tiene rutina
+        // asignada (para sumar el litro extra de entreno), igual criterio que
+        // "rutina de hoy" en RutinaScreen.
+        const { data: usuarioData } = await supabase.from("usuarios").select("peso_actual").eq("id", user.id).single();
+        if (usuarioData?.peso_actual) setPesoAlumno(usuarioData.peso_actual);
+        const { data: rutinasData } = await supabase.from("rutinas").select("dia").eq("usuario_id", user.id);
+        if (rutinasData) {
+          const nombreHoyRutina = nombreDiaOperativo();
+          setTieneRutinaHoy(rutinasData.some(r => r.dia === nombreHoyRutina));
+        }
 
         const { data } = await supabase
           .from("dietas")
@@ -3702,14 +3750,16 @@ function NutricionScreen({ onNav }) {
   );
 
   const comidas = Array.isArray(dieta.comidas) ? dieta.comidas : [];
-  const suplementos = Array.isArray(dieta.suplementos) ? dieta.suplementos : [];
   const equivalencias = Array.isArray(dieta.equivalencias) ? dieta.equivalencias : [];
-
-  // Suma real de macros de los alimentos cargados (los que vienen de la
-  // biblioteca, con alimento_id) para comparar contra el objetivo del plan.
-  const itemsBiblioteca = comidas.flatMap(c => (Array.isArray(c.alimentos) ? c.alimentos : []).filter(a => a.alimento_id && mapaAlimentos[a.alimento_id]));
-  const hayTotalArmado = itemsBiblioteca.length > 0;
-  const totalArmado = sumarMacros(itemsBiblioteca.map(a => calcularMacrosAlimento(mapaAlimentos[a.alimento_id], a.cantidad)));
+  // Suplementación opcional/ideal: lista libre armada por el coach, agrupada
+  // por momento. Defensivo por si la dieta es de antes de esta columna.
+  const suplementosOpcionales = Array.isArray(dieta.suplementos_opcionales) ? dieta.suplementos_opcionales : [];
+  // Agua de hoy: si el coach cargó un valor manual (dieta.agua_litros) ese
+  // manda siempre — es lo que permite subir/bajar el agua a mano en la fase
+  // de diuresis pre-competencia. Si no, se calcula solo desde el peso actual.
+  const aguaManual = dieta.agua_litros != null && dieta.agua_litros !== "" ? Number(dieta.agua_litros) : null;
+  const aguaSugerida = calcularAguaSugerida(pesoAlumno, tieneRutinaHoy);
+  const aguaValor = aguaManual != null ? aguaManual : aguaSugerida;
 
   const guardarRegistro = async (index, estado, descripcion = null, fotoUrl = null) => {
     if (!userId) return;
@@ -3796,10 +3846,10 @@ function NutricionScreen({ onNav }) {
       </div>
 
       {dietas.length > 1 && (
-        <div style={{ display:"flex", gap:8, marginBottom:14, flexWrap:"wrap" }}>
+        <div style={{ display:"flex", gap:6, marginBottom:14, flexWrap:"nowrap" }}>
           {dietas.map(d => (
             <button key={d.id} onClick={() => setDieta(d)}
-              style={{ background: dieta.id === d.id ? theme.accent : theme.surface, border: `1px solid ${dieta.id === d.id ? theme.accent : theme.border}`, borderRadius: 8, padding: "6px 12px", color: dieta.id === d.id ? "#fff" : theme.muted, fontSize: 12, cursor: "pointer", fontWeight: 600 }}>
+              style={{ flex:1, minWidth:0, background: dieta.id === d.id ? theme.accent : theme.surface, border: `1px solid ${dieta.id === d.id ? theme.accent : theme.border}`, borderRadius: 8, padding: "6px 6px", color: dieta.id === d.id ? "#fff" : theme.muted, fontSize: 11, cursor: "pointer", fontWeight: 600, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
               {d.nombre || "Plan sin nombre"}
             </button>
           ))}
@@ -3825,7 +3875,41 @@ function NutricionScreen({ onNav }) {
         </div>
       </Card>
 
-      {/* Comidas con checkboxes */}
+      {/* Agua de hoy: calculada sola desde el peso (35 ml/kg + 1L si hay
+          entreno hoy), salvo que el coach haya cargado un valor manual
+          (dieta.agua_litros) — ese manda siempre. */}
+      <Card style={{ marginBottom:14, padding:14 }}>
+        <div style={{ fontSize:11, fontWeight:700, color:theme.muted, letterSpacing:0.3, marginBottom:10, textAlign:"center" }}>RECOMENDACIÓN DE AGUA DIARIA</div>
+        <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+          <div style={{ width:38, height:38, borderRadius:10, background:`${theme.accent}24`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:18, flexShrink:0 }}>💧</div>
+          {aguaValor != null ? (
+            aguaManual == null && tieneRutinaHoy ? (
+              <>
+                <div style={{ display:"flex", flexDirection:"column", gap:2, background:theme.surface, borderRadius:10, padding:"6px 10px" }}>
+                  <div style={{ fontSize:12, fontWeight:700, color:theme.text, whiteSpace:"nowrap" }}>{aguaSugerida - 1} L <span style={{ fontWeight:400, color:theme.muted }}>(durante el día)</span></div>
+                  <div style={{ fontSize:12, fontWeight:700, color:theme.text, whiteSpace:"nowrap" }}>1 L <span style={{ fontWeight:400, color:theme.muted }}>(durante el entreno)</span></div>
+                </div>
+                <div style={{ marginLeft:"auto", textAlign:"right", flexShrink:0 }}>
+                  <div style={{ fontSize:22, fontWeight:800, color:theme.accentLight }}>{aguaValor} L</div>
+                  <div style={{ fontSize:9, color:theme.muted, letterSpacing:0.3 }}>TOTAL HOY</div>
+                </div>
+              </>
+            ) : (
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontSize:20, fontWeight:800, color:theme.accentLight }}>{aguaValor} L</div>
+                <div style={{ fontSize:11, color:theme.muted, marginTop:2 }}>{aguaManual != null ? "Definida por tu coach" : "Calculada según tu peso actual"}</div>
+              </div>
+            )
+          ) : (
+            <div style={{ fontSize:12, color:theme.muted }}>Tu coach todavía no cargó tu peso ni una meta de agua para hoy.</div>
+          )}
+        </div>
+      </Card>
+
+      {/* Comidas: una tarjeta por comida, todo centrado — nombre+hora arriba
+          (nombre en mayúscula), alimentos (con gramos/unidad y pesado
+          crudo/cocido si corresponde) al medio, y el check-in
+          (tick/equis/cambio) abajo, chico y sutil. */}
       {comidas.map((c, i) => {
         const estado = comidasEstado[i];
         const estados = [
@@ -3834,51 +3918,49 @@ function NutricionScreen({ onNav }) {
           { key: "cambio", icon: "🔄", color: theme.accentLight },
         ];
         return (
-          <Card key={i} style={{ marginBottom:10, border: estado ? `1px solid ${getEstadoColor(estado)}55` : `1px solid ${theme.border}`, boxShadow: estado ? `0 0 16px ${getEstadoColor(estado)}22` : "none" }}>
-            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12 }}>
-              <div style={{ width:28, height:28, borderRadius:8, background:theme.accent, display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, fontWeight:800, flexShrink:0, boxShadow:`0 0 10px ${theme.accent}55` }}>{i+1}</div>
-              <div style={{ flex:1, minWidth:0 }}>
-                <div style={{ fontSize:14, fontWeight:700, color:theme.text }}>{c.nombre}</div>
-                {c.hora && <div style={{ fontSize:11, color:theme.muted }}>{c.hora}</div>}
-              </div>
-            </div>
+          <Card key={i} style={{ marginBottom:10, textAlign:"center", background: estado ? `${getEstadoColor(estado)}0C` : theme.card, border: estado ? `1px solid ${getEstadoColor(estado)}44` : `1px solid ${theme.border}` }}>
+            <div style={{ fontSize:14, fontWeight:700, color:theme.text, textTransform:"uppercase", letterSpacing:0.4 }}>{c.nombre}</div>
+            {c.hora && <div style={{ fontSize:11, color:theme.muted, marginTop:2 }}>{c.hora}</div>}
 
-            {c.alimentos?.map((a, ai) => {
-              const alim = a.alimento_id ? mapaAlimentos[a.alimento_id] : null;
-              if (alim) {
-                const unidadTxt = esUnidadPorUno(alim.unidad) ? ` ${alim.unidad} ` : `${alim.unidad} `;
+            <div style={{ display:"flex", flexDirection:"column", gap:4, alignItems:"center", marginTop:10, marginBottom:12 }}>
+              {c.alimentos?.map((a, ai) => {
+                const alim = a.alimento_id ? mapaAlimentos[a.alimento_id] : null;
+                if (alim) {
+                  const unidadTxt = esUnidadPorUno(alim.unidad) ? ` ${alim.unidad} ` : `${alim.unidad} `;
+                  const estadoPrep = alim.estado_preparacion ? ` (pesado ${alim.estado_preparacion})` : "";
+                  return (
+                    <div key={ai} style={{ fontSize:13, color:theme.muted, display:"flex", alignItems:"center", gap:5 }}>
+                      <span>{a.cantidad}{unidadTxt}{alim.nombre}{estadoPrep}</span>
+                      {alim.imagen_url && (
+                        <span onClick={() => setLightbox(alim.imagen_url)} title="Ver foto del alimento"
+                          style={{ fontSize:11, opacity:0.55, cursor:"pointer", lineHeight:1 }}>📷</span>
+                      )}
+                    </div>
+                  );
+                }
+                // Formato de dietas viejas, de antes de la biblioteca de alimentos.
                 return (
-                  <div key={ai} style={{ fontSize:13, color:theme.muted, paddingLeft:38, lineHeight:1.8 }}>
-                    · {a.cantidad}{unidadTxt}
-                    <span onClick={() => alim.imagen_url && setLightbox(alim.imagen_url)}
-                      style={{ color: alim.imagen_url ? theme.accentLight : theme.muted, cursor: alim.imagen_url ? "pointer" : "default", textDecoration: alim.imagen_url ? "underline dotted" : "none" }}>
-                      {alim.nombre}
-                    </span>
+                  <div key={ai} style={{ fontSize:13, color:theme.muted }}>
+                    {a.gramos ? `${a.gramos}${a.unidad === "und" ? " und " : "g "}` : ""}{a.nombre}
                   </div>
                 );
-              }
-              // Formato de dietas viejas, de antes de la biblioteca de alimentos.
-              return (
-                <div key={ai} style={{ fontSize:13, color:theme.muted, paddingLeft:38, lineHeight:1.8 }}>
-                  · {a.gramos ? `${a.gramos}${a.unidad === "und" ? " und " : "g "}` : ""}{a.nombre}
-                </div>
-              );
-            })}
+              })}
+            </div>
 
-            {/* Botones checkbox solo iconos, simétricos y con brillo futurista */}
-            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:8, marginTop:12, paddingTop:10, borderTop:`1px solid ${theme.border}` }}>
+            {/* Check-in chico y sutil, centrado */}
+            <div style={{ display:"flex", gap:6, justifyContent:"center" }}>
               {estados.map(e => {
                 const activo = estado === e.key;
                 return (
                   <button key={e.key} onClick={() => handleComidaEstado(i, e.key)}
                     style={{
-                      height:30, borderRadius:9,
+                      width:22, height:22, borderRadius:7,
                       background: activo ? `linear-gradient(135deg, ${e.color}33, ${e.color}11)` : theme.surface,
-                      border: `1.5px solid ${activo ? e.color : theme.border}`,
-                      boxShadow: activo ? `0 0 10px ${e.color}55, inset 0 0 6px ${e.color}22` : "none",
+                      border: `1px solid ${activo ? e.color : theme.border}`,
+                      boxShadow: activo ? `0 0 8px ${e.color}44` : "none",
                       display:"flex", alignItems:"center", justifyContent:"center",
-                      fontSize:14, cursor:"pointer", transition:"all 0.2s",
-                      filter: activo ? "none" : "grayscale(0.6) opacity(0.55)",
+                      fontSize:10, cursor:"pointer", transition:"all 0.2s",
+                      filter: activo ? "none" : "grayscale(0.6) opacity(0.45)",
                     }}>
                     {e.icon}
                   </button>
@@ -3888,36 +3970,6 @@ function NutricionScreen({ onNav }) {
           </Card>
         );
       })}
-
-      {/* Sumatoria real de los alimentos cargados vs. el objetivo del plan */}
-      {hayTotalArmado && (
-        <Card style={{ marginBottom:14 }}>
-          <div style={{ fontSize:12, color:theme.muted, marginBottom:12 }}>TOTAL DEL PLAN (según lo cargado)</div>
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:8, textAlign:"center" }}>
-            {[
-              { label:"Calorías", value:Math.round(totalArmado.calorias), objetivo:dieta.calorias, unit:"kcal", color:theme.accentLight },
-              { label:"Proteína", value:Math.round(totalArmado.proteinas), objetivo:dieta.proteinas, unit:"g", color:"#39FF88" },
-              { label:"Carbos", value:Math.round(totalArmado.carbos), objetivo:dieta.carbos, unit:"g", color:"#B0C4DE" },
-              { label:"Grasas", value:Math.round(totalArmado.grasas), objetivo:dieta.grasas, unit:"g", color:"#FFD166" },
-            ].map(m => {
-              const delta = m.objetivo ? Math.round(m.value - m.objetivo) : null;
-              const dentroDeRango = delta !== null && Math.abs(delta) <= Math.max(1, m.objetivo * 0.05);
-              return (
-                <div key={m.label}>
-                  <div style={{ fontSize:16, fontWeight:800, color:m.color }}>{m.value}</div>
-                  <div style={{ fontSize:10, color:theme.muted }}>{m.unit}</div>
-                  <div style={{ fontSize:10, color:theme.muted, marginTop:2 }}>{m.label}</div>
-                  {delta !== null && (
-                    <div style={{ fontSize:10, marginTop:2, fontWeight:700, color: dentroDeRango ? theme.success : theme.warning }}>
-                      {delta > 0 ? `+${delta}` : delta}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </Card>
-      )}
 
       {/* Modal para cambios de comida */}
       {modalCambio && (
@@ -3976,7 +4028,7 @@ function NutricionScreen({ onNav }) {
       )}
 
       {/* Aviso si quedan suplementos de hoy sin marcar */}
-      {suplementos.length > 0 && suplementos.some((s, i) => s.nombre && !suplementosEstado[i]) && (
+      {suplementosOpcionales.length > 0 && suplementosOpcionales.some((s, i) => s.nombre && !suplementosEstado[i]) && (
         <Card style={{ marginBottom:14, background:`${theme.warning}12`, border:`1px solid ${theme.warning}44` }}>
           <div style={{ display:"flex", alignItems:"center", gap:8 }}>
             <span style={{ fontSize:18 }}>⏰</span>
@@ -3985,40 +4037,85 @@ function NutricionScreen({ onNav }) {
         </Card>
       )}
 
-      {/* Suplementos */}
-      {suplementos.length > 0 && (
+      {/* Suplementación: lista libre armada por el coach, agrupada por
+          momento, con check-in (✓ tomado) por ítem. */}
+      {suplementosOpcionales.length > 0 && (
         <Card style={{ marginBottom:14, border:`1px solid ${theme.accent}44`, background:"#0e1420" }}>
           <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:12 }}>
             <span style={{ fontSize:16 }}>💊</span>
             <div style={{ fontSize:12, fontWeight:800, color:theme.accentLight, letterSpacing:0.5 }}>SUPLEMENTACIÓN</div>
           </div>
-          {suplementos.map((s, i) => {
-            const tomado = !!suplementosEstado[i];
+          {MOMENTOS_SUPLEMENTO_OPCIONAL.map(m => {
+            const items = suplementosOpcionales
+              .map((s, i) => ({ ...s, _i: i }))
+              .filter(s => s.momento === m.key && s.nombre);
+            if (items.length === 0) return null;
             return (
-              <div key={i} onClick={() => toggleSuplementoTomado(i, s.nombre)}
-                style={{ display:"flex", alignItems:"center", justifyContent:"space-between", background: tomado ? `${theme.success}14` : theme.surface, border: `1px solid ${tomado ? theme.success + "55" : "transparent"}`, borderRadius:10, padding:"10px 12px", marginBottom:8, cursor:"pointer" }}>
-                <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-                  <div style={{ width:22, height:22, borderRadius:6, border:`1.5px solid ${tomado ? theme.success : theme.border}`, background: tomado ? theme.success : "transparent", display:"flex", alignItems:"center", justifyContent:"center", fontSize:13, color:"#fff", flexShrink:0 }}>
-                    {tomado ? "✓" : ""}
-                  </div>
-                  <div>
-                    <div style={{ fontSize:13, fontWeight:700, color:theme.text }}>{s.nombre}</div>
-                    <div style={{ fontSize:11, color:theme.muted }}>{s.momento}</div>
-                  </div>
+              <div key={m.key} style={{ marginBottom:14, textAlign:"left" }}>
+                <div style={{ fontSize:11, color:theme.gold, fontWeight:700, marginBottom:8, letterSpacing:0.3 }}>{m.label.toUpperCase()}</div>
+                <div style={{ display:"flex", flexDirection:"column", gap:7 }}>
+                  {items.map(s => {
+                    const tomado = !!suplementosEstado[s._i];
+                    return (
+                      <div key={s._i} onClick={() => toggleSuplementoTomado(s._i, s.nombre)}
+                        style={{ display:"flex", alignItems:"center", justifyContent:"space-between", background: tomado ? `${theme.success}14` : theme.surface, border: `1px solid ${tomado ? theme.success + "55" : "transparent"}`, borderRadius:10, padding:"10px 12px", cursor:"pointer" }}>
+                        <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                          <div style={{ width:22, height:22, borderRadius:6, border:`1.5px solid ${tomado ? theme.success : theme.border}`, background: tomado ? theme.success : "transparent", display:"flex", alignItems:"center", justifyContent:"center", fontSize:13, color:"#fff", flexShrink:0 }}>
+                            {tomado ? "✓" : ""}
+                          </div>
+                          <span style={{ fontSize:13, fontWeight:700, color:theme.text }}>{s.nombre}</span>
+                        </div>
+                        <div style={{ background:`${theme.accent}22`, border:`1px solid ${theme.accent}44`, borderRadius:6, padding:"3px 10px", fontSize:12, fontWeight:700, color:theme.accentLight, flexShrink:0 }}>{s.dosis}</div>
+                      </div>
+                    );
+                  })}
                 </div>
-                <div style={{ background:`${theme.accent}22`, border:`1px solid ${theme.accent}44`, borderRadius:6, padding:"3px 10px", fontSize:12, fontWeight:700, color:theme.accentLight }}>{s.dosis}</div>
               </div>
             );
           })}
         </Card>
       )}
 
+      {/* Notas del coach: plegable, colapsada por defecto para no saturar la
+          pantalla de una. */}
       {dieta.notas && (
-        <Card style={{ marginBottom:14 }}>
-          <div style={{ fontSize:12, color:theme.muted, marginBottom:6 }}>📝 NOTAS DEL COACH</div>
-          <div style={{ fontSize:13, color:theme.text, lineHeight:1.6 }}>{dieta.notas}</div>
+        <Card style={{ marginBottom:14, padding:0, overflow:"hidden" }}>
+          <div onClick={() => setNotasAbierta(v => !v)}
+            style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"14px 16px", boxSizing:"border-box", cursor:"pointer" }}>
+            <div style={{ fontSize:12, color:theme.muted }}>📝 NOTAS DEL COACH</div>
+            <div style={{ color:theme.muted, fontSize:10, transform: notasAbierta ? "rotate(0deg)" : "rotate(-90deg)", transition:"transform 0.15s" }}>▾</div>
+          </div>
+          {notasAbierta && (
+            <div style={{ padding:"0 16px 16px", boxSizing:"border-box", textAlign:"left" }}>
+              <div style={{ fontSize:13, color:theme.text, lineHeight:1.6, whiteSpace:"pre-line" }}>{dieta.notas}</div>
+            </div>
+          )}
         </Card>
       )}
+
+      {/* Hábitos generales: texto por defecto igual para todos, pero el coach
+          puede editarlo por alumno (ej: agregar algo puntual) desde
+          DietaCoach. También plegable. */}
+      <Card style={{ marginBottom:14, padding:0, overflow:"hidden" }}>
+        <div onClick={() => setHabitosAbierta(v => !v)}
+          style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"14px 16px", boxSizing:"border-box", cursor:"pointer" }}>
+          <div style={{ fontSize:12, color:theme.muted }}>🎯 HÁBITOS GENERALES</div>
+          <div style={{ color:theme.muted, fontSize:10, transform: habitosAbierta ? "rotate(0deg)" : "rotate(-90deg)", transition:"transform 0.15s" }}>▾</div>
+        </div>
+        {habitosAbierta && (
+          <div style={{ padding:"0 16px 16px", boxSizing:"border-box", textAlign:"left" }}>
+            <div style={{ display:"flex", flexDirection:"column", gap:9 }}>
+              {(dieta.habitos || HABITOS_DIETA_DEFAULT).split("\n").filter(h => h.trim()).map((h, i) => (
+                <div key={i} style={{ display:"flex", gap:8, fontSize:13, color:theme.text, lineHeight:1.5 }}>
+                  <span style={{ color:theme.accentLight, flexShrink:0 }}>·</span>
+                  <span>{h}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </Card>
+
       <ImageLightbox src={lightbox} onClose={() => setLightbox(null)} />
       <NavBar active="nutricion" onNav={onNav} />
     </div>
@@ -4303,12 +4400,22 @@ function DietaCoach({ alumno }) {
   const [carbos, setCarbos] = useState("");
   const [grasas, setGrasas] = useState("");
   const [notas, setNotas] = useState("");
+  // Hábitos generales: mismo patrón que notas — precargado con el texto
+  // por defecto, editable libremente por alumno.
+  const [habitos, setHabitos] = useState("");
+  // Override manual del agua del día (litros). Si queda vacío, el alumno ve
+  // el valor calculado solo desde su peso; si el coach carga algo acá, ese
+  // valor manda siempre (clave para la fase de diuresis pre-competencia,
+  // donde se sube/baja el agua a mano, a veces hasta 10-12 L).
+  const [aguaLitros, setAguaLitros] = useState("");
   const [comidas, setComidas] = useState([
     { nombre: "Desayuno", hora: "07:00", alimentos: [{ alimento_id: null, cantidad: "", nombre_busqueda: "" }] },
     { nombre: "Almuerzo", hora: "13:00", alimentos: [{ alimento_id: null, cantidad: "", nombre_busqueda: "" }] },
     { nombre: "Cena", hora: "20:00", alimentos: [{ alimento_id: null, cantidad: "", nombre_busqueda: "" }] },
   ]);
-  const [suplementos, setSuplemento] = useState([{ nombre: "", dosis: "", momento: "" }]);
+  // Suplementación: lista libre por alumno, agrupada en los 4 momentos fijos
+  // de MOMENTOS_SUPLEMENTO_OPCIONAL (nombre, dosis, momento).
+  const [suplementosOpcionales, setSuplementosOpcionales] = useState([]);
   const [equivalencias, setEquivalencias] = useState([{ a: "", b: "" }]);
   // Biblioteca de alimentos (tabla "alimentos"): se carga una sola vez y se
   // usa tanto para el autocompletado como para calcular los macros en vivo.
@@ -4328,8 +4435,18 @@ function DietaCoach({ alumno }) {
   const [guardarPlantillaDietaAbierto, setGuardarPlantillaDietaAbierto] = useState(false);
   const [nombrePlantillaDietaNueva, setNombrePlantillaDietaNueva] = useState("");
   const [guardandoPlantillaDieta, setGuardandoPlantillaDieta] = useState(false);
+  // Si este alumno tiene rutina asignada hoy, para poder mostrar como
+  // referencia el mismo cálculo automático de agua que ve el alumno.
+  const [tieneRutinaHoyCoach, setTieneRutinaHoyCoach] = useState(false);
 
   useEffect(() => { cargarDietas(); cargarBiblioteca(); cargarPlantillasDieta(); }, [alumno]);
+
+  useEffect(() => {
+    if (!alumno?.id) return;
+    supabase.from("rutinas").select("dia").eq("usuario_id", alumno.id).then(({ data }) => {
+      if (data) setTieneRutinaHoyCoach(data.some(r => r.dia === nombreDiaOperativo()));
+    });
+  }, [alumno]);
 
   const cargarBiblioteca = async () => {
     const data = await cargarAlimentosBiblioteca();
@@ -4434,9 +4551,13 @@ function DietaCoach({ alumno }) {
         hora: c.hora,
         alimentos: (c.alimentos || []).filter(a => a.alimento_id && a.cantidad).map(a => ({ alimento_id: a.alimento_id, cantidad: parseFloat(a.cantidad) || 0 })),
       })),
-      suplementos: suplementos.filter(s => s.nombre),
+      suplementos_opcionales: suplementosOpcionales.filter(s => s.nombre && s.momento),
       equivalencias: equivalencias.filter(e => e.a && e.b),
       notas,
+      habitos,
+      // Override manual del agua del día. Vacío = el alumno ve el cálculo
+      // automático (peso × 35 ml + 1L si entrena ese día).
+      agua_litros: aguaLitros !== "" ? parseFloat(aguaLitros) : null,
     };
     if (editandoDietaId) {
       const { error } = await supabase.from("dietas").update(datos).eq("id", editandoDietaId);
@@ -4459,12 +4580,14 @@ function DietaCoach({ alumno }) {
     setNombrePlan("");
     setDiasDieta([]);
     setCalorias(""); setProteinas(""); setCarbos(""); setGrasas(""); setNotas(NOTAS_DIETA_DEFAULT);
+    setHabitos(HABITOS_DIETA_DEFAULT);
+    setAguaLitros("");
     setComidas([
       { nombre: "Desayuno", hora: "07:00", alimentos: [{ alimento_id: null, cantidad: "", nombre_busqueda: "" }] },
       { nombre: "Almuerzo", hora: "13:00", alimentos: [{ alimento_id: null, cantidad: "", nombre_busqueda: "" }] },
       { nombre: "Cena", hora: "20:00", alimentos: [{ alimento_id: null, cantidad: "", nombre_busqueda: "" }] },
     ]);
-    setSuplemento([{ nombre: "", dosis: "", momento: "" }]);
+    setSuplementosOpcionales([]);
     setEquivalencias([{ a: "", b: "" }]);
   };
 
@@ -4488,8 +4611,10 @@ function DietaCoach({ alumno }) {
     setCarbos(dieta.carbos || "");
     setGrasas(dieta.grasas || "");
     setNotas(dieta.notas || "");
+    setHabitos(dieta.habitos || HABITOS_DIETA_DEFAULT);
+    setAguaLitros(dieta.agua_litros != null ? String(dieta.agua_litros) : "");
     setComidas(comidasParaEditar(dieta.comidas));
-    setSuplemento(Array.isArray(dieta.suplementos) && dieta.suplementos.length > 0 ? dieta.suplementos : [{ nombre: "", dosis: "", momento: "" }]);
+    setSuplementosOpcionales(Array.isArray(dieta.suplementos_opcionales) ? dieta.suplementos_opcionales : []);
     setEquivalencias(Array.isArray(dieta.equivalencias) && dieta.equivalencias.length > 0 ? dieta.equivalencias : [{ a: "", b: "" }]);
     setModoDuplicar(modo === "duplicar");
     setEditandoDietaId(modo === "editar" ? dieta.id : null);
@@ -4512,7 +4637,7 @@ function DietaCoach({ alumno }) {
         setCarbos(plantilla.carbos || "");
         setGrasas(plantilla.grasas || "");
         setComidas(comidasParaEditar(plantilla.comidas));
-        setSuplemento(Array.isArray(plantilla.suplementos) && plantilla.suplementos.length > 0 ? plantilla.suplementos : [{ nombre: "", dosis: "", momento: "" }]);
+        setSuplementosOpcionales(Array.isArray(plantilla.suplementos_opcionales) ? plantilla.suplementos_opcionales : []);
         setEquivalencias(Array.isArray(plantilla.equivalencias) && plantilla.equivalencias.length > 0 ? plantilla.equivalencias : [{ a: "", b: "" }]);
       }
     }
@@ -4529,8 +4654,10 @@ function DietaCoach({ alumno }) {
     setCarbos(p.carbos || "");
     setGrasas(p.grasas || "");
     setNotas(p.notas || "");
+    setHabitos(p.habitos || HABITOS_DIETA_DEFAULT);
+    setAguaLitros(""); // igual que los días, el agua es propia de cada alumno, no se copia de la plantilla
     setComidas(comidasParaEditar(p.comidas));
-    setSuplemento(Array.isArray(p.suplementos) && p.suplementos.length > 0 ? p.suplementos : [{ nombre: "", dosis: "", momento: "" }]);
+    setSuplementosOpcionales(Array.isArray(p.suplementos_opcionales) ? p.suplementos_opcionales : []);
     setEquivalencias(Array.isArray(p.equivalencias) && p.equivalencias.length > 0 ? p.equivalencias : [{ a: "", b: "" }]);
     setModoDuplicar(false);
     setEditandoDietaId(null);
@@ -4553,9 +4680,10 @@ function DietaCoach({ alumno }) {
         hora: c.hora,
         alimentos: (c.alimentos || []).filter(a => a.alimento_id && a.cantidad).map(a => ({ alimento_id: a.alimento_id, cantidad: parseFloat(a.cantidad) || 0 })),
       })),
-      suplementos: suplementos.filter(s => s.nombre),
+      suplementos_opcionales: suplementosOpcionales.filter(s => s.nombre && s.momento),
       equivalencias: equivalencias.filter(e => e.a && e.b),
       notas,
+      habitos,
     });
     setGuardandoPlantillaDieta(false);
     if (error) { alert("Error guardando la plantilla: " + error.message); return; }
@@ -4636,11 +4764,24 @@ function DietaCoach({ alumno }) {
               </div>
             ))}
           </div>
-          {planArmado.calorias > 0 && (
-            <div style={{ background:`${theme.accent}15`, border:`1px solid ${theme.accent}33`, borderRadius:8, padding:"8px 10px", marginBottom:14, fontSize:11, color:theme.accentLight }}>
-              <strong>Plan armado</strong> (suma real de los alimentos de abajo): {Math.round(planArmado.calorias)} kcal · {Math.round(planArmado.proteinas)}p · {Math.round(planArmado.carbos)}c · {Math.round(planArmado.grasas)}g
+
+          {/* Agua del día: por defecto el alumno ve el cálculo automático
+              (peso × 35 ml + 1L si entrena ese día) — esto es solo para
+              forzar un valor manual (ej: fase de diuresis pre-competencia,
+              donde se sube/baja el agua a mano, incluso más allá de lo
+              "normal"). Vacío = usa el cálculo automático. */}
+          <div style={{ marginBottom:14 }}>
+            <div style={{ fontSize:10, color:theme.muted, marginBottom:3 }}>Agua del día (L) — opcional, solo si querés forzar un valor distinto al calculado automáticamente por peso</div>
+            <input style={{ ...inputStyle, maxWidth:220 }} type="text" inputMode="decimal" placeholder="Automático" value={aguaLitros} onChange={e => setAguaLitros(sanitizarDecimal(e.target.value))} />
+            <div style={{ fontSize:10, color:theme.muted, marginTop:4 }}>
+              {(() => {
+                const d = calcularAguaSugeridaDetalle(alumno?.peso_actual, tieneRutinaHoyCoach);
+                return d
+                  ? `💧 ${d.pesoKg} kg × 35 ml = ${d.mlBase} ml → redondeado a ${d.litrosRedondeados} L${d.tieneEntrenoHoy ? " + 1 L (entrena hoy)" : ""} = ${d.total} L`
+                  : "💧 No se puede calcular el automático: al alumno le falta cargar el peso actual.";
+              })()}
             </div>
-          )}
+          </div>
 
           {/* Comidas */}
           <div style={{ fontSize:11, fontWeight:700, color:theme.muted, marginBottom:8 }}>COMIDAS</div>
@@ -4696,16 +4837,55 @@ function DietaCoach({ alumno }) {
           })}
           <button onClick={agregarComida} style={{ background:"transparent", border:`1px dashed ${theme.accent}`, borderRadius:8, padding:"8px", color:theme.accentLight, fontSize:12, cursor:"pointer", width:"100%", marginBottom:14 }}>+ Agregar Comida</button>
 
-          {/* Suplementos */}
-          <div style={{ fontSize:11, fontWeight:700, color:theme.muted, marginBottom:8 }}>SUPLEMENTACIÓN</div>
-          {suplementos.map((s, i) => (
+          {/* Sumatoria final: suma real de todos los alimentos cargados arriba,
+              comparada contra el objetivo diario que pusiste al principio del
+              formulario -- para chequear de un vistazo si el plan armado llega
+              a las calorías/macros planteadas. */}
+          {planArmado.calorias > 0 && (
+            <div style={{ background:`${theme.accent}15`, border:`1px solid ${theme.accent}33`, borderRadius:8, padding:"10px 12px", marginBottom:14 }}>
+              <div style={{ fontSize:11, fontWeight:700, color:theme.accentLight, marginBottom:8 }}>SUMATORIA DEL PLAN (vs. objetivo de arriba)</div>
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:8, textAlign:"center" }}>
+                {[
+                  { label:"Kcal", valor:planArmado.calorias, objetivo:parseFloat(calorias) || 0 },
+                  { label:"Prot", valor:planArmado.proteinas, objetivo:parseFloat(proteinas) || 0 },
+                  { label:"Carb", valor:planArmado.carbos, objetivo:parseFloat(carbos) || 0 },
+                  { label:"Grasa", valor:planArmado.grasas, objetivo:parseFloat(grasas) || 0 },
+                ].map(m => {
+                  const delta = m.objetivo ? Math.round(m.valor - m.objetivo) : null;
+                  const ok = delta !== null && Math.abs(delta) <= Math.max(1, m.objetivo * 0.05);
+                  return (
+                    <div key={m.label}>
+                      <div style={{ fontSize:14, fontWeight:800, color:theme.text }}>{Math.round(m.valor)}</div>
+                      <div style={{ fontSize:10, color:theme.muted, marginTop:2 }}>{m.label}</div>
+                      {delta !== null && (
+                        <div style={{ fontSize:10, fontWeight:700, marginTop:2, color: ok ? theme.success : theme.warning }}>
+                          {delta > 0 ? `+${delta}` : delta}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Suplementación: libre por alumno, cada ítem con su momento del
+              día. Se agrega o saca según lo necesite cada alumno -- no viene
+              precargada. */}
+          <div style={{ fontSize:11, fontWeight:700, color:theme.muted, marginBottom:4 }}>SUPLEMENTACIÓN</div>
+          <div style={{ fontSize:10, color:theme.muted, marginBottom:8 }}>Agregá solo lo que le convenga a este alumno (ej: multivitamínico, creatina, cafeína).</div>
+          {suplementosOpcionales.map((s, i) => (
             <div key={i} style={{ display:"flex", gap:6, marginBottom:6 }}>
-              <input style={{ ...inputStyle, flex:2 }} placeholder="Suplemento" value={s.nombre} onChange={e => { const u=[...suplementos]; u[i].nombre=e.target.value; setSuplemento(u); }} />
-              <input style={{ ...inputStyle, flex:1 }} placeholder="Dosis" value={s.dosis} onChange={e => { const u=[...suplementos]; u[i].dosis=e.target.value; setSuplemento(u); }} />
-              <input style={{ ...inputStyle, flex:2 }} placeholder="Momento" value={s.momento} onChange={e => { const u=[...suplementos]; u[i].momento=e.target.value; setSuplemento(u); }} />
+              <input style={{ ...inputStyle, flex:2 }} placeholder="Suplemento (ej: Creatina)" value={s.nombre} onChange={e => { const u=[...suplementosOpcionales]; u[i].nombre=e.target.value; setSuplementosOpcionales(u); }} />
+              <input style={{ ...inputStyle, flex:1 }} placeholder="Dosis" value={s.dosis} onChange={e => { const u=[...suplementosOpcionales]; u[i].dosis=e.target.value; setSuplementosOpcionales(u); }} />
+              <select style={{ ...inputStyle, flex:2 }} value={s.momento || ""} onChange={e => { const u=[...suplementosOpcionales]; u[i].momento=e.target.value; setSuplementosOpcionales(u); }}>
+                <option value="">Momento...</option>
+                {MOMENTOS_SUPLEMENTO_OPCIONAL.map(m => <option key={m.key} value={m.key}>{m.label}</option>)}
+              </select>
+              <button onClick={() => { const u=[...suplementosOpcionales]; u.splice(i,1); setSuplementosOpcionales(u); }} style={{ background:"transparent", border:"none", color:theme.danger, fontSize:16, cursor:"pointer" }}>×</button>
             </div>
           ))}
-          <button onClick={() => setSuplemento([...suplementos, { nombre:"", dosis:"", momento:"" }])} style={{ background:"transparent", border:`1px dashed ${theme.border}`, borderRadius:6, padding:"4px 10px", color:theme.muted, fontSize:11, cursor:"pointer", marginBottom:14 }}>+ Suplemento</button>
+          <button onClick={() => setSuplementosOpcionales([...suplementosOpcionales, { nombre:"", dosis:"", momento:"" }])} style={{ background:"transparent", border:`1px dashed ${theme.border}`, borderRadius:6, padding:"4px 10px", color:theme.muted, fontSize:11, cursor:"pointer", marginBottom:14 }}>+ Suplemento</button>
 
           {/* Equivalencias */}
           <div style={{ fontSize:11, fontWeight:700, color:theme.muted, marginBottom:8 }}>EQUIVALENCIAS PERMITIDAS</div>
@@ -4719,8 +4899,22 @@ function DietaCoach({ alumno }) {
           <button onClick={() => setEquivalencias([...equivalencias, { a:"", b:"" }])} style={{ background:"transparent", border:`1px dashed ${theme.border}`, borderRadius:6, padding:"4px 10px", color:theme.muted, fontSize:11, cursor:"pointer", marginBottom:14 }}>+ Equivalencia</button>
 
           {/* Notas */}
-          <div style={{ fontSize:11, fontWeight:700, color:theme.muted, marginBottom:6 }}>NOTAS PARA EL ALUMNO</div>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
+            <div style={{ fontSize:11, fontWeight:700, color:theme.muted }}>NOTAS PARA EL ALUMNO</div>
+            <button type="button" onClick={() => setNotas(NOTAS_DIETA_DEFAULT)} title="Reemplaza el texto de este campo por el texto estándar. Recordá tocar Guardar para que quede."
+              style={{ background:"transparent", border:"none", color:theme.accentLight, fontSize:11, cursor:"pointer", padding:0 }}>↺ Restablecer al texto por defecto</button>
+          </div>
           <textarea style={{ ...inputStyle, minHeight:60, resize:"none", marginBottom:14 }} placeholder="Indicaciones generales..." value={notas} onChange={e => setNotas(e.target.value)} />
+
+          {/* Hábitos generales: viene precargado con el texto estándar, pero
+              se puede editar por alumno (ej: agregar algo puntual). Una
+              línea = una viñeta en la vista del alumno. */}
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
+            <div style={{ fontSize:11, fontWeight:700, color:theme.muted }}>HÁBITOS GENERALES</div>
+            <button type="button" onClick={() => setHabitos(HABITOS_DIETA_DEFAULT)} title="Reemplaza el texto de este campo por el texto estándar. Recordá tocar Guardar para que quede."
+              style={{ background:"transparent", border:"none", color:theme.accentLight, fontSize:11, cursor:"pointer", padding:0 }}>↺ Restablecer al texto por defecto</button>
+          </div>
+          <textarea style={{ ...inputStyle, minHeight:90, resize:"none", marginBottom:14 }} placeholder="Un hábito por línea..." value={habitos} onChange={e => setHabitos(e.target.value)} />
 
           {!guardarPlantillaDietaAbierto ? (
             <button onClick={() => { setNombrePlantillaDietaNueva(nombrePlan || ""); setGuardarPlantillaDietaAbierto(true); }}
