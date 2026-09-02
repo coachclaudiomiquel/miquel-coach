@@ -797,13 +797,20 @@ function etiquetaUnidadAlimento(alimento) {
 }
 
 // Equivalencias automáticas: cada alimento de la biblioteca puede llevar un
-// grupo (Proteína/Carbohidrato/Grasa). Cuando dos alimentos son del mismo
-// grupo, se puede calcular cuánta cantidad de uno equivale al otro igualando
-// el macro principal de ese grupo (ej: mismos gramos de proteína).
+// grupo (Proteína/Carbohidrato/Grasa/Fruta/Verdura). Cuando dos alimentos son
+// del mismo grupo Y ese grupo tiene un "macro" asociado, se puede calcular
+// cuánta cantidad de uno equivale al otro igualando ese macro (ej: mismos
+// gramos de proteína). "Verdura" no tiene macro asociado -- es solo para
+// clasificar (ensaladas, hojas verdes, tomate, etc.), sin calcular
+// equivalencias entre verduras. "Fruta" sí lo tiene (carbohidratos), pero
+// como es un grupo aparte de "Carbohidrato", las frutas solo se equivalen
+// entre sí (no contra arroz, pan, papa, etc.).
 const GRUPOS_ALIMENTO = [
   { key: "proteina", label: "Proteína", macro: "proteinas_base" },
   { key: "carbohidrato", label: "Carbohidrato", macro: "carbos_base" },
   { key: "grasa", label: "Grasa", macro: "grasas_base" },
+  { key: "fruta", label: "Fruta", macro: "carbos_base" },
+  { key: "verdura", label: "Verdura", macro: null },
 ];
 function labelGrupoAlimento(key) {
   return GRUPOS_ALIMENTO.find(g => g.key === key)?.label || "";
