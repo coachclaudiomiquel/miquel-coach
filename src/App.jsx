@@ -506,14 +506,35 @@ const NOTAS_DIETA_DEFAULT = "Completa todas las comidas para cumplir con los mac
 // propia tarjeta ("Agua de hoy") en NutricionScreen. Una línea = una viñeta.
 const HABITOS_DIETA_DEFAULT = "Prioriza el agua durante el día. Evita bebidas y jugos azucarados; puedes optar por versiones sin azúcar o zero.\nPrefiere stevia u otros endulzantes sin azúcar en reemplazo del azúcar añadida.\nPrioriza alimentos naturales y minimiza el consumo de alimentos procesados y ultraprocesados.\nMantén horarios de alimentación lo más regulares posible, ya que esto facilita el cumplimiento del plan y favorece una mejor regularidad digestiva.";
 // Suplementación: lista libre que el coach arma por alumno (nombre, dosis y
-// momento), agrupada en 4 momentos del día fijos.
+// momento), agrupada en 5 momentos del día fijos. "Media tarde" existe para
+// suplementos como la creatina en días de descanso, donde no hay "pre/post
+// entreno" al que engancharlos.
 const MOMENTOS_SUPLEMENTO_OPCIONAL = [
   { key: "manana", label: "Por la mañana" },
+  { key: "media_tarde", label: "Media tarde" },
   { key: "pre_entreno", label: "Pre entreno" },
   { key: "post_entreno", label: "Post entreno" },
   { key: "dormir", label: "Antes de dormir" },
 ];
 const DIAS_SEMANA_ABREV = ["Dom","Lun","Mar","Mié","Jue","Vie","Sáb"];
+// Aviso de suplementos pendientes de hoy: nombra el/los suplementos en vez
+// de decir "tu suplementación" en genérico -- así el aviso pega más (ej.
+// "Recuerda tomar tu creatina", que es la que más se suele olvidar).
+function mensajeSuplementosPendientes(nombres) {
+  if (nombres.length === 1) return `Recuerda tomar tu ${nombres[0]}.`;
+  if (nombres.length === 2) return `Recuerda tomar tu ${nombres[0]} y tu ${nombres[1]}.`;
+  return `Recuerda tomar tus suplementos de hoy: ${nombres.join(", ")}.`;
+}
+// Ordena los planes de dieta según el día más temprano de la semana que
+// tengan asignado (mismo ORDEN_DIAS_SEMANA que ya se usa para las rutinas).
+function ordenarDietasPorDia(lista) {
+  const indiceMasChico = (dieta) => {
+    if (!Array.isArray(dieta.dias) || dieta.dias.length === 0) return ORDEN_DIAS_SEMANA.length;
+    const indices = dieta.dias.map(d => ORDEN_DIAS_SEMANA.indexOf(d)).filter(i => i >= 0);
+    return indices.length > 0 ? Math.min(...indices) : ORDEN_DIAS_SEMANA.length;
+  };
+  return [...lista].sort((a, b) => indiceMasChico(a) - indiceMasChico(b));
+}
 function getMondayGlobal(d) {
   const date = new Date(d);
   const day = date.getDay();
@@ -569,7 +590,7 @@ async function cargarCiclosAlumno(usuarioId, fechaInicioPlanOverride) {
     supabase.from("diario_registros").select("fecha").eq("usuario_id", usuarioId).order("fecha", { ascending: true }).limit(1),
     supabase.from("registros_entreno").select("fecha").eq("usuario_id", usuarioId).order("fecha", { ascending: true }).limit(1),
     supabase.from("dieta_registros").select("fecha").eq("usuario_id", usuarioId).order("fecha", { ascending: true }).limit(1),
-    supabase.from("rutinas").select("dia").eq("usuario_id", usuarioId),
+    supabase.from("rutinas").select("dia").eq("usuario_id", usuarioId).eq("publicada", true),
   ]);
   const diasConRutina = new Set((rutinasAlumno || []).map(r => r.dia).filter(Boolean));
   const diasPlanificados = diasConRutina.size;
@@ -773,6 +794,82 @@ function sumarMacros(listas) {
 }
 function etiquetaUnidadAlimento(alimento) {
   return alimento?.unidad || "";
+}
+
+// Equivalencias automáticas: cada alimento de la biblioteca puede llevar un
+// grupo (Proteína/Carbohidrato/Grasa). Cuando dos alimentos son del mismo
+// grupo, se puede calcular cuánta cantidad de uno equivale al otro igualando
+// el macro principal de ese grupo (ej: mismos gramos de proteína).
+const GRUPOS_ALIMENTO = [
+  { key: "proteina", label: "Proteína", macro: "proteinas_base" },
+  { key: "carbohidrato", label: "Carbohidrato", macro: "carbos_base" },
+  { key: "grasa", label: "Grasa", macro: "grasas_base" },
+];
+function labelGrupoAlimento(key) {
+  return GRUPOS_ALIMENTO.find(g => g.key === key)?.label || "";
+}
+// Dado un alimento de origen con su cantidad y un alimento sustituto (mismo
+// grupo), calcula cuánto sustituto hace falta para igualar el macro
+// principal del grupo. Devuelve null si no se puede calcular (sin grupo, sin
+// ese macro cargado, etc). Redondea a algo práctico de usar: de a 5 en
+// g/ml, de a 0.5 en und/scoop.
+function calcularCantidadEquivalente(alimOrigen, cantidadOrigen, alimSustituto) {
+  const grupo = GRUPOS_ALIMENTO.find(g => g.key === alimOrigen?.grupo);
+  if (!grupo || !alimSustituto?.[grupo.macro]) return null;
+  const cant = parseFloat(cantidadOrigen) || 0;
+  if (!cant) return null;
+  const factorOrigen = esUnidadPorUno(alimOrigen.unidad) ? cant : cant / 100;
+  const macroObjetivo = (alimOrigen[grupo.macro] || 0) * factorOrigen;
+  if (macroObjetivo <= 0) return null;
+  const vecesBaseSustituto = macroObjetivo / alimSustituto[grupo.macro];
+  const cantidadCruda = esUnidadPorUno(alimSustituto.unidad) ? vecesBaseSustituto : vecesBaseSustituto * 100;
+  if (!cantidadCruda || !isFinite(cantidadCruda)) return null;
+  return esUnidadPorUno(alimSustituto.unidad) ? Math.round(cantidadCruda * 2) / 2 : Math.round(cantidadCruda / 5) * 5;
+}
+// Busca en la biblioteca los demás alimentos del mismo grupo que el alimento
+// de origen (excluyéndolo a él), cada uno con su cantidad equivalente ya
+// calculada. Si el alimento de origen tiene "sustitutos_ids" cargado (el
+// coach los curó a mano desde el desplegable de equivalencias, ver
+// agregarSustituto/quitarSustituto en DietaCoach), se devuelven exactamente
+// esos alimentos, en ese orden, sin límite de cantidad -- es una lista
+// elegida a propósito, así que se respeta tal cual. Si no hay lista propia
+// (sustitutos_ids es null/undefined), se calcula automático: los demás
+// alimentos del mismo grupo, quedándose con los MAX_EQUIVALENCIAS_AUTOMATICAS
+// más parecidos en calorías totales a esa cantidad -- así la lista no se
+// hace larga a medida que crece la biblioteca. Como la cantidad ya se
+// ajustó para igualar el macro principal del grupo, comparar por calorías
+// es una buena forma de detectar además qué tan parecidos son en los otros
+// macros (si el sustituto tiene mucha más grasa o carbohidrato, las
+// calorías a esa cantidad se van a alejar). Se recalcula en vivo contra la
+// biblioteca actual -- no se guarda nada en la dieta (lo que sí se guarda,
+// en la biblioteca y no en la dieta, es la lista curada de sustitutos_ids).
+const MAX_EQUIVALENCIAS_AUTOMATICAS = 3;
+function alimentosEquivalentesAutomaticos(alimOrigen, cantidadOrigen, biblioteca) {
+  if (!alimOrigen?.grupo) return [];
+  const calcularOpcion = (a) => {
+    const cantidad = calcularCantidadEquivalente(alimOrigen, cantidadOrigen, a);
+    if (cantidad == null || cantidad <= 0) return null;
+    return { alimento: a, cantidad };
+  };
+  if (Array.isArray(alimOrigen.sustitutos_ids)) {
+    return alimOrigen.sustitutos_ids
+      .map(id => (biblioteca || []).find(a => a.id === id))
+      .filter(Boolean)
+      .map(calcularOpcion)
+      .filter(Boolean);
+  }
+  const macrosOrigen = calcularMacrosAlimento(alimOrigen, cantidadOrigen);
+  return (biblioteca || [])
+    .filter(a => a.id !== alimOrigen.id && a.grupo === alimOrigen.grupo)
+    .map(a => {
+      const opcion = calcularOpcion(a);
+      if (!opcion) return null;
+      const macrosSustituto = calcularMacrosAlimento(a, opcion.cantidad);
+      return { ...opcion, difKcal: Math.abs(macrosOrigen.calorias - macrosSustituto.calorias) };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.difKcal - b.difKcal)
+    .slice(0, MAX_EQUIVALENCIAS_AUTOMATICAS);
 }
 // Sanitiza texto tipeado en un campo de cantidad/macro que necesita aceptar
 // decimales: deja solo dígitos y un separador decimal (coma o punto), y lo
@@ -1542,7 +1639,7 @@ const [estadoPago, setEstadoPago] = useState(null);
   const [dieta, setDieta] = useState(null);
   const [semana, setSemana] = useState(null); const [mensajesNoLeidos, setMensajesNoLeidos] = useState(0); const pagoVencido = false;
   const [ultimoMensajeCoach, setUltimoMensajeCoach] = useState(null);
-  const [suplementosPendientes, setSuplementosPendientes] = useState(0);
+  const [suplementosPendientes, setSuplementosPendientes] = useState([]); // nombres de los suplementos de hoy sin marcar
   const [pasosHoy, setPasosHoy] = useState("");
   const [guardandoPasos, setGuardandoPasos] = useState(false);
   const [pasosGuardado, setPasosGuardado] = useState(false);
@@ -1572,6 +1669,7 @@ const [estadoPago, setEstadoPago] = useState(null);
           .from("rutinas")
           .select("*, ejercicios(*)")
           .eq("usuario_id", user.id)
+          .eq("publicada", true)
           .order("created_at", { ascending: false });
         if (rutinas && rutinas.length > 0) {
           setTieneRutinas(true);
@@ -1594,7 +1692,7 @@ const [estadoPago, setEstadoPago] = useState(null);
         }
         const { data: checkins } = await supabase.from("checkins").select("peso").eq("usuario_id", user.id).order("fecha", { ascending: false }).limit(1);
         if (checkins && checkins.length > 0) setCheckin(checkins[0]);
-        const { data: dietas } = await supabase.from("dietas").select("calorias, suplementos_opcionales, dias").eq("usuario_id", user.id).order("created_at", { ascending: false });
+        const { data: dietas } = await supabase.from("dietas").select("calorias, suplementos_opcionales, dias").eq("usuario_id", user.id).eq("publicada", true).order("created_at", { ascending: false });
         if (dietas && dietas.length > 0) {
           // Mismo criterio que usa NutricionScreen para elegir el plan: el que
           // esté asignado al día de hoy (campo "dias"); si ninguno calza con hoy,
@@ -1610,7 +1708,7 @@ const [estadoPago, setEstadoPago] = useState(null);
             const hoyStr = fechaOperativaStr();
             const { data: suplRegs } = await supabase.from("suplemento_registros").select("suplemento_index, tomado").eq("usuario_id", user.id).eq("fecha", hoyStr);
             const marcados = new Set((suplRegs || []).filter(r => r.tomado).map(r => r.suplemento_index));
-            setSuplementosPendientes(suplementosPlan.filter((s, i) => s.nombre && !marcados.has(i)).length);
+            setSuplementosPendientes(suplementosPlan.filter((s, i) => s.nombre && !marcados.has(i)).map(s => s.nombre));
           }
         }
         const { data: pagoData } = await supabase.from("pagos").select("*").eq("usuario_id", user.id).order("created_at", { ascending: false }).limit(1);
@@ -1664,10 +1762,10 @@ const [estadoPago, setEstadoPago] = useState(null);
           <div style={{ fontSize:12, color:theme.muted }}>Contacta a tu coach para regularizar tu situación.</div>
         </div>
       )}
-      {suplementosPendientes > 0 && (
-        <div onClick={() => onNav("nutricion")} style={{ cursor:"pointer", background:`${theme.warning}15`, border:`1px solid ${theme.warning}55`, borderRadius:14, padding:"12px 16px", marginBottom:16, display:"flex", alignItems:"center", gap:10 }}>
-          <span style={{ fontSize:18 }}>⏰</span>
-          <div style={{ fontSize:12, color:theme.warning, fontWeight:700 }}>Te falta marcar {suplementosPendientes === 1 ? "un suplemento" : `${suplementosPendientes} suplementos`} de hoy. Toca para verlos.</div>
+      {suplementosPendientes.length > 0 && (
+        <div onClick={() => onNav("nutricion")} style={{ cursor:"pointer", background:`${theme.warning}15`, border:`1px solid ${theme.warning}55`, borderRadius:10, padding:"7px 14px", marginBottom:16, display:"flex", alignItems:"center", gap:8 }}>
+          <span style={{ fontSize:14 }}>⏰</span>
+          <div style={{ fontSize:12, color:theme.warning, fontWeight:700 }}>{mensajeSuplementosPendientes(suplementosPendientes)}</div>
         </div>
       )}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
@@ -2786,6 +2884,7 @@ function RutinaScreen({ onNav }) {
           .from("rutinas")
           .select("*, ejercicios(*)")
           .eq("usuario_id", user.id)
+          .eq("publicada", true)
           .order("created_at", { ascending: false });
         if (data && data.length > 0) {
           setRutinas(data);
@@ -3633,6 +3732,8 @@ function NutricionScreen({ onNav }) {
   const [modalFotoUrl, setModalFotoUrl] = useState(null);
   const [modalSubiendoFoto, setModalSubiendoFoto] = useState(false);
   const [mapaAlimentos, setMapaAlimentos] = useState({});
+  const [alimentosBiblioteca, setAlimentosBiblioteca] = useState([]); // para calcular equivalencias automáticas
+  const [equivalenciaAbierta, setEquivalenciaAbierta] = useState(null); // "ci-ai" del alimento con equivalencias desplegadas, o null
   const [lightbox, setLightbox] = useState(null);
   const [pesoAlumno, setPesoAlumno] = useState(null);
   const [tieneRutinaHoy, setTieneRutinaHoy] = useState(false);
@@ -3652,9 +3753,10 @@ function NutricionScreen({ onNav }) {
         }
         // Biblioteca de alimentos, para resolver el alimento_id/cantidad de
         // cada ítem de las comidas (nombre, unidad y macros reales).
-        const alimentosBiblioteca = await cargarAlimentosBiblioteca();
+        const biblioteca = await cargarAlimentosBiblioteca();
+        setAlimentosBiblioteca(biblioteca);
         const mapa = {};
-        alimentosBiblioteca.forEach(al => { mapa[al.id] = al; });
+        biblioteca.forEach(al => { mapa[al.id] = al; });
         setMapaAlimentos(mapa);
 
         // Peso actual (para calcular el agua sugerida) y si hoy tiene rutina
@@ -3662,7 +3764,7 @@ function NutricionScreen({ onNav }) {
         // "rutina de hoy" en RutinaScreen.
         const { data: usuarioData } = await supabase.from("usuarios").select("peso_actual").eq("id", user.id).single();
         if (usuarioData?.peso_actual) setPesoAlumno(usuarioData.peso_actual);
-        const { data: rutinasData } = await supabase.from("rutinas").select("dia").eq("usuario_id", user.id);
+        const { data: rutinasData } = await supabase.from("rutinas").select("dia").eq("usuario_id", user.id).eq("publicada", true);
         if (rutinasData) {
           const nombreHoyRutina = nombreDiaOperativo();
           setTieneRutinaHoy(rutinasData.some(r => r.dia === nombreHoyRutina));
@@ -3672,9 +3774,10 @@ function NutricionScreen({ onNav }) {
           .from("dietas")
           .select("*")
           .eq("usuario_id", user.id)
+          .eq("publicada", true)
           .order("created_at", { ascending: false });
         if (data && data.length > 0) {
-          setDietas(data);
+          setDietas(ordenarDietasPorDia(data));
           // Se acopla automáticamente al plan asignado al día de hoy (según la
           // rutina que le toca ese día), sin depender de que el alumno elija
           // manualmente ni de que guarde algo antes. Si ningún plan está
@@ -3750,7 +3853,6 @@ function NutricionScreen({ onNav }) {
   );
 
   const comidas = Array.isArray(dieta.comidas) ? dieta.comidas : [];
-  const equivalencias = Array.isArray(dieta.equivalencias) ? dieta.equivalencias : [];
   // Suplementación opcional/ideal: lista libre armada por el coach, agrupada
   // por momento. Defensivo por si la dieta es de antes de esta columna.
   const suplementosOpcionales = Array.isArray(dieta.suplementos_opcionales) ? dieta.suplementos_opcionales : [];
@@ -3928,12 +4030,31 @@ function NutricionScreen({ onNav }) {
                 if (alim) {
                   const unidadTxt = esUnidadPorUno(alim.unidad) ? ` ${alim.unidad} ` : `${alim.unidad} `;
                   const estadoPrep = alim.estado_preparacion ? ` (pesado ${alim.estado_preparacion})` : "";
+                  const key = `${i}-${ai}`;
+                  const opcionesEquiv = alim.grupo ? alimentosEquivalentesAutomaticos(alim, a.cantidad, alimentosBiblioteca) : [];
                   return (
-                    <div key={ai} style={{ fontSize:13, color:theme.muted, display:"flex", alignItems:"center", gap:5 }}>
-                      <span>{a.cantidad}{unidadTxt}{alim.nombre}{estadoPrep}</span>
-                      {alim.imagen_url && (
-                        <span onClick={() => setLightbox(alim.imagen_url)} title="Ver foto del alimento"
-                          style={{ fontSize:11, opacity:0.55, cursor:"pointer", lineHeight:1 }}>📷</span>
+                    <div key={ai} style={{ display:"flex", flexDirection:"column", alignItems:"center" }}>
+                      <div style={{ fontSize:13, color:theme.muted, display:"flex", alignItems:"center", gap:5 }}>
+                        <span>{a.cantidad}{unidadTxt}{alim.nombre}{estadoPrep}</span>
+                        {alim.imagen_url && (
+                          <span onClick={() => setLightbox(alim.imagen_url)} title="Ver foto del alimento"
+                            style={{ fontSize:11, opacity:0.55, cursor:"pointer", lineHeight:1 }}>📷</span>
+                        )}
+                        {alim.grupo && (
+                          <span onClick={() => setEquivalenciaAbierta(equivalenciaAbierta === key ? null : key)}
+                            style={{ fontSize:10, color:theme.accentLight, cursor:"pointer" }}>
+                            {equivalenciaAbierta === key ? "▲" : "🔁 Cambiar"}
+                          </span>
+                        )}
+                      </div>
+                      {equivalenciaAbierta === key && (
+                        <div style={{ fontSize:11.5, color:theme.text, background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:8, padding:"6px 10px", marginTop:4 }}>
+                          {opcionesEquiv.length > 0 ? opcionesEquiv.map(o => (
+                            <div key={o.alimento.id} style={{ marginBottom:2 }}>
+                              {o.cantidad}{esUnidadPorUno(o.alimento.unidad) ? ` ${o.alimento.unidad}` : "g"} {o.alimento.nombre}{o.alimento.estado_preparacion ? ` (pesado ${o.alimento.estado_preparacion})` : ""}
+                            </div>
+                          )) : <div style={{ color:theme.muted }}>Sin otras opciones cargadas todavía.</div>}
+                        </div>
                       )}
                     </div>
                   );
@@ -4013,29 +4134,21 @@ function NutricionScreen({ onNav }) {
         </div>
       )}
 
-      {/* Equivalencias */}
-      {equivalencias.length > 0 && (
-        <Card style={{ marginBottom:12 }}>
-          <div style={{ fontSize:12, color:theme.muted, marginBottom:10 }}>EQUIVALENCIAS PERMITIDAS</div>
-          {equivalencias.map((e, i) => (
-            <div key={i} style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6, fontSize:13 }}>
-              <span style={{ color:theme.text }}>{e.a}</span>
-              <span style={{ color:theme.accent, fontWeight:700 }}>↔</span>
-              <span style={{ color:theme.text }}>{e.b}</span>
+      {/* Aviso si quedan suplementos de hoy sin marcar -- nombra el/los
+          suplementos pendientes en vez de un genérico "tu suplementación",
+          para que el aviso pegue más (ej. "Recuerda tomar tu creatina"). */}
+      {(() => {
+        const nombresPendientes = suplementosOpcionales.filter((s, i) => s.nombre && !suplementosEstado[i]).map(s => s.nombre);
+        if (nombresPendientes.length === 0) return null;
+        return (
+          <Card style={{ marginBottom:14, background:`${theme.warning}12`, border:`1px solid ${theme.warning}44` }}>
+            <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+              <span style={{ fontSize:18 }}>⏰</span>
+              <div style={{ fontSize:12, color:theme.warning, fontWeight:700 }}>{mensajeSuplementosPendientes(nombresPendientes)}</div>
             </div>
-          ))}
-        </Card>
-      )}
-
-      {/* Aviso si quedan suplementos de hoy sin marcar */}
-      {suplementosOpcionales.length > 0 && suplementosOpcionales.some((s, i) => s.nombre && !suplementosEstado[i]) && (
-        <Card style={{ marginBottom:14, background:`${theme.warning}12`, border:`1px solid ${theme.warning}44` }}>
-          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-            <span style={{ fontSize:18 }}>⏰</span>
-            <div style={{ fontSize:12, color:theme.warning, fontWeight:700 }}>Recuerda tomar tu suplementación de hoy — márcala abajo cuando la tomes.</div>
-          </div>
-        </Card>
-      )}
+          </Card>
+        );
+      })()}
 
       {/* Suplementación: lista libre armada por el coach, agrupada por
           momento, con check-in (✓ tomado) por ítem. */}
@@ -4286,6 +4399,7 @@ const NuevoAlimentoForm = ({ nombreInicial, alimentoExistente, onCancelar, onCre
   const esEdicion = !!alimentoExistente;
   const [nombre, setNombre] = useState(alimentoExistente?.nombre || nombreInicial || "");
   const [estadoPreparacion, setEstadoPreparacion] = useState(alimentoExistente?.estado_preparacion || "");
+  const [grupo, setGrupo] = useState(alimentoExistente?.grupo || "");
   const [unidad, setUnidad] = useState(alimentoExistente?.unidad || "g");
   const [cantidadCargada, setCantidadCargada] = useState(alimentoExistente ? (esUnidadPorUno(alimentoExistente.unidad) ? "1" : "100") : "");
   const [caloriasCargadas, setCaloriasCargadas] = useState(alimentoExistente?.calorias_base ?? "");
@@ -4310,6 +4424,7 @@ const NuevoAlimentoForm = ({ nombreInicial, alimentoExistente, onCancelar, onCre
       nombre: nombre.trim(),
       nombre_normalizado: normalizado,
       estado_preparacion: estadoPreparacion || null,
+      grupo: grupo || null,
       unidad,
       calorias_base: base(caloriasCargadas),
       proteinas_base: base(proteinasCargadas),
@@ -4348,6 +4463,13 @@ const NuevoAlimentoForm = ({ nombreInicial, alimentoExistente, onCancelar, onCre
           <option value="">Sin especificar (ej: pan, ya listo para comer)</option>
           <option value="crudo">Crudo (ej: arroz, fideos, papa, pollo, carne)</option>
           <option value="cocido">Cocido</option>
+        </select>
+      </div>
+      <div style={{ marginBottom:6 }}>
+        <div style={{ fontSize:9, color:theme.muted, marginBottom:2 }}>Grupo (para armar equivalencias automáticas -- opcional)</div>
+        <select style={inputStyle} value={grupo} onChange={e => setGrupo(e.target.value)}>
+          <option value="">Sin grupo</option>
+          {GRUPOS_ALIMENTO.map(g => <option key={g.key} value={g.key}>{g.label}</option>)}
         </select>
       </div>
       <div style={{ marginBottom:6 }}>
@@ -4391,6 +4513,10 @@ function DietaCoach({ alumno }) {
   const [exito, setExito] = useState(false);
   const [modoDuplicar, setModoDuplicar] = useState(false);
   const [editandoDietaId, setEditandoDietaId] = useState(null);
+  // Id de la plantilla que se está editando DIRECTAMENTE (distinto de
+  // "usar plantilla", que arma un plan nuevo para el alumno sin tocar la
+  // plantilla). Acá el formulario actualiza la plantilla compartida.
+  const [editandoPlantillaDietaId, setEditandoPlantillaDietaId] = useState(null);
   const formRef = useRef(null);
 
   const [nombrePlan, setNombrePlan] = useState("");
@@ -4416,17 +4542,24 @@ function DietaCoach({ alumno }) {
   // Suplementación: lista libre por alumno, agrupada en los 4 momentos fijos
   // de MOMENTOS_SUPLEMENTO_OPCIONAL (nombre, dosis, momento).
   const [suplementosOpcionales, setSuplementosOpcionales] = useState([]);
-  const [equivalencias, setEquivalencias] = useState([{ a: "", b: "" }]);
+  // Biblioteca de suplementos (tabla "suplementos_biblioteca"): recuerda
+  // nombre + última dosis/momento usados, para autocompletar. No es por
+  // alumno -- es global, como la biblioteca de alimentos.
+  const [suplementosBiblioteca, setSuplementosBiblioteca] = useState([]);
+  const [mapaSuplementos, setMapaSuplementos] = useState({}); // nombre_normalizado -> suplemento
   // Biblioteca de alimentos (tabla "alimentos"): se carga una sola vez y se
   // usa tanto para el autocompletado como para calcular los macros en vivo.
   const [alimentosBiblioteca, setAlimentosBiblioteca] = useState([]);
   const [mapaAlimentos, setMapaAlimentos] = useState({}); // nombre_normalizado -> alimento
   const [nuevoAlimentoAbierto, setNuevoAlimentoAbierto] = useState(null); // "ci-ai" de la fila abierta, o null
+  const [equivalenciaAbierta, setEquivalenciaAbierta] = useState(null); // "ci-ai" de la fila con equivalencias automáticas desplegadas, o null
+  const [busquedaSustituto, setBusquedaSustituto] = useState({}); // "ci-ai" -> texto tipeado para agregar un sustituto manual
   const [calculadoraAbierta, setCalculadoraAbierta] = useState(false);
   // Panel para ver/editar/eliminar cualquier alimento de la biblioteca,
   // esté o no usado en la dieta que se está armando ahora mismo.
   const [mostrarBiblioteca, setMostrarBiblioteca] = useState(false);
   const [editandoAlimentoId, setEditandoAlimentoId] = useState(null);
+  const [agregandoAlimentoBiblioteca, setAgregandoAlimentoBiblioteca] = useState(false);
   const [busquedaBiblioteca, setBusquedaBiblioteca] = useState("");
   // Plantillas de dieta (mismo patrón que las plantillas de rutina): no son
   // de ningún alumno en particular, se reutilizan como base para cualquiera.
@@ -4439,11 +4572,11 @@ function DietaCoach({ alumno }) {
   // referencia el mismo cálculo automático de agua que ve el alumno.
   const [tieneRutinaHoyCoach, setTieneRutinaHoyCoach] = useState(false);
 
-  useEffect(() => { cargarDietas(); cargarBiblioteca(); cargarPlantillasDieta(); }, [alumno]);
+  useEffect(() => { cargarDietas(); cargarBiblioteca(); cargarPlantillasDieta(); cargarSuplementosBiblioteca(); }, [alumno]);
 
   useEffect(() => {
     if (!alumno?.id) return;
-    supabase.from("rutinas").select("dia").eq("usuario_id", alumno.id).then(({ data }) => {
+    supabase.from("rutinas").select("dia").eq("usuario_id", alumno.id).eq("publicada", true).then(({ data }) => {
       if (data) setTieneRutinaHoyCoach(data.some(r => r.dia === nombreDiaOperativo()));
     });
   }, [alumno]);
@@ -4475,6 +4608,43 @@ function DietaCoach({ alumno }) {
     setMapaAlimentos(prev => { const u = { ...prev }; delete u[alim.nombre_normalizado]; return u; });
   };
 
+  // Biblioteca de suplementos: se carga una sola vez (no depende del
+  // alumno) y se usa para el autocompletado de nombre + autollenado de
+  // dosis/momento en el formulario.
+  const cargarSuplementosBiblioteca = async () => {
+    const { data } = await supabase.from("suplementos_biblioteca").select("*").order("nombre");
+    setSuplementosBiblioteca(data || []);
+    const mapa = {};
+    (data || []).forEach(s => { mapa[s.nombre_normalizado] = s; });
+    setMapaSuplementos(mapa);
+  };
+
+  // Al guardar una dieta, recuerda en la biblioteca cada suplemento usado
+  // (nombre + dosis + momento) para que la próxima vez aparezca sugerido y
+  // se autocompleten esos datos. "Última carga gana": si ya existía, se
+  // actualiza con lo que se acaba de guardar ahora.
+  const recordarSuplementosEnBiblioteca = async (lista) => {
+    const items = (lista || []).filter(s => s.nombre);
+    if (items.length === 0) return;
+    const filas = items.map(s => ({
+      nombre: s.nombre,
+      nombre_normalizado: normalizarNombreAlimento(s.nombre),
+      dosis: s.dosis || null,
+      momento: s.momento || null,
+      updated_at: new Date().toISOString(),
+    }));
+    const { data } = await supabase.from("suplementos_biblioteca").upsert(filas, { onConflict: "nombre_normalizado" }).select();
+    if (data) {
+      setSuplementosBiblioteca(prev => {
+        const porNombre = {};
+        prev.forEach(s => { porNombre[s.nombre_normalizado] = s; });
+        data.forEach(s => { porNombre[s.nombre_normalizado] = s; });
+        return Object.values(porNombre).sort((a, b) => a.nombre.localeCompare(b.nombre));
+      });
+      setMapaSuplementos(prev => { const u = { ...prev }; data.forEach(s => { u[s.nombre_normalizado] = s; }); return u; });
+    }
+  };
+
   // Plantillas de dieta: no son de ningún alumno en particular, se
   // reutilizan como punto de partida al armar la dieta de cualquiera --
   // típicamente cuando llega un alumno nuevo con un objetivo parecido.
@@ -4486,7 +4656,7 @@ function DietaCoach({ alumno }) {
   const cargarDietas = async () => {
     if (!alumno?.id) return;
     const { data } = await supabase.from("dietas").select("*").eq("usuario_id", alumno.id).order("created_at", { ascending: false });
-    if (data) setDietas(data);
+    if (data) setDietas(ordenarDietasPorDia(data));
     setLoading(false);
   };
 
@@ -4531,6 +4701,28 @@ function DietaCoach({ alumno }) {
   const macrosDeComida = (c) => sumarMacros((c.alimentos || []).map(macrosDeItem));
   const planArmado = sumarMacros(comidas.flatMap(c => (c.alimentos || []).map(macrosDeItem)));
 
+  // Sustitutos curados a mano: se guardan en el propio alimento de la
+  // biblioteca (columna "sustitutos_ids"), no en la dieta -- así, una vez
+  // que el coach ajusta la lista de un alimento (ej: Pechuga de pollo), esa
+  // lista queda de default para cualquier dieta futura de cualquier alumno
+  // que use ese mismo alimento. Mientras no se toque nada, se sigue viendo
+  // la lista automática (ver alimentosEquivalentesAutomaticos).
+  const actualizarSustitutosAlimento = async (alimento, nuevaListaIds) => {
+    await supabase.from("alimentos").update({ sustitutos_ids: nuevaListaIds }).eq("id", alimento.id);
+    setAlimentosBiblioteca(prev => prev.map(a => a.id === alimento.id ? { ...a, sustitutos_ids: nuevaListaIds } : a));
+  };
+  // "opcionesActuales" es la lista ya calculada que se está mostrando en ese
+  // momento (automática o ya curada) -- agregar/quitar parte siempre de lo
+  // que el coach está viendo en pantalla, no de una lista aparte.
+  const agregarSustituto = (alim, opcionesActuales, nuevoId) => {
+    const ids = opcionesActuales.map(o => o.alimento.id);
+    if (ids.includes(nuevoId) || nuevoId === alim.id) return;
+    actualizarSustitutosAlimento(alim, [...ids, nuevoId]);
+  };
+  const quitarSustituto = (alim, opcionesActuales, idAQuitar) => {
+    actualizarSustitutosAlimento(alim, opcionesActuales.map(o => o.alimento.id).filter(id => id !== idAQuitar));
+  };
+
   const inputStyle = { background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:8, padding:"8px 10px", color:theme.text, fontSize:13, outline:"none", width:"100%", boxSizing:"border-box" };
   const DIAS_SEMANA = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"];
   const toggleDiaDieta = (dia) => {
@@ -4539,6 +4731,39 @@ function DietaCoach({ alumno }) {
 
   const guardar = async () => {
     setGuardando(true);
+
+    if (editandoPlantillaDietaId) {
+      // Edición directa de la plantilla compartida: no crea ni toca ningún
+      // plan asignado a un alumno, solo actualiza la fila en
+      // dieta_plantillas (mismos campos que guarda guardarComoPlantillaDieta,
+      // sin "dias" ni "agua_litros" -- eso es propio de cada alumno).
+      const datosPlantilla = {
+        nombre: nombrePlan,
+        calorias: parseInt(calorias) || null,
+        proteinas: parseInt(proteinas) || null,
+        carbos: parseInt(carbos) || null,
+        grasas: parseInt(grasas) || null,
+        comidas: comidas.filter(c => c.nombre).map(c => ({
+          nombre: c.nombre,
+          hora: c.hora,
+          alimentos: (c.alimentos || []).filter(a => a.alimento_id && a.cantidad).map(a => ({ alimento_id: a.alimento_id, cantidad: parseFloat(a.cantidad) || 0 })),
+        })),
+        suplementos_opcionales: suplementosOpcionales.filter(s => s.nombre && s.momento),
+        notas,
+        habitos,
+      };
+      const { error } = await supabase.from("dieta_plantillas").update(datosPlantilla).eq("id", editandoPlantillaDietaId);
+      if (error) { alert("Error actualizando la plantilla: " + error.message); setGuardando(false); return; }
+      recordarSuplementosEnBiblioteca(datosPlantilla.suplementos_opcionales);
+      setGuardando(false);
+      setExito(true);
+      setCreando(false);
+      setEditandoPlantillaDietaId(null);
+      cargarPlantillasDieta();
+      setTimeout(() => setExito(false), 3000);
+      return;
+    }
+
     const datos = {
       nombre: nombrePlan,
       dias: diasDieta,
@@ -4552,7 +4777,6 @@ function DietaCoach({ alumno }) {
         alimentos: (c.alimentos || []).filter(a => a.alimento_id && a.cantidad).map(a => ({ alimento_id: a.alimento_id, cantidad: parseFloat(a.cantidad) || 0 })),
       })),
       suplementos_opcionales: suplementosOpcionales.filter(s => s.nombre && s.momento),
-      equivalencias: equivalencias.filter(e => e.a && e.b),
       notas,
       habitos,
       // Override manual del agua del día. Vacío = el alumno ve el cálculo
@@ -4563,9 +4787,12 @@ function DietaCoach({ alumno }) {
       const { error } = await supabase.from("dietas").update(datos).eq("id", editandoDietaId);
       if (error) { alert("Error actualizando dieta: " + error.message); setGuardando(false); return; }
     } else {
-      const { error } = await supabase.from("dietas").insert({ usuario_id: alumno.id, ...datos });
+      // Dieta nueva: se crea como borrador -- el alumno no la ve hasta que
+      // el coach la revisa y la carga con su propio botón "📤 Cargar".
+      const { error } = await supabase.from("dietas").insert({ usuario_id: alumno.id, ...datos, publicada: false });
       if (error) { alert("Error creando dieta: " + error.message); setGuardando(false); return; }
     }
+    recordarSuplementosEnBiblioteca(datos.suplementos_opcionales);
     setGuardando(false);
     setExito(true);
     setCreando(false);
@@ -4588,7 +4815,6 @@ function DietaCoach({ alumno }) {
       { nombre: "Cena", hora: "20:00", alimentos: [{ alimento_id: null, cantidad: "", nombre_busqueda: "" }] },
     ]);
     setSuplementosOpcionales([]);
-    setEquivalencias([{ a: "", b: "" }]);
   };
 
   // Reconstruye "nombre_busqueda" de cada alimento a partir de su
@@ -4615,9 +4841,9 @@ function DietaCoach({ alumno }) {
     setAguaLitros(dieta.agua_litros != null ? String(dieta.agua_litros) : "");
     setComidas(comidasParaEditar(dieta.comidas));
     setSuplementosOpcionales(Array.isArray(dieta.suplementos_opcionales) ? dieta.suplementos_opcionales : []);
-    setEquivalencias(Array.isArray(dieta.equivalencias) && dieta.equivalencias.length > 0 ? dieta.equivalencias : [{ a: "", b: "" }]);
     setModoDuplicar(modo === "duplicar");
     setEditandoDietaId(modo === "editar" ? dieta.id : null);
+    setEditandoPlantillaDietaId(null);
     setCreando(true);
     setTimeout(() => formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
   };
@@ -4638,7 +4864,6 @@ function DietaCoach({ alumno }) {
         setGrasas(plantilla.grasas || "");
         setComidas(comidasParaEditar(plantilla.comidas));
         setSuplementosOpcionales(Array.isArray(plantilla.suplementos_opcionales) ? plantilla.suplementos_opcionales : []);
-        setEquivalencias(Array.isArray(plantilla.equivalencias) && plantilla.equivalencias.length > 0 ? plantilla.equivalencias : [{ a: "", b: "" }]);
       }
     }
     setCreando(true);
@@ -4658,9 +4883,34 @@ function DietaCoach({ alumno }) {
     setAguaLitros(""); // igual que los días, el agua es propia de cada alumno, no se copia de la plantilla
     setComidas(comidasParaEditar(p.comidas));
     setSuplementosOpcionales(Array.isArray(p.suplementos_opcionales) ? p.suplementos_opcionales : []);
-    setEquivalencias(Array.isArray(p.equivalencias) && p.equivalencias.length > 0 ? p.equivalencias : [{ a: "", b: "" }]);
     setModoDuplicar(false);
     setEditandoDietaId(null);
+    setEditandoPlantillaDietaId(null);
+    setMostrarPlantillasDieta(false);
+    setCreando(true);
+    setTimeout(() => formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
+  };
+
+  // Edita la plantilla misma (a diferencia de "usarPlantillaDieta", que arma
+  // un plan nuevo para el alumno actual sin tocar la plantilla). Sirve para
+  // ver qué tiene guardado antes de decidir tocarla o borrarla, y para
+  // corregirla in situ -- solo afecta a alumnos a los que se les asigne de
+  // acá en adelante, nunca a planes ya asignados.
+  const editarPlantillaDieta = (p) => {
+    setNombrePlan(p.nombre || "");
+    setDiasDieta([]);
+    setCalorias(p.calorias || "");
+    setProteinas(p.proteinas || "");
+    setCarbos(p.carbos || "");
+    setGrasas(p.grasas || "");
+    setNotas(p.notas || "");
+    setHabitos(p.habitos || HABITOS_DIETA_DEFAULT);
+    setAguaLitros("");
+    setComidas(comidasParaEditar(p.comidas));
+    setSuplementosOpcionales(Array.isArray(p.suplementos_opcionales) ? p.suplementos_opcionales : []);
+    setModoDuplicar(false);
+    setEditandoDietaId(null);
+    setEditandoPlantillaDietaId(p.id);
     setMostrarPlantillasDieta(false);
     setCreando(true);
     setTimeout(() => formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
@@ -4681,10 +4931,10 @@ function DietaCoach({ alumno }) {
         alimentos: (c.alimentos || []).filter(a => a.alimento_id && a.cantidad).map(a => ({ alimento_id: a.alimento_id, cantidad: parseFloat(a.cantidad) || 0 })),
       })),
       suplementos_opcionales: suplementosOpcionales.filter(s => s.nombre && s.momento),
-      equivalencias: equivalencias.filter(e => e.a && e.b),
       notas,
       habitos,
     });
+    recordarSuplementosEnBiblioteca(suplementosOpcionales.filter(s => s.nombre && s.momento));
     setGuardandoPlantillaDieta(false);
     if (error) { alert("Error guardando la plantilla: " + error.message); return; }
     setGuardarPlantillaDietaAbierto(false);
@@ -4706,8 +4956,9 @@ function DietaCoach({ alumno }) {
   const formularioContenido = (
     <>
           <div style={{ fontSize:13, fontWeight:800, color:theme.accent, marginBottom:4 }}>
-            {editandoDietaId ? "✏️ EDITANDO PLAN" : "NUEVO PLAN NUTRICIONAL"}
+            {editandoPlantillaDietaId ? "✏️ EDITANDO PLANTILLA" : editandoDietaId ? "✏️ EDITANDO PLAN" : "NUEVO PLAN NUTRICIONAL"}
           </div>
+          {editandoPlantillaDietaId && <div style={{ fontSize:11, color:theme.muted, marginBottom:10 }}>Estás editando esta plantilla compartida directamente. Los cambios van a afectar a los próximos alumnos a los que se la asignes, no a los que ya tienen un plan asignado a partir de ella.</div>}
           {editandoDietaId && <div style={{ fontSize:11, color:theme.muted, marginBottom:10 }}>Los cambios se guardan sobre este mismo plan.</div>}
 
           <div style={{ marginBottom:14 }}>
@@ -4820,8 +5071,53 @@ function DietaCoach({ alumno }) {
                       {nuevoAlimentoAbierto !== key && (
                         <button onClick={() => setNuevoAlimentoAbierto(key)} title="Editar este alimento en la biblioteca" style={{ background:"transparent", border:"none", color:theme.accentLight, fontSize:11, cursor:"pointer", padding:0 }}>✏️</button>
                       )}
+                      {alim.grupo && a.cantidad > 0 && (
+                        <button onClick={() => setEquivalenciaAbierta(equivalenciaAbierta === key ? null : key)} style={{ background:"transparent", border:"none", color:theme.accentLight, fontSize:10, cursor:"pointer", padding:0 }}>
+                          {equivalenciaAbierta === key ? "▲ Ocultar equivalencias" : "🔁 Ver equivalencias"}
+                        </button>
+                      )}
                     </div>
                   )}
+                  {alim && equivalenciaAbierta === key && (() => {
+                    const opciones = alimentosEquivalentesAutomaticos(alim, a.cantidad, alimentosBiblioteca);
+                    const esCurada = Array.isArray(alim.sustitutos_ids);
+                    const idsUsados = new Set([alim.id, ...opciones.map(o => o.alimento.id)]);
+                    return (
+                      <div style={{ background:theme.bg, border:`1px solid ${theme.border}`, borderRadius:8, padding:8, marginTop:4 }}>
+                        <div style={{ fontSize:9, color:theme.muted, marginBottom:4 }}>
+                          {esCurada
+                            ? "Sustitutos elegidos para este alimento -- quedan igual por defecto en cualquier dieta futura, hasta que los cambies:"
+                            : `Automático -- mismo grupo (${labelGrupoAlimento(alim.grupo)}), los ${MAX_EQUIVALENCIAS_AUTOMATICAS} más parecidos en calorías. Agregá o sacá alguno para dejarlos fijos para este alimento:`}
+                        </div>
+                        {opciones.length > 0 ? opciones.map(o => (
+                          <div key={o.alimento.id} style={{ display:"flex", alignItems:"center", gap:6, marginBottom:2 }}>
+                            <div style={{ fontSize:11, color:theme.text, flex:1 }}>
+                              {o.cantidad}{esUnidadPorUno(o.alimento.unidad) ? ` ${o.alimento.unidad}` : "g"} {o.alimento.nombre}{o.alimento.estado_preparacion ? ` (pesado ${o.alimento.estado_preparacion})` : ""}
+                            </div>
+                            <button onClick={() => quitarSustituto(alim, opciones, o.alimento.id)} title="Sacar este sustituto"
+                              style={{ background:"transparent", border:"none", color:theme.danger, fontSize:13, cursor:"pointer", padding:0 }}>✕</button>
+                          </div>
+                        )) : (
+                          <div style={{ fontSize:11, color:theme.muted, marginBottom:4 }}>Sin sustitutos cargados.</div>
+                        )}
+                        <input style={{ ...inputStyle, fontSize:11, padding:"5px 8px", marginTop:6 }} placeholder="+ Agregar sustituto (buscar en la biblioteca)"
+                          value={busquedaSustituto[key] || ""} list={`lista-sustitutos-${key}`}
+                          onChange={e => {
+                            const val = e.target.value;
+                            const match = mapaAlimentos[normalizarNombreAlimento(val)];
+                            if (match && !idsUsados.has(match.id)) {
+                              agregarSustituto(alim, opciones, match.id);
+                              setBusquedaSustituto(prev => ({ ...prev, [key]: "" }));
+                            } else {
+                              setBusquedaSustituto(prev => ({ ...prev, [key]: val }));
+                            }
+                          }} />
+                        <datalist id={`lista-sustitutos-${key}`}>
+                          {alimentosBiblioteca.filter(a2 => !idsUsados.has(a2.id)).map(a2 => <option key={a2.id} value={a2.nombre} />)}
+                        </datalist>
+                      </div>
+                    );
+                  })()}
                   {nuevoAlimentoAbierto === key && (
                     <NuevoAlimentoForm nombreInicial={a.nombre_busqueda} alimentoExistente={alim || null} onCancelar={() => setNuevoAlimentoAbierto(null)} onCreado={(alimentoCreado) => onAlimentoCreado(ci, ai, alimentoCreado)} />
                   )}
@@ -4876,7 +5172,23 @@ function DietaCoach({ alumno }) {
           <div style={{ fontSize:10, color:theme.muted, marginBottom:8 }}>Agregá solo lo que le convenga a este alumno (ej: multivitamínico, creatina, cafeína).</div>
           {suplementosOpcionales.map((s, i) => (
             <div key={i} style={{ display:"flex", gap:6, marginBottom:6 }}>
-              <input style={{ ...inputStyle, flex:2 }} placeholder="Suplemento (ej: Creatina)" value={s.nombre} onChange={e => { const u=[...suplementosOpcionales]; u[i].nombre=e.target.value; setSuplementosOpcionales(u); }} />
+              <input style={{ ...inputStyle, flex:2 }} placeholder="Suplemento (ej: Creatina)" value={s.nombre} list="lista-suplementos"
+                onChange={e => {
+                  const val = e.target.value;
+                  const u = [...suplementosOpcionales];
+                  u[i].nombre = val;
+                  // Si el nombre calza con uno ya guardado en la biblioteca y
+                  // esta fila todavía no tiene dosis propia, se autocompleta
+                  // sola (se puede pisar a mano). El momento NO se
+                  // autocompleta a propósito -- depende de si ese día hay
+                  // entreno o es descanso, así que siempre se elige a mano.
+                  const match = mapaSuplementos[normalizarNombreAlimento(val)];
+                  if (match && !u[i].dosis) u[i].dosis = match.dosis || "";
+                  setSuplementosOpcionales(u);
+                }} />
+              <datalist id="lista-suplementos">
+                {suplementosBiblioteca.map(s2 => <option key={s2.id} value={s2.nombre} />)}
+              </datalist>
               <input style={{ ...inputStyle, flex:1 }} placeholder="Dosis" value={s.dosis} onChange={e => { const u=[...suplementosOpcionales]; u[i].dosis=e.target.value; setSuplementosOpcionales(u); }} />
               <select style={{ ...inputStyle, flex:2 }} value={s.momento || ""} onChange={e => { const u=[...suplementosOpcionales]; u[i].momento=e.target.value; setSuplementosOpcionales(u); }}>
                 <option value="">Momento...</option>
@@ -4886,17 +5198,6 @@ function DietaCoach({ alumno }) {
             </div>
           ))}
           <button onClick={() => setSuplementosOpcionales([...suplementosOpcionales, { nombre:"", dosis:"", momento:"" }])} style={{ background:"transparent", border:`1px dashed ${theme.border}`, borderRadius:6, padding:"4px 10px", color:theme.muted, fontSize:11, cursor:"pointer", marginBottom:14 }}>+ Suplemento</button>
-
-          {/* Equivalencias */}
-          <div style={{ fontSize:11, fontWeight:700, color:theme.muted, marginBottom:8 }}>EQUIVALENCIAS PERMITIDAS</div>
-          {equivalencias.map((e, i) => (
-            <div key={i} style={{ display:"flex", gap:6, alignItems:"center", marginBottom:6 }}>
-              <input style={{ ...inputStyle, flex:1 }} placeholder="Ej: Pollo" value={e.a} onChange={ev => { const u=[...equivalencias]; u[i].a=ev.target.value; setEquivalencias(u); }} />
-              <span style={{ color:theme.accent, fontWeight:700 }}>↔</span>
-              <input style={{ ...inputStyle, flex:1 }} placeholder="Ej: Pavo" value={e.b} onChange={ev => { const u=[...equivalencias]; u[i].b=ev.target.value; setEquivalencias(u); }} />
-            </div>
-          ))}
-          <button onClick={() => setEquivalencias([...equivalencias, { a:"", b:"" }])} style={{ background:"transparent", border:`1px dashed ${theme.border}`, borderRadius:6, padding:"4px 10px", color:theme.muted, fontSize:11, cursor:"pointer", marginBottom:14 }}>+ Equivalencia</button>
 
           {/* Notas */}
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
@@ -4916,7 +5217,7 @@ function DietaCoach({ alumno }) {
           </div>
           <textarea style={{ ...inputStyle, minHeight:90, resize:"none", marginBottom:14 }} placeholder="Un hábito por línea..." value={habitos} onChange={e => setHabitos(e.target.value)} />
 
-          {!guardarPlantillaDietaAbierto ? (
+          {!editandoPlantillaDietaId && (!guardarPlantillaDietaAbierto ? (
             <button onClick={() => { setNombrePlantillaDietaNueva(nombrePlan || ""); setGuardarPlantillaDietaAbierto(true); }}
               style={{ background:"transparent", border:`1px dashed ${theme.border}`, borderRadius:8, padding:"8px", color:theme.muted, fontSize:12, cursor:"pointer", width:"100%", marginBottom:12 }}>💾 Guardar como plantilla</button>
           ) : (
@@ -4928,11 +5229,11 @@ function DietaCoach({ alumno }) {
                 <button onClick={() => setGuardarPlantillaDietaAbierto(false)} style={{ background:"transparent", border:`1px solid ${theme.border}`, borderRadius:8, padding:"9px 12px", color:theme.muted, fontSize:12, cursor:"pointer" }}>×</button>
               </div>
             </div>
-          )}
+          ))}
 
           <div style={{ display:"flex", gap:8 }}>
-            <Btn onClick={guardar} style={{ background:theme.success }}>{guardando ? "Guardando..." : editandoDietaId ? "✓ Guardar Cambios" : "✓ Guardar Dieta"}</Btn>
-            <Btn variant="ghost" onClick={() => { setCreando(false); setEditandoDietaId(null); setGuardarPlantillaDietaAbierto(false); }}>Cancelar</Btn>
+            <Btn onClick={guardar} style={{ background:theme.success }}>{guardando ? "Guardando..." : editandoPlantillaDietaId ? "✓ Guardar Cambios en la Plantilla" : editandoDietaId ? "✓ Guardar Cambios" : "✓ Guardar Dieta"}</Btn>
+            <Btn variant="ghost" onClick={() => { setCreando(false); setEditandoDietaId(null); setEditandoPlantillaDietaId(null); setGuardarPlantillaDietaAbierto(false); }}>Cancelar</Btn>
           </div>
     </>
   );
@@ -4948,6 +5249,17 @@ function DietaCoach({ alumno }) {
       {/* Dietas existentes */}
       {!loading && dietas.map(d => (
         <Card key={d.id} style={{ marginBottom:10 }}>
+          {d.publicada === false && (
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:8, background:`${theme.warning}15`, border:`1px solid ${theme.warning}44`, borderRadius:8, padding:"6px 10px", marginBottom:8 }}>
+              <span style={{ fontSize:11, fontWeight:700, color:theme.warning }}>📝 Borrador -- el alumno no la ve todavía</span>
+              <button onClick={async () => {
+                  const { error } = await supabase.from("dietas").update({ publicada: true }).eq("id", d.id);
+                  if (error) { alert("Error publicando la dieta: " + error.message); return; }
+                  cargarDietas();
+                }}
+                style={{ background:theme.warning, border:"none", borderRadius:6, padding:"4px 9px", color:"#1a1200", fontSize:11, cursor:"pointer", fontWeight:800, whiteSpace:"nowrap" }}>📤 Cargar</button>
+            </div>
+          )}
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
             <div style={{ fontSize:14, fontWeight:700, color:theme.text }}>🥗 {d.nombre || "Plan Nutricional"}</div>
             <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
@@ -4999,8 +5311,16 @@ function DietaCoach({ alumno }) {
         <Card style={{ marginTop:10 }}>
           <div style={{ fontSize:12, color:theme.muted, marginBottom:10 }}>BIBLIOTECA DE ALIMENTOS</div>
           <input style={{ ...inputStyle, marginBottom:10 }} placeholder="Buscar alimento..." value={busquedaBiblioteca} onChange={e => setBusquedaBiblioteca(e.target.value)} />
+          {!agregandoAlimentoBiblioteca ? (
+            <button onClick={() => setAgregandoAlimentoBiblioteca(true)} style={{ background:"transparent", border:`1px dashed ${theme.accent}`, borderRadius:8, padding:"8px", color:theme.accentLight, fontSize:12, fontWeight:600, cursor:"pointer", width:"100%", marginBottom:10 }}>+ Agregar alimento</button>
+          ) : (
+            <NuevoAlimentoForm
+              onCancelar={() => setAgregandoAlimentoBiblioteca(false)}
+              onCreado={(alimentoCreado) => { onAlimentoGuardadoEnBiblioteca(alimentoCreado); setAgregandoAlimentoBiblioteca(false); }}
+            />
+          )}
           {alimentosBiblioteca.length === 0 ? (
-            <div style={{ fontSize:13, color:theme.muted }}>Todavía no cargaste ningún alimento. Se cargan desde el armador de dieta, al escribir un alimento que no existe todavía.</div>
+            <div style={{ fontSize:13, color:theme.muted, marginTop:10 }}>Todavía no cargaste ningún alimento. Agregalo arriba, o se carga solo desde el armador de dieta al escribir un alimento que no existe todavía.</div>
           ) : alimentosBiblioteca.filter(a => normalizarNombreAlimento(a.nombre).includes(normalizarNombreAlimento(busquedaBiblioteca))).map(a => (
             <div key={a.id} style={{ padding:"8px 0", borderBottom:`1px solid ${theme.border}` }}>
               {editandoAlimentoId === a.id ? (
@@ -5014,7 +5334,10 @@ function DietaCoach({ alumno }) {
                   <div style={{ display:"flex", alignItems:"center", gap:8, minWidth:0 }}>
                     {a.imagen_url && <img src={a.imagen_url} alt="" style={{ width:36, height:36, borderRadius:6, objectFit:"cover", flexShrink:0 }} />}
                     <div style={{ minWidth:0 }}>
-                      <div style={{ fontSize:13, fontWeight:700, color:theme.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{a.nombre}</div>
+                      <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                        <div style={{ fontSize:13, fontWeight:700, color:theme.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{a.nombre}</div>
+                        {a.grupo && <Tag color={theme.accentLight}>{labelGrupoAlimento(a.grupo)}</Tag>}
+                      </div>
                       <div style={{ fontSize:10, color:theme.muted }}>
                         por {esUnidadPorUno(a.unidad) ? `1 ${a.unidad}` : `100${a.unidad}`}: {a.calorias_base} kcal · {a.proteinas_base}p · {a.carbos_base}c · {a.grasas_base}g
                       </div>
@@ -5043,6 +5366,7 @@ function DietaCoach({ alumno }) {
                 <div style={{ fontSize:11, color:theme.muted }}>{(p.comidas || []).length} comidas · {p.calorias ? `${p.calorias} kcal` : "sin objetivo"}</div>
               </div>
               <div style={{ display:"flex", gap:6 }}>
+                <button onClick={() => editarPlantillaDieta(p)} style={{ background:`${theme.success}22`, border:`1px solid ${theme.success}44`, borderRadius:6, padding:"4px 8px", color:theme.success, fontSize:11, cursor:"pointer", fontWeight:700 }}>✏️ Editar</button>
                 <button onClick={() => usarPlantillaDieta(p)} style={{ background:`${theme.accent}22`, border:`1px solid ${theme.accent}44`, borderRadius:6, padding:"4px 8px", color:theme.accentLight, fontSize:11, cursor:"pointer", fontWeight:700 }}>Usar</button>
                 <button onClick={() => eliminarPlantillaDieta(p)} style={{ background:`${theme.danger}22`, border:`1px solid ${theme.danger}44`, borderRadius:6, padding:"4px 8px", color:theme.danger, fontSize:11, cursor:"pointer", fontWeight:700 }}>× Eliminar</button>
               </div>
@@ -5674,7 +5998,7 @@ function ProgresoScreen({ onNav }) {
       const hoyOp30 = fechaOperativa();
       const hace30Str = aFechaStr((() => { const d = new Date(hoyOp30); d.setDate(d.getDate() - 29); return d; })());
       const [rutinasRes, entRes, diaRes, dieRes] = await Promise.all([
-        supabase.from("rutinas").select("dia").eq("usuario_id", user.id),
+        supabase.from("rutinas").select("dia").eq("usuario_id", user.id).eq("publicada", true),
         supabase.from("registros_entreno").select("fecha").eq("usuario_id", user.id).gte("fecha", hace30Str),
         supabase.from("diario_registros").select("fecha").eq("usuario_id", user.id).gte("fecha", hace30Str),
         supabase.from("dieta_registros").select("fecha, estado").eq("usuario_id", user.id).gte("fecha", hace30Str),
@@ -6344,6 +6668,10 @@ function RutinaCoach({ alumno }) {
   const [creando, setCreando] = useState(false);
   const [modoDuplicar, setModoDuplicar] = useState(false);
   const [editandoRutinaId, setEditandoRutinaId] = useState(null);
+  // Id de la plantilla que se está editando DIRECTAMENTE (distinto de
+  // "usar plantilla", que arma una rutina nueva para el alumno sin tocar
+  // la plantilla). Acá el formulario actualiza la plantilla compartida.
+  const [editandoPlantillaId, setEditandoPlantillaId] = useState(null);
   const formRef = useRef(null);
   const [verCargas, setVerCargas] = useState({});
   const [cargas, setCargas] = useState({});
@@ -6380,7 +6708,9 @@ function RutinaCoach({ alumno }) {
   const [modoPlantilla, setModoPlantilla] = useState(false);
   const [guardarPlantillaAbierto, setGuardarPlantillaAbierto] = useState(false);
   const [nombrePlantillaNueva, setNombrePlantillaNueva] = useState("");
+  const [defaultParaPlantillaNueva, setDefaultParaPlantillaNueva] = useState(""); // "" | "Femenino" | "Masculino"
   const [guardandoPlantilla, setGuardandoPlantilla] = useState(false);
+  const [asignandoDefault, setAsignandoDefault] = useState(false);
 
   useEffect(() => {
     cargarRutinas();
@@ -6448,11 +6778,39 @@ function RutinaCoach({ alumno }) {
     setTimeout(() => formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
   };
 
+  // Edita la plantilla misma (a diferencia de "usarPlantilla", que arma una
+  // rutina nueva para el alumno actual sin tocar la plantilla). Se usa para
+  // poder ver qué tiene guardado antes de decidir tocarla o borrarla, y para
+  // corregirla in situ -- solo afecta a alumnos a los que se les asigne de
+  // acá en adelante, nunca a rutinas ya asignadas.
+  const editarPlantilla = (p) => {
+    setNombreRutina(p.nombre || "");
+    setDiaRutina(p.dia || "");
+    setGrupoMuscularRutina(p.grupo_muscular || "");
+    setCalentamientoGeneral(Array.isArray(p.calentamiento_general) ? p.calentamiento_general : []);
+    setVueltaCalma(Array.isArray(p.vuelta_calma) ? p.vuelta_calma : []);
+    setCardio(Array.isArray(p.cardio) ? p.cardio : []);
+    setMetaPasos(p.meta_pasos || "");
+    const ejerciciosPlantilla = Array.isArray(p.ejercicios) && p.ejercicios.length > 0
+      ? p.ejercicios.map(ej => ({ ...ej, _dbId: undefined }))
+      : [{ nombre: "", videoUrl: "", descansoDesde: 60, descansoHasta: 90, tempoBajada: "3", tempoPausa: "1", tempoSubida: "1", grupoSuperserie: "", seriesAproximacion: [{ reps: "8", pctDesde: "50", pctHasta: "60" }, { reps: "6", pctDesde: "70", pctHasta: "80" }, { reps: "3", pctDesde: "85", pctHasta: "90" }], seriesEfectivas: [{ reps: "10", rir: 2, tecnica: "normal" }] }];
+    setEjercicios(ejerciciosPlantilla);
+    setEjerciciosEliminados([]); setAproxExpandida({});
+    setDefaultParaPlantillaNueva(p.default_para || "");
+    setModoPlantilla(false);
+    setModoDuplicar(false);
+    setEditandoRutinaId(null);
+    setEditandoPlantillaId(p.id);
+    setMostrarPlantillas(false);
+    setCreando(true);
+    setTimeout(() => formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
+  };
+
   const guardarComoPlantilla = async () => {
     if (!nombrePlantillaNueva.trim()) { alert("Ponle un nombre a la plantilla."); return; }
     setGuardandoPlantilla(true);
     const ejerciciosLimpios = ejercicios.filter(ej => ej.nombre).map(ej => ({ ...ej, _dbId: undefined }));
-    const { error } = await supabase.from("rutina_plantillas").insert({
+    const datos = {
       nombre: nombrePlantillaNueva.trim(),
       dia: diaRutina,
       grupo_muscular: grupoMuscularRutina || null,
@@ -6461,11 +6819,30 @@ function RutinaCoach({ alumno }) {
       cardio: cardio,
       meta_pasos: metaPasos ? parseInt(metaPasos) : null,
       ejercicios: ejerciciosLimpios,
-    });
+      default_para: defaultParaPlantillaNueva || null,
+    };
+    // Si ya existe una plantilla con el mismo nombre, se actualiza esa
+    // misma fila en vez de crear una nueva (antes se creaba siempre una
+    // nueva, y por eso terminaban quedando varias plantillas repetidas con
+    // el mismo nombre en la lista). Se pide confirmación porque esto
+    // reemplaza la plantilla compartida: no afecta a ningún alumno que ya
+    // tenga una rutina asignada (eso vive aparte, en la tabla "rutinas"),
+    // pero sí a cualquier alumno nuevo al que se la asignes después.
+    const existente = plantillas.find(p => normalizarNombreAlimento(p.nombre) === normalizarNombreAlimento(datos.nombre));
+    if (existente) {
+      if (!confirm(`Ya existe una plantilla llamada "${existente.nombre}". Si continuás, se va a reemplazar esa plantilla compartida con esta versión -- esto afecta a futuros alumnos que la usen (no a los que ya la tienen asignada). ¿Confirmás?`)) {
+        setGuardandoPlantilla(false);
+        return;
+      }
+    }
+    const { error } = existente
+      ? await supabase.from("rutina_plantillas").update(datos).eq("id", existente.id)
+      : await supabase.from("rutina_plantillas").insert(datos);
     setGuardandoPlantilla(false);
     if (error) { alert("Error guardando la plantilla: " + error.message); return; }
     setGuardarPlantillaAbierto(false);
     setNombrePlantillaNueva("");
+    setDefaultParaPlantillaNueva("");
     cargarPlantillas();
   };
 
@@ -6474,6 +6851,63 @@ function RutinaCoach({ alumno }) {
     const { error } = await supabase.from("rutina_plantillas").delete().eq("id", p.id);
     if (error) { alert("Error eliminando la plantilla: " + error.message); return; }
     cargarPlantillas();
+  };
+
+  // Crea, a partir de una plantilla, una rutina asignada a un alumno --
+  // misma transformación de datos que hace guardarRutina() en su rama de
+  // "rutina nueva", pero parametrizada para poder repetirla varias veces
+  // (una por cada plantilla marcada como default para el sexo del alumno).
+  // Se crea como borrador (publicada: false): el alumno no la ve hasta que
+  // el coach la revisa y la carga con su propio botón.
+  const crearRutinaDesdePlantilla = async (p, alumnoId) => {
+    const { data: rutina, error: errRutina } = await supabase.from("rutinas").insert({
+      usuario_id: alumnoId,
+      nombre: p.nombre,
+      dia: p.dia,
+      grupo_muscular: p.grupo_muscular || null,
+      calentamiento_general: p.calentamiento_general || [],
+      vuelta_calma: p.vuelta_calma || [],
+      cardio: p.cardio || [],
+      meta_pasos: p.meta_pasos || null,
+      publicada: false,
+    }).select().single();
+    if (errRutina || !rutina) return false;
+    const ejerciciosPlantilla = Array.isArray(p.ejercicios) ? p.ejercicios : [];
+    for (let i = 0; i < ejerciciosPlantilla.length; i++) {
+      const ej = ejerciciosPlantilla[i];
+      if (!ej.nombre) continue;
+      const seriesCombinadas = [
+        ...(ej.seriesAproximacion || []).map(s => ({ ...s, tipo: "aproximacion" })),
+        ...(ej.seriesEfectivas || []).map(s => ({ ...s, tipo: "efectiva" })),
+      ];
+      await supabase.from("ejercicios").insert({
+        rutina_id: rutina.id,
+        nombre: ej.nombre,
+        video_url: ej.videoUrl,
+        descanso: parseInt(ej.descansoHasta) || 90,
+        descanso_desde: parseInt(ej.descansoDesde) || null,
+        descanso_hasta: parseInt(ej.descansoHasta) || null,
+        tempo: `${ej.tempoBajada || "3"}-${ej.tempoPausa || "1"}-${ej.tempoSubida || "1"}`,
+        grupo_superserie: ej.grupoSuperserie || null,
+        orden: i,
+        series: seriesCombinadas,
+      });
+    }
+    return true;
+  };
+
+  // Split completo por defecto según el sexo del alumno (todas las
+  // plantillas marcadas "default_para" = su sexo). Se le puede asignar de
+  // una a un alumno que todavía no tiene ninguna rutina -- quedan todas
+  // como borrador para que el coach las revise/corrija antes de cargarlas.
+  const plantillasDefaultAlumno = plantillas.filter(p => alumno?.sexo && p.default_para === alumno.sexo);
+  const asignarRutinaPorDefecto = async () => {
+    if (plantillasDefaultAlumno.length === 0) return;
+    if (!confirm(`¿Asignar las ${plantillasDefaultAlumno.length} rutinas por defecto (${alumno.sexo}) a ${alumno.nombre}? Quedan como borrador para que las revises antes de que el alumno las vea.`)) return;
+    setAsignandoDefault(true);
+    for (const p of plantillasDefaultAlumno) await crearRutinaDesdePlantilla(p, alumno.id);
+    setAsignandoDefault(false);
+    cargarRutinas();
   };
 
   const cargarRutinas = async () => {
@@ -6595,7 +7029,26 @@ function RutinaCoach({ alumno }) {
     if (!nombreRutina) return;
     setGuardando(true);
 
-    if (editandoRutinaId) {
+    if (editandoPlantillaId) {
+      // Edición directa de la plantilla compartida: no crea ni toca ninguna
+      // rutina asignada a un alumno, solo actualiza la fila en
+      // rutina_plantillas. Afecta a los próximos alumnos a los que se les
+      // asigne esta plantilla, nunca a los que ya la tienen asignada.
+      const ejerciciosLimpios = ejercicios.filter(ej => ej.nombre).map(ej => ({ ...ej, _dbId: undefined }));
+      const { error } = await supabase.from("rutina_plantillas").update({
+        nombre: nombreRutina,
+        dia: diaRutina,
+        grupo_muscular: grupoMuscularRutina || null,
+        calentamiento_general: calentamientoGeneral,
+        vuelta_calma: vueltaCalma,
+        cardio: cardio,
+        meta_pasos: metaPasos ? parseInt(metaPasos) : null,
+        ejercicios: ejerciciosLimpios,
+        default_para: defaultParaPlantillaNueva || null,
+      }).eq("id", editandoPlantillaId);
+      if (error) { alert("Error actualizando la plantilla: " + error.message); setGuardando(false); return; }
+      cargarPlantillas();
+    } else if (editandoRutinaId) {
       // Edición real: actualiza la rutina y sus ejercicios existentes, sin perder el historial de cargas
       const { error: errRutina } = await supabase
         .from("rutinas")
@@ -6639,10 +7092,12 @@ function RutinaCoach({ alumno }) {
         if (errDel) { alert("Error eliminando ejercicio: " + errDel.message); setGuardando(false); return; }
       }
     } else {
-      // Rutina nueva o duplicada: se crea desde cero
+      // Rutina nueva o duplicada: se crea desde cero, como borrador -- el
+      // alumno no la ve hasta que el coach la revisa y la carga con su
+      // propio botón "📤 Cargar" en la tarjeta de la rutina.
       const { data: rutina, error: errRutina } = await supabase
         .from("rutinas")
-        .insert({ usuario_id: alumno.id, nombre: nombreRutina, dia: diaRutina, grupo_muscular: grupoMuscularRutina || null, calentamiento_general: calentamientoGeneral, vuelta_calma: vueltaCalma, cardio: cardio, meta_pasos: metaPasos ? parseInt(metaPasos) : null })
+        .insert({ usuario_id: alumno.id, nombre: nombreRutina, dia: diaRutina, grupo_muscular: grupoMuscularRutina || null, calentamiento_general: calentamientoGeneral, vuelta_calma: vueltaCalma, cardio: cardio, meta_pasos: metaPasos ? parseInt(metaPasos) : null, publicada: false })
         .select().single();
       if (errRutina) { alert("Error creando rutina: " + errRutina.message); setGuardando(false); return; }
 
@@ -6678,7 +7133,9 @@ function RutinaCoach({ alumno }) {
     setModoPlantilla(false);
     setGuardarPlantillaAbierto(false);
     setNombrePlantillaNueva("");
+    setDefaultParaPlantillaNueva("");
     setEditandoRutinaId(null);
+    setEditandoPlantillaId(null);
     setNombreRutina("");
     setDiaRutina("");
     setGrupoMuscularRutina("");
@@ -6734,6 +7191,7 @@ function RutinaCoach({ alumno }) {
     setModoDuplicar(modo === "duplicar");
     setModoPlantilla(false);
     setEditandoRutinaId(modo === "editar" ? rutina.id : null);
+    setEditandoPlantillaId(null);
     setCreando(true);
     // En modo "editar" el formulario se abre como acordeón debajo de la misma
     // rutina en la lista (ya está a la vista) -- el scroll al fondo de la
@@ -6753,8 +7211,9 @@ function RutinaCoach({ alumno }) {
   const formularioContenido = (
     <>
           <div style={{ fontSize:13, fontWeight:800, color:theme.accent, marginBottom:4 }}>
-            {editandoRutinaId ? "✏️ EDITANDO RUTINA" : modoPlantilla ? "🗂️ DESDE PLANTILLA" : modoDuplicar ? "⧉ DUPLICANDO RUTINA" : "NUEVA RUTINA"}
+            {editandoPlantillaId ? "✏️ EDITANDO PLANTILLA" : editandoRutinaId ? "✏️ EDITANDO RUTINA" : modoPlantilla ? "🗂️ DESDE PLANTILLA" : modoDuplicar ? "⧉ DUPLICANDO RUTINA" : "NUEVA RUTINA"}
           </div>
+          {editandoPlantillaId && <div style={{ fontSize:11, color:theme.muted, marginBottom:10 }}>Estás editando esta plantilla compartida directamente (reps, %, tempo, descanso -- lo que vos definiste al crearla, nunca datos de un alumno puntual). Los cambios van a afectar a los próximos alumnos a los que se la asignes, no a los que ya tienen una rutina asignada a partir de ella.</div>}
           {editandoRutinaId && <div style={{ fontSize:11, color:theme.muted, marginBottom:10 }}>Estás editando esta rutina directamente. Los cambios se guardan sobre la misma rutina y se conserva el historial de cargas ya registrado.</div>}
           {modoDuplicar && <div style={{ fontSize:11, color:theme.muted, marginBottom:10 }}>Ajustá lo que necesites (nombre, series, pesos, ejercicios) y guardá. Se creará como una rutina nueva; la original no se modifica.</div>}
           {modoPlantilla && <div style={{ fontSize:11, color:theme.muted, marginBottom:10 }}>Cargada desde una plantilla. Ajusta lo que necesites para este alumno (ejercicios, series, pesos) y guarda -- se crea como una rutina nueva; la plantilla no se modifica.</div>}
@@ -7065,23 +7524,44 @@ function RutinaCoach({ alumno }) {
             <button onClick={() => setVueltaCalma([...vueltaCalma, { nombre:"", detalle:"" }])} style={{ background:"transparent", border:`1px dashed ${theme.border}`, borderRadius:6, padding:"4px 10px", color:theme.muted, fontSize:11, cursor:"pointer" }}>+ Estiramiento</button>
           </div>
 
-          {!guardarPlantillaAbierto ? (
-            <button onClick={() => { setNombrePlantillaNueva(nombreRutina || ""); setGuardarPlantillaAbierto(true); }}
+          {editandoPlantillaId ? (
+            <div style={{ marginBottom:12 }}>
+              <div style={{ fontSize:11, color:theme.muted, marginBottom:6 }}>Default para (opcional -- para asignarla sola a alumnos nuevos según su sexo)</div>
+              <select style={inputStyle} value={defaultParaPlantillaNueva} onChange={e => setDefaultParaPlantillaNueva(e.target.value)}>
+                <option value="">Ninguno</option>
+                <option value="Femenino">Mujeres</option>
+                <option value="Masculino">Hombres</option>
+              </select>
+            </div>
+          ) : !guardarPlantillaAbierto ? (
+            <button onClick={() => {
+                const nombreBase = nombreRutina || "";
+                setNombrePlantillaNueva(nombreBase);
+                const existente = plantillas.find(p => normalizarNombreAlimento(p.nombre) === normalizarNombreAlimento(nombreBase));
+                setDefaultParaPlantillaNueva(existente?.default_para || "");
+                setGuardarPlantillaAbierto(true);
+              }}
               style={{ background:"transparent", border:`1px dashed ${theme.border}`, borderRadius:8, padding:"8px", color:theme.muted, fontSize:12, cursor:"pointer", width:"100%", marginBottom:12 }}>💾 Guardar como plantilla</button>
           ) : (
             <div style={{ background:theme.surface, borderRadius:8, padding:10, marginBottom:12 }}>
               <div style={{ fontSize:11, color:theme.muted, marginBottom:6 }}>Nombre de la plantilla (ej: "Cuádriceps Lunes")</div>
-              <div style={{ display:"flex", gap:8 }}>
+              <div style={{ display:"flex", gap:8, marginBottom:8 }}>
                 <input style={inputStyle} value={nombrePlantillaNueva} onChange={e => setNombrePlantillaNueva(e.target.value)} placeholder="Nombre de la plantilla" />
                 <button onClick={guardarComoPlantilla} disabled={guardandoPlantilla} style={{ background:theme.accent, border:"none", borderRadius:8, padding:"9px 14px", color:"#fff", fontSize:12, fontWeight:700, cursor:"pointer", whiteSpace:"nowrap" }}>{guardandoPlantilla ? "Guardando..." : "Guardar"}</button>
                 <button onClick={() => setGuardarPlantillaAbierto(false)} style={{ background:"transparent", border:`1px solid ${theme.border}`, borderRadius:8, padding:"9px 12px", color:theme.muted, fontSize:12, cursor:"pointer" }}>×</button>
               </div>
+              <div style={{ fontSize:11, color:theme.muted, marginBottom:6 }}>Default para (opcional -- para asignarla sola a alumnos nuevos según su sexo)</div>
+              <select style={inputStyle} value={defaultParaPlantillaNueva} onChange={e => setDefaultParaPlantillaNueva(e.target.value)}>
+                <option value="">Ninguno</option>
+                <option value="Femenino">Mujeres</option>
+                <option value="Masculino">Hombres</option>
+              </select>
             </div>
           )}
 
           <div style={{ display:"flex", gap:8 }}>
-            <Btn onClick={guardarRutina} style={{ background:theme.success }}>{guardando ? "Guardando..." : editandoRutinaId ? "✓ Guardar Cambios" : "✓ Guardar Rutina"}</Btn>
-            <Btn variant="ghost" onClick={() => { setCreando(false); setModoDuplicar(false); setModoPlantilla(false); setGuardarPlantillaAbierto(false); setEditandoRutinaId(null); }}>Cancelar</Btn>
+            <Btn onClick={guardarRutina} style={{ background:theme.success }}>{guardando ? "Guardando..." : editandoPlantillaId ? "✓ Guardar Cambios en la Plantilla" : editandoRutinaId ? "✓ Guardar Cambios" : "✓ Guardar Rutina"}</Btn>
+            <Btn variant="ghost" onClick={() => { setCreando(false); setModoDuplicar(false); setModoPlantilla(false); setGuardarPlantillaAbierto(false); setEditandoRutinaId(null); setEditandoPlantillaId(null); }}>Cancelar</Btn>
           </div>
     </>
   );
@@ -7120,6 +7600,17 @@ function RutinaCoach({ alumno }) {
                 {r.grupo_muscular && <ImagenGrupoMuscular nombre={r.grupo_muscular} mapa={mapaImagenesGrupoMuscular} size={30} />}
                 <div style={{ fontSize:14, fontWeight:800, color:theme.text, textTransform:"uppercase", letterSpacing:0.4, lineHeight:1.3, display:"-webkit-box", WebkitLineClamp:2, WebkitBoxOrient:"vertical", overflow:"hidden" }}>💪 {r.nombre}</div>
               </div>
+              {r.publicada === false && (
+                <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:8, background:`${theme.warning}15`, border:`1px solid ${theme.warning}44`, borderRadius:8, padding:"6px 10px", marginBottom:8 }}>
+                  <span style={{ fontSize:11, fontWeight:700, color:theme.warning }}>📝 Borrador -- el alumno no la ve todavía</span>
+                  <button onClick={async () => {
+                      const { error } = await supabase.from("rutinas").update({ publicada: true }).eq("id", r.id);
+                      if (error) { alert("Error publicando la rutina: " + error.message); return; }
+                      cargarRutinas();
+                    }}
+                    style={{ background:theme.warning, border:"none", borderRadius:6, padding:"4px 9px", color:"#1a1200", fontSize:11, cursor:"pointer", fontWeight:800, whiteSpace:"nowrap" }}>📤 Cargar</button>
+                </div>
+              )}
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8, gap:6, flexWrap:"nowrap" }}>
                 <div style={{ display:"flex", alignItems:"center", gap:6, minWidth:0, overflow:"hidden" }}>
                   <Tag>{r.dia || "Sin día"}</Tag>
@@ -7191,7 +7682,20 @@ function RutinaCoach({ alumno }) {
             </Card>
           ))}
         </div>
-      ) : null}
+      ) : (
+        <Card style={{ textAlign:"center", padding:18, marginBottom:14 }}>
+          <div style={{ fontSize:22, marginBottom:6 }}>🆕</div>
+          <div style={{ fontSize:13, fontWeight:700, color:theme.text, marginBottom:4 }}>Todavía no tiene ninguna rutina asignada</div>
+          {plantillasDefaultAlumno.length > 0 ? (
+            <>
+              <div style={{ fontSize:11, color:theme.muted, marginBottom:10 }}>Se le puede asignar de una el split por defecto para {alumno.sexo} ({plantillasDefaultAlumno.length} día{plantillasDefaultAlumno.length > 1 ? "s" : ""}), y después corregir lo que haga falta -- queda como borrador hasta que la cargues.</div>
+              <Btn onClick={asignarRutinaPorDefecto} disabled={asignandoDefault}>{asignandoDefault ? "Asignando..." : `✓ Asignar rutina por defecto (${alumno.sexo})`}</Btn>
+            </>
+          ) : (
+            <div style={{ fontSize:11, color:theme.muted }}>{alumno?.sexo ? `No tenés plantillas marcadas como default para "${alumno.sexo}" todavía.` : "Este alumno no tiene sexo cargado en su ficha todavía."} Podés armar una rutina abajo y marcarla como default al guardarla como plantilla.</div>
+          )}
+        </Card>
+      )}
 
       {/* Botón crear / usar plantilla */}
       {!creando ? (
@@ -7209,10 +7713,14 @@ function RutinaCoach({ alumno }) {
           ) : plantillas.map(p => (
             <div key={p.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"8px 0", borderBottom:`1px solid ${theme.border}` }}>
               <div>
-                <div style={{ fontSize:13, fontWeight:700, color:theme.text }}>{p.nombre}</div>
+                <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                  <div style={{ fontSize:13, fontWeight:700, color:theme.text }}>{p.nombre}</div>
+                  {p.default_para && <Tag color={p.default_para === "Femenino" ? theme.gold : theme.accentLight}>{p.default_para === "Femenino" ? "♀ Default" : "♂ Default"}</Tag>}
+                </div>
                 <div style={{ fontSize:11, color:theme.muted }}>{p.dia || "Sin día"} · {(p.ejercicios || []).length} ejercicios</div>
               </div>
               <div style={{ display:"flex", gap:6 }}>
+                <button onClick={() => editarPlantilla(p)} style={{ background:`${theme.success}22`, border:`1px solid ${theme.success}44`, borderRadius:6, padding:"4px 8px", color:theme.success, fontSize:11, cursor:"pointer", fontWeight:700 }}>✏️ Editar</button>
                 <button onClick={() => usarPlantilla(p)} style={{ background:`${theme.accent}22`, border:`1px solid ${theme.accent}44`, borderRadius:6, padding:"4px 8px", color:theme.accentLight, fontSize:11, cursor:"pointer", fontWeight:700 }}>Usar</button>
                 <button onClick={() => eliminarPlantilla(p)} style={{ background:`${theme.danger}22`, border:`1px solid ${theme.danger}44`, borderRadius:6, padding:"4px 8px", color:theme.danger, fontSize:11, cursor:"pointer", fontWeight:700 }}>× Eliminar</button>
               </div>
