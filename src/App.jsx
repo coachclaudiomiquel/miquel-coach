@@ -6063,6 +6063,49 @@ function ProgresoMetricas({ userId }) {
   const [pasosResumen, setPasosResumen] = useState([]);
   const [anillos30, setAnillos30] = useState(null);
 
+  // Detalle de un día puntual en el gráfico de pasos: se arrastra el dedo
+  // (o se pasa el mouse) sobre las barras y va apareciendo un globito con el
+  // día y los pasos de esa barra en particular, con una línea guía que la
+  // acompaña -- reemplaza el tooltip nativo del navegador que había antes.
+  const pasosBarsRef = useRef(null);
+  const pasosBarRefs = useRef([]);
+  const pasosTooltipRef = useRef(null);
+  const pasosDraggingRef = useRef(false);
+  const pasosHideTimerRef = useRef(null);
+  const [pasosScrub, setPasosScrub] = useState(null); // { idx, left } | null
+
+  const pasosActualizarScrub = (clientX) => {
+    const bars = pasosBarRefs.current.filter(Boolean);
+    if (!bars.length) return;
+    let idx = 0, mejorDist = Infinity;
+    bars.forEach((el, i) => {
+      const r = el.getBoundingClientRect();
+      const centro = r.left + r.width / 2;
+      const dist = Math.abs(clientX - centro);
+      if (dist < mejorDist) { mejorDist = dist; idx = i; }
+    });
+    const bar = bars[idx];
+    clearTimeout(pasosHideTimerRef.current);
+    setPasosScrub({ idx, left: bar.offsetLeft + bar.offsetWidth / 2 });
+  };
+  const pasosTerminarScrub = () => {
+    pasosDraggingRef.current = false;
+    clearTimeout(pasosHideTimerRef.current);
+    pasosHideTimerRef.current = setTimeout(() => setPasosScrub(null), 900);
+  };
+  // El globito se centra en la barra, pero cerca de los bordes de la tarjeta
+  // se saldría y quedaría cortado -- este efecto lo corre hacia adentro lo
+  // justo para que siempre se vea completo (día + pasos).
+  useEffect(() => {
+    if (!pasosScrub) return;
+    const row = pasosBarsRef.current, tip = pasosTooltipRef.current;
+    if (!row || !tip) return;
+    const anchoFila = row.clientWidth, anchoTip = tip.offsetWidth, margen = 6;
+    let left = Math.max(anchoTip / 2 + margen, pasosScrub.left);
+    left = Math.min(anchoFila - anchoTip / 2 - margen, left);
+    tip.style.left = left + "px";
+  }, [pasosScrub]);
+
   useEffect(() => {
     if (!userId) { setLoading(false); return; }
     const cargar = async () => {
@@ -6241,25 +6284,47 @@ function ProgresoMetricas({ userId }) {
           const promPasos = Math.round(pasosResumen.reduce((a, p) => a + p.pasos, 0) / pasosResumen.length);
           const barH = 90;
           const anchoBarra = Math.max(6, Math.min(18, 90 / pasosResumen.length));
+          pasosBarRefs.current = [];
+          const pScrub = pasosScrub && pasosResumen[pasosScrub.idx];
           return (
             <>
               <div style={{ fontSize: 20, fontWeight: 800, color: theme.text, marginBottom: 12 }}>
                 {promPasos.toLocaleString("es-CL")} <span style={{ fontSize: 12, color: theme.muted, fontWeight: 600 }}>pasos/día promedio</span>
               </div>
-              <div style={{ display: "flex", alignItems: "flex-end", gap: Math.max(2, 4 - Math.floor(pasosResumen.length / 15)), height: barH + 24, overflowX: pasosResumen.length > 20 ? "auto" : "visible" }}>
-                {pasosResumen.map((p, i) => {
-                  const h = Math.max(3, (p.pasos / maxPasos) * barH);
-                  const fechaCorta = new Date(p.fecha).toLocaleDateString("es-CL", { day: "numeric", month: "short" });
-                  return (
-                    <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0, width: anchoBarra }}>
-                      <div title={`${p.pasos.toLocaleString("es-CL")} pasos`} style={{ width: "100%", height: h, background: `linear-gradient(180deg, ${theme.accentLight}, ${theme.accent})`, borderRadius: 3, boxShadow: `0 0 6px ${theme.accent}55` }} />
-                      {(i === 0 || i === pasosResumen.length - 1 || pasosResumen.length <= 8) && (
-                        <div style={{ fontSize: 8, color: theme.muted, marginTop: 4, whiteSpace: "nowrap" }}>{fechaCorta}</div>
-                      )}
-                    </div>
-                  );
-                })}
+              <div style={{ position: "relative", paddingTop: 40 }}>
+                <div ref={pasosBarsRef}
+                  onPointerDown={e => { pasosDraggingRef.current = true; clearTimeout(pasosHideTimerRef.current); e.currentTarget.setPointerCapture?.(e.pointerId); pasosActualizarScrub(e.clientX); }}
+                  onPointerMove={e => { if (pasosDraggingRef.current || e.pointerType === "mouse") pasosActualizarScrub(e.clientX); }}
+                  onPointerUp={pasosTerminarScrub}
+                  onPointerCancel={pasosTerminarScrub}
+                  onPointerLeave={() => { if (!pasosDraggingRef.current) pasosTerminarScrub(); }}
+                  style={{ position: "relative", display: "flex", alignItems: "flex-end", gap: Math.max(2, 4 - Math.floor(pasosResumen.length / 15)), height: barH + 24, overflowX: pasosResumen.length > 20 ? "auto" : "visible", touchAction: "pan-y", cursor: "pointer" }}>
+                  {pScrub && (
+                    <>
+                      <div style={{ position: "absolute", top: 0, bottom: 2, width: 1, left: pasosScrub.left, background: "rgba(240,240,245,0.28)", pointerEvents: "none" }} />
+                      <div ref={pasosTooltipRef} style={{ position: "absolute", bottom: "calc(100% + 9px)", left: pasosScrub.left, transform: "translateX(-50%)", background: "#22222E", border: `1px solid ${theme.border}`, borderRadius: 9, padding: "6px 10px", fontSize: 12, whiteSpace: "nowrap", boxShadow: "0 6px 18px rgba(0,0,0,0.4)", pointerEvents: "none", zIndex: 5 }}>
+                        <span style={{ color: theme.muted }}>{DIAS_SEMANA_NOMBRES[new Date(pScrub.fecha).getDay()].slice(0, 3)} {new Date(pScrub.fecha).toLocaleDateString("es-CL", { day: "numeric", month: "short" })}</span>
+                        {" · "}
+                        <span style={{ color: theme.text, fontWeight: 700 }}>{pScrub.pasos ? `${pScrub.pasos.toLocaleString("es-CL")} pasos` : "sin registro"}</span>
+                      </div>
+                    </>
+                  )}
+                  {pasosResumen.map((p, i) => {
+                    const h = Math.max(3, (p.pasos / maxPasos) * barH);
+                    const fechaCorta = new Date(p.fecha).toLocaleDateString("es-CL", { day: "numeric", month: "short" });
+                    return (
+                      <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0, width: anchoBarra }}>
+                        <div ref={el => (pasosBarRefs.current[i] = el)}
+                          style={{ width: "100%", height: h, background: `linear-gradient(180deg, ${theme.accentLight}, ${theme.accent})`, borderRadius: 3, boxShadow: pasosScrub?.idx === i ? `0 0 8px ${theme.accentLight}` : `0 0 6px ${theme.accent}55` }} />
+                        {(i === 0 || i === pasosResumen.length - 1 || pasosResumen.length <= 8) && (
+                          <div style={{ fontSize: 8, color: theme.muted, marginTop: 4, whiteSpace: "nowrap" }}>{fechaCorta}</div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
+              <div style={{ fontSize: 10, color: theme.muted, marginTop: 6, textAlign: "center" }}>Tocá o pasá el mouse sobre las barras para ver el detalle de un día</div>
             </>
           );
         })()}
