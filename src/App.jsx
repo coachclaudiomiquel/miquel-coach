@@ -1958,6 +1958,46 @@ const [estadoPago, setEstadoPago] = useState(null);
           "Cada repetición te acerca a tu mejor versión. 💪",
           "El cuerpo logra lo que la mente cree. 🧠",
           "Consistencia por sobre perfección. Sigue sumando días. ✅",
+          "Sé más fuerte que tus excusas. 💥",
+          "Cuando sientas que vas a rendirte, recuerda por qué empezaste. 🔥",
+          "Mientras tú dudas de ti mismo, otros temen tu potencial. Cree en ti. ⚡",
+          "Mereces lo que sueñas. 🌟",
+          "La disciplina es hacer lo que tienes que hacer, aunque no tengas ganas de hacerlo. 💪",
+          "No hay progreso sin esfuerzo. 📈",
+          "No eres lo que logras, eres lo que superas. 🏆",
+          "El fracaso y el rechazo son solo el primer paso hacia el éxito. ¡Nunca te rindas! 🚀",
+          "Volverse fuerte no comienza en el gym, comienza en tu mente. 🧠",
+          "El camino hacia el éxito siempre está en construcción. 🏗️",
+          "Nunca tires la toalla, úsala para secar tu sudor y seguir adelante. 💦",
+          "No dejes que el cansancio le gane a tu fuerza de voluntad. 🛡️",
+          "A veces hay que pelear las batallas más de una vez para ganarlas. ⚔️",
+          "Cada gota de sudor te lleva un paso más cerca de tus objetivos. 💧",
+          "El éxito comienza con la mentalidad correcta. 🎯",
+          "El esfuerzo constante es la llave que abre tu potencial. 🔑",
+          "La disciplina es el puente entre tus metas y logros. 🌉",
+          "No se trata de cuántas veces caes, sino de cuántas veces te levantas. 🔄",
+          "La fuerza no viene de la capacidad física, viene de una voluntad indomable. 🔥",
+          "El éxito es la suma de pequeños esfuerzos repetidos día tras día. ✅",
+          "Los desafíos son los que hacen la vida interesante. 🎢",
+          "El camino al éxito se construye con pequeños pasos. 👣",
+          "Cada día es una nueva oportunidad para crecer y alcanzar tus sueños. 🌱",
+          "Los resultados llegan para quienes no se rinden en el proceso. 🏋️",
+          "Compárate solo con la persona que eras ayer. 📊",
+          "El progreso no siempre se ve en la balanza, a veces se siente en cómo te mueves. ⚖️",
+          "Confía en el proceso, los cambios reales toman tiempo. ⏳",
+          "Cada entrenamiento suma, aunque hoy no lo sientas. ➕",
+          "La constancia le gana a la intensidad. 🔁",
+          "Lo que hoy te cuesta, mañana será tu calentamiento. 🔄",
+          "El descanso también es parte del entrenamiento. 😴",
+          "No cuentes los días, haz que los días cuenten. 📅",
+          "Los hábitos de hoy construyen los resultados de mañana. 🧱",
+          "Incomodidad de hoy, fortaleza de mañana. 🔥",
+          "Enfócate en el proceso y los resultados van a aparecer. 🎯",
+          "Cada pequeño avance te acerca a tu mejor versión. 🌟",
+          "No busques atajos, busca constancia. 🛤️",
+          "El único entreno que no suma es el que no haces. ✅",
+          "Tu esfuerzo de hoy es la base de tu progreso. 🧩",
+          "Celebra cada logro, por pequeño que sea. 🎉",
         ];
         let texto = null, autor = "Coach Claudio";
         if (ultimoMensajeCoach) {
@@ -2964,6 +3004,12 @@ function RutinaScreen({ onNav }) {
   const [horasSueno, setHorasSueno] = useState("8");
   const [calidadSueno, setCalidadSueno] = useState(7);
   const [guardandoDiario, setGuardandoDiario] = useState(false);
+  // Igual que la miniencuesta de después del entreno, pero para los días de
+  // descanso -- ahí no hay ningún "terminar entreno" del que colgarse, así
+  // que se muestra directo en la card de "Día de descanso". Reutiliza los
+  // mismos horasSueno/calidadSueno de arriba (nunca se muestran los dos a
+  // la vez, un día es descanso o tiene ejercicios, no las dos cosas).
+  const [suenoDescansoGuardado, setSuenoDescansoGuardado] = useState(false);
 
   // Flujo "Iniciar serie / Fin de serie" con cronómetro de descanso en el
   // botón fijo inferior. estadoSerie: 'idle' (apuntando a la próxima serie
@@ -3375,6 +3421,43 @@ function RutinaScreen({ onNav }) {
               ? "Hoy no hay ejercicios -- cumple el cardio que te asigné más abajo."
               : "Hoy toca recuperar 🙌"}
           </div>
+
+          {suenoDescansoGuardado ? (
+            <div style={{ fontSize: 12, color: theme.success, fontWeight: 700, marginTop: 14, paddingTop: 14, borderTop: `1px solid ${theme.border}` }}>¡Gracias, guardado! 🙌</div>
+          ) : (
+            <div style={{ textAlign: "left", marginTop: 14, paddingTop: 14, borderTop: `1px solid ${theme.border}` }}>
+              <div style={{ fontSize: 12.5, color: theme.text, marginBottom: 12, textAlign: "center" }}>💤 ¿Cómo dormiste anoche? Sumalo a tu progreso (opcional).</div>
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 13, color: theme.text, marginBottom: 8 }}>😴 ¿Cuántas horas dormiste anoche?</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <input value={horasSueno} onChange={e => setHorasSueno(e.target.value)} placeholder="0" type="number" step="0.5"
+                    style={{ background: theme.surface, border: `2px solid #B0C4DE`, borderRadius: 10, padding: "10px 14px", color: theme.text, fontSize: 20, fontWeight: 800, width: 80, textAlign: "center", outline: "none" }} />
+                  <span style={{ fontSize: 14, color: theme.muted }}>horas</span>
+                </div>
+              </div>
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                  <span style={{ fontSize: 13, color: theme.text }}>😴 Calidad del sueño</span>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: "#B0C4DE" }}>{calidadSueno}/10</span>
+                </div>
+                <input type="range" min={1} max={10} value={calidadSueno} onChange={e => setCalidadSueno(Number(e.target.value))} style={{ width: "100%", accentColor: "#B0C4DE" }} />
+              </div>
+              <button onClick={async () => {
+                setGuardandoDiario(true);
+                const { data: { user } } = await supabase.auth.getUser();
+                if (user) {
+                  await supabase.from("diario_registros").upsert({
+                    usuario_id: user.id,
+                    fecha: fechaOperativaStr(),
+                    sueno: calidadSueno,
+                    horas: parseFloat(horasSueno) || null,
+                  }, { onConflict: "usuario_id,fecha" });
+                }
+                setGuardandoDiario(false);
+                setSuenoDescansoGuardado(true);
+              }} disabled={guardandoDiario} style={{ width: "100%", background: `linear-gradient(135deg, ${theme.accentLight}, ${theme.accent})`, border: "none", borderRadius: 10, padding: 12, color: "#fff", fontSize: 14, fontWeight: 800, cursor: guardandoDiario ? "default" : "pointer", opacity: guardandoDiario ? 0.7 : 1 }}>{guardandoDiario ? "Guardando..." : "Guardar"}</button>
+            </div>
+          )}
         </Card>
       )}
 
@@ -6283,24 +6366,29 @@ function ProgresoMetricas({ userId }) {
         .order("fecha", { ascending: true });
       if (pasosData) setPasosResumen(pasosData.filter(p => p.pasos != null));
 
-      // Cumplimiento de los últimos 30 días: Entreno / Nutrición. (El círculo
-      // de "Diario" se sacó de esta vista -- la miniencuesta de intensidad y
-      // sueño al final del entreno sigue guardando datos en diario_registros
-      // exactamente igual, esto solo dejó de resumirla acá como porcentaje.)
+      // Cumplimiento de los últimos 30 días: Entreno / Nutrición / Sueño.
+      // "Sueño" cuenta días con un registro real en diario_registros (ya sea
+      // por la miniencuesta de después del entreno, o por la del día de
+      // descanso) -- a propósito NO se rellenan los días sin dato con ningún
+      // valor supuesto, para que el % refleje honestamente cuánta info de
+      // sueño se tiene, huecos incluidos.
       const hoyOp30 = fechaOperativa();
       const hace30Str = aFechaStr((() => { const d = new Date(hoyOp30); d.setDate(d.getDate() - 29); return d; })());
-      const [rutinasRes, entRes, dieRes] = await Promise.all([
+      const [rutinasRes, entRes, dieRes, sueñoRes] = await Promise.all([
         supabase.from("rutinas").select("dia").eq("usuario_id", userId).eq("publicada", true),
         supabase.from("registros_entreno").select("fecha").eq("usuario_id", userId).gte("fecha", hace30Str),
         supabase.from("dieta_registros").select("fecha, estado").eq("usuario_id", userId).gte("fecha", hace30Str),
+        supabase.from("diario_registros").select("fecha").eq("usuario_id", userId).gte("fecha", hace30Str),
       ]);
       const entreno30 = new Set((entRes.data || []).map(r => r.fecha)).size;
       const dieta30 = dieRes.data || [];
       const nutriPct = dieta30.length > 0 ? Math.round((dieta30.filter(r => r.estado === "completada").length / dieta30.length) * 100) : null;
+      const sueño30 = new Set((sueñoRes.data || []).map(r => r.fecha)).size;
+      const sueñoPct = Math.round((sueño30 / 30) * 100);
       const diasPorSemana = new Set((rutinasRes.data || []).map(r => r.dia)).size;
       const planEntreno30 = diasPorSemana > 0 ? Math.round(diasPorSemana * 30 / 7) : 0;
       const entrenoPct = planEntreno30 > 0 ? Math.min(100, Math.round((entreno30 / planEntreno30) * 100)) : null;
-      setAnillos30({ entrenoPct, nutriPct });
+      setAnillos30({ entrenoPct, nutriPct, sueñoPct });
 
       // Foto "antes": la de la Anamnesis. Foto "actual": el check-in más reciente con foto.
       const { data: usr } = await supabase.from("usuarios").select("foto_frente").eq("id", userId).single();
@@ -6381,10 +6469,11 @@ function ProgresoMetricas({ userId }) {
       {anillos30 && (
         <Card style={{ marginBottom: 14, padding: "12px 10px" }}>
           <div style={{ fontSize: 10, color: theme.muted, letterSpacing: 1, marginBottom: 10, textAlign: "center" }}>CUMPLIMIENTO · ÚLTIMOS 30 DÍAS</div>
-          <div style={{ display: "flex", justifyContent: "center", gap: 48 }}>
+          <div style={{ display: "flex", justifyContent: "center", gap: 28 }}>
             {[
               { label: "Entreno", pct: anillos30.entrenoPct, color: theme.accentLight, icon: "🏋️" },
               { label: "Nutrición", pct: anillos30.nutriPct, color: theme.success, icon: "🥗" },
+              { label: "Sueño", pct: anillos30.sueñoPct, color: "#A78BFA", icon: "😴" },
             ].map(a => (
               <div key={a.label} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
                 <div style={{ width: 56, height: 56, borderRadius: "50%", background: a.pct == null ? theme.surface : `conic-gradient(${a.color} ${Math.max(0, Math.min(100, a.pct)) * 3.6}deg, ${theme.surface} 0deg)`, display: "flex", alignItems: "center", justifyContent: "center" }}>
