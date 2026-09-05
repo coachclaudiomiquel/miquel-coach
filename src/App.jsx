@@ -43,6 +43,17 @@ function aFechaStr(d) {
 }
 // Fecha (YYYY-MM-DD) del día operativo actual, considerando el corte de las 4 AM.
 function fechaOperativaStr(base = new Date()) { return aFechaStr(fechaOperativa(base)); }
+// Lunes (00:00) de la semana operativa actual -- se usa para calcular
+// tonelaje semanal a partir de los registros de entreno reales (no de lo
+// planificado), sumando solo lo cargado desde ese lunes hasta hoy.
+function inicioSemanaActualStr(base = new Date()) {
+  const hoy = fechaOperativa(base);
+  const diaSemana = hoy.getDay(); // 0=domingo, 1=lunes, ... 6=sábado
+  const diasDesdeLunes = diaSemana === 0 ? 6 : diaSemana - 1;
+  const lunes = new Date(hoy);
+  lunes.setDate(hoy.getDate() - diasDesdeLunes);
+  return aFechaStr(lunes);
+}
 // Equivalencia aproximada de pasos por minuto de cardio (ritmo caminata
 // moderada, ~110 pasos/min). Es solo una sugerencia informativa -- no
 // modifica la meta de pasos que definió el coach.
@@ -548,6 +559,22 @@ function getMondayGlobal(d) {
   date.setHours(0, 0, 0, 0);
   return date;
 }
+// Número de semanas por mesociclo -- compartido entre el conteo de ciclos
+// del Diario/Progreso (cargarCiclosAlumno) y el historial de volumen por
+// mesociclo (mesocicloNumeroDeFecha / tabla "volumen_mesociclo_historial"),
+// para que ambos coincidan siempre en dónde empieza y termina cada bloque.
+const SEMANAS_POR_CICLO = 4;
+// Mesociclo (1, 2, 3...) al que pertenece una fecha dada, anclado a la
+// fecha de inicio del plan del alumno (o al lunes de esa misma fecha si no
+// hay fecha de inicio definida -- mismo criterio que cargarCiclosAlumno).
+function mesocicloNumeroDeFecha(fecha, fechaInicioPlan) {
+  const ancla = fechaInicioPlan
+    ? getMondayGlobal(new Date(fechaInicioPlan + "T00:00:00"))
+    : getMondayGlobal(fecha);
+  const lunesFecha = getMondayGlobal(fecha);
+  const diffSemanas = Math.round((lunesFecha - ancla) / (7 * 86400000));
+  return Math.max(1, Math.floor(diffSemanas / SEMANAS_POR_CICLO) + 1);
+}
 // Calcula el resumen (RPE, sueño, cargas, adherencia dieta) de una semana.
 // Se usa tanto en el Diario del coach como en el resumen que ve el propio alumno.
 function resumenSemanaCalc(semana, entrenosDetalle, dietaRegs) {
@@ -586,7 +613,9 @@ function resumenSemanaCalc(semana, entrenosDetalle, dietaRegs) {
 // coach (CoachAlumno) como en el resumen semanal que ve el propio alumno
 // (ProgresoScreen), para no duplicar esta lógica en dos lugares.
 async function cargarCiclosAlumno(usuarioId, fechaInicioPlanOverride) {
-  const SEMANAS_POR_CICLO = 4;
+  // SEMANAS_POR_CICLO es la constante compartida definida más arriba (junto
+  // a mesocicloNumeroDeFecha), para que este conteo y el historial de
+  // volumen por mesociclo coincidan siempre en los mismos bloques de 4 semanas.
   const vacio = { ciclos: [], entrenosDetalle: [], dietaRegs: [], diasPlanificados: 0 };
   if (!usuarioId) return vacio;
   const hoy = fechaOperativa();
@@ -697,9 +726,9 @@ function buscarImagenEjercicio(nombre, mapa) {
   return buscarInfoEjercicio(nombre, mapa)?.url || null;
 }
 async function cargarMapaImagenesEjercicios() {
-  const { data } = await supabase.from("ejercicio_imagenes").select("nombre_normalizado, url, resena");
+  const { data } = await supabase.from("ejercicio_imagenes").select("nombre_normalizado, url, resena, musculo_principal");
   const mapa = {};
-  (data || []).forEach(r => { mapa[r.nombre_normalizado] = { url: r.url, resena: r.resena || "" }; });
+  (data || []).forEach(r => { mapa[r.nombre_normalizado] = { url: r.url, resena: r.resena || "", musculo: r.musculo_principal || "" }; });
   return mapa;
 }
 // Sube (o reemplaza) la imagen/animación de referencia de un ejercicio, y
@@ -728,6 +757,47 @@ async function guardarResenaEjercicio(nombreOriginal, resena) {
   const { error } = await supabase.from("ejercicio_imagenes").upsert({ nombre_normalizado: normalizado, nombre_original: nombreOriginal.trim(), resena }, { onConflict: "nombre_normalizado" });
   if (error) { alert("No se pudo guardar la reseña: " + error.message); return null; }
   return { normalizado, resena };
+}
+// Lista sugerida de músculos para clasificar cada ejercicio (aparece como
+// sugerencias/autocompletado, pero se puede escribir cualquier otro nombre
+// -- igual que el grupo muscular del día de rutina). Se usa para calcular el
+// volumen semanal en la ficha del alumno.
+const MUSCULOS_PRINCIPALES = [
+  "Pecho", "Espalda", "Espalda baja", "Trapecio", "Deltoides anterior", "Deltoides medio", "Deltoides posterior",
+  "Bíceps", "Tríceps", "Antebrazo", "Cuádriceps", "Isquiotibiales", "Glúteo", "Aductores", "Abductores",
+  "Gemelos", "Core/Abdomen", "Oblicuos",
+];
+// Un ejercicio puede trabajar varios músculos con distinto peso (1 = motor
+// principal, 0.5 = ayuda significativa, 0.25 = colabora apenas -- criterio
+// del coach, no una fracción fija por músculo). Se guarda como JSON dentro
+// de la misma columna "musculo_principal" de "ejercicio_imagenes", ligado al
+// nombre normalizado del ejercicio (igual que la imagen y la reseña).
+// Convierte lo guardado en la base (JSON nuevo, o texto plano de la versión
+// vieja de esta función, que era un solo músculo sin peso) a una lista
+// [{ musculo, peso }, ...] lista para usar.
+function parsearMusculos(raw) {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return parsed.filter(it => it && it.musculo).map(it => ({ musculo: it.musculo, peso: Number(it.peso) || 1 }));
+    }
+  } catch {
+    // No era JSON -- es el formato viejo (un solo nombre de músculo en texto plano).
+  }
+  return [{ musculo: raw, peso: 1 }];
+}
+// Guarda (o actualiza) la lista de músculos + peso de un ejercicio, ligada al
+// mismo nombre normalizado que la imagen/reseña. No toca lo demás ya guardado.
+async function guardarMusculosEjercicio(nombreOriginal, lista) {
+  if (!nombreOriginal?.trim()) return null;
+  const normalizado = normalizarNombreEjercicio(nombreOriginal);
+  if (!normalizado) return null;
+  const limpia = (lista || []).filter(it => it.musculo && it.musculo.trim());
+  const musculo_principal = limpia.length > 0 ? JSON.stringify(limpia) : null;
+  const { error } = await supabase.from("ejercicio_imagenes").upsert({ nombre_normalizado: normalizado, nombre_original: nombreOriginal.trim(), musculo_principal }, { onConflict: "nombre_normalizado" });
+  if (error) { alert("No se pudo guardar el músculo: " + error.message); return null; }
+  return { normalizado, musculo: musculo_principal };
 }
 
 // Grupo muscular del día de rutina: texto LIBRE (igual que el nombre de un
@@ -1041,6 +1111,68 @@ const EditorResenaEjercicio = ({ nombre, mapa, onGuardado }) => {
     </div>
   );
 };
+// Selector chico para asignar el músculo principal de un ejercicio (se usa
+// para el cálculo de volumen semanal por grupo muscular). Igual que la
+// reseña: se guarda por nombre normalizado, así que se carga una sola vez
+// por ejercicio y sirve para cualquier rutina que lo use.
+// Lista de "músculo + peso" para un ejercicio (volumen semanal). Cada fila
+// tiene un campo de texto con sugerencias (se puede elegir de la lista fija
+// o escribir un músculo nuevo) y un peso 1 / 0.5 / 0.25. Se guarda solo, al
+// tocar fuera del campo o cambiar el peso -- igual que la reseña.
+const SelectorMusculoEjercicio = ({ nombre, mapa, onGuardado }) => {
+  const info = buscarInfoEjercicio(nombre, mapa);
+  const [lista, setLista] = useState(() => parsearMusculos(info?.musculo));
+  const [guardando, setGuardando] = useState(false);
+  useEffect(() => { setLista(parsearMusculos(info?.musculo)); }, [info?.musculo]);
+
+  const guardar = async (nuevaLista) => {
+    if (!nombre?.trim()) { alert("Primero escribe el nombre del ejercicio."); return; }
+    setGuardando(true);
+    const res = await guardarMusculosEjercicio(nombre, nuevaLista);
+    setGuardando(false);
+    if (res) onGuardado?.(res);
+  };
+  const actualizarFila = (i, campo, valor) => {
+    const nueva = lista.map((it, idx) => idx === i ? { ...it, [campo]: valor } : it);
+    setLista(nueva);
+    return nueva;
+  };
+  const quitarFila = (i) => {
+    const nueva = lista.filter((_, idx) => idx !== i);
+    setLista(nueva);
+    guardar(nueva);
+  };
+  const datalistId = `musculos-${normalizarNombreEjercicio(nombre).replace(/\s+/g, "-")}`;
+
+  return (
+    <div style={{ marginTop:6, minWidth:220, flex:1 }}>
+      <div style={{ fontSize:9, color:theme.muted, marginBottom:3 }}>Músculos que trabaja (para el volumen semanal)</div>
+      <datalist id={datalistId}>
+        {MUSCULOS_PRINCIPALES.map(m => <option key={m} value={m} />)}
+      </datalist>
+      {lista.map((it, i) => (
+        <div key={i} style={{ display:"flex", gap:4, alignItems:"center", marginBottom:4 }}>
+          <input value={it.musculo} list={datalistId} placeholder="Músculo..."
+            onChange={e => actualizarFila(i, "musculo", e.target.value)}
+            onBlur={() => guardar(lista)}
+            style={{ flex:1, minWidth:0, background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:6, padding:"5px 7px", color:theme.text, fontSize:11, outline:"none", boxSizing:"border-box" }} />
+          <select value={it.peso} disabled={guardando}
+            onChange={e => guardar(actualizarFila(i, "peso", Number(e.target.value)))}
+            style={{ background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:6, padding:"5px 4px", color:theme.text, fontSize:11, outline:"none", flexShrink:0, width:56 }}>
+            <option value={1}>1</option>
+            <option value={0.5}>0.5</option>
+            <option value={0.25}>0.25</option>
+          </select>
+          <span onClick={() => quitarFila(i)} style={{ cursor:"pointer", color:theme.danger, fontSize:13, flexShrink:0, padding:"0 2px" }}>×</span>
+        </div>
+      ))}
+      <button type="button" onClick={() => setLista([...lista, { musculo:"", peso:1 }])}
+        style={{ background:"transparent", border:`1px dashed ${theme.border}`, borderRadius:6, padding:"3px 8px", color:theme.muted, fontSize:10, cursor:"pointer" }}>
+        + Agregar músculo
+      </button>
+    </div>
+  );
+};
 const NavBar = ({ active, onNav, mensajesNoLeidos = 0 }) => {
   const items = [{ id: "alumno_home", icon: "home", label: "Inicio" }, { id: "rutina", icon: "dumbbell", label: "Entreno" }, { id: "nutricion", icon: "fork_knife", label: "Dieta" }, { id: "checkin", icon: "chart", label: "Check-in" }, { id: "progreso", icon: "calendar_check", label: "Progreso" }];
   return (
@@ -1228,7 +1360,7 @@ function AnamnesisScreen({ onNav }) {
     nombre: "", edad: "", sexo: "", ocupacion: "", actividadLaboral: "", nivelActividad: 5,
     instagram: "", whatsapp: "",
     peso: "", estatura: "", porcGrasa: "", objetivo: "",
-    haEntrenado: "", queEntrenamiento: "", diasSemana: "", horarioEntreno: "", horarioEntrenoHasta: "",
+    haEntrenado: "", queEntrenamiento: "", diasSemana: "", lugarEntreno: "", lugarEntrenoDetalle: "", horarioEntreno: "", horarioEntrenoHasta: "",
     enfermedadLesion: "", cualEnfermedad: "", medicamento: "", cualMedicamento: "",
     sustanciaFarmacologica: "", sustanciaCuales: "", sustanciaTiempo: "", sustanciaHaceCuanto: "",
     consumeSuplemento: "", cualSuplemento: "",
@@ -1391,6 +1523,18 @@ function AnamnesisScreen({ onNav }) {
               <option value="">Selecciona...</option>
               {opciones(["1 día", "2 días", "3 días", "4 días", "5 días", "6 días"])}
             </select>
+
+            <span style={labelStyle}>¿Dónde entrenas o pretendes entrenar? *</span>
+            <select style={selectStyle} value={form.lugarEntreno} onChange={e => set("lugarEntreno", e.target.value)}>
+              <option value="">Selecciona...</option>
+              {opciones(["Gimnasio", "En casa", "Parque o aire libre", "Otro"])}
+            </select>
+
+            {(form.lugarEntreno === "Gimnasio" || form.lugarEntreno === "Otro") && (
+              <input style={inputStyle}
+                placeholder={form.lugarEntreno === "Gimnasio" ? "Nombre del gimnasio" : "Especifica dónde"}
+                value={form.lugarEntrenoDetalle} onChange={e => set("lugarEntrenoDetalle", e.target.value)} />
+            )}
 
             <span style={labelStyle}>¿En qué horario pretendes entrenar? *</span>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -1589,6 +1733,8 @@ const { error } = await supabase.from("usuarios").upsert({                  id: 
                   ha_entrenado: form.haEntrenado,
                   que_entrenamiento: form.queEntrenamiento,
                   dias_semana: form.diasSemana,
+                  lugar_entreno: form.lugarEntreno,
+                  lugar_entreno_detalle: form.lugarEntrenoDetalle,
                   horario_entreno: form.horarioEntreno,
                   horario_entreno_hasta: form.horarioEntrenoHasta,
                   enfermedad_lesion: form.enfermedadLesion,
@@ -1785,8 +1931,15 @@ const [estadoPago, setEstadoPago] = useState(null);
           <div style={{ color: theme.muted, fontSize: 12, letterSpacing: 1 }}>BUENOS DÍAS</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: theme.text }}>Hola, {nombre} 👋</div>
         </div>
-        <div style={{ width: 40, height: 40, borderRadius: 20, background: `linear-gradient(135deg, ${theme.accentLight}, ${theme.accent})`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, fontWeight: 700, color: "#fff", boxShadow: `0 0 16px ${theme.accent}66` }}>
-          {nombre[0]?.toUpperCase() || "A"}
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+          <div style={{ width: 40, height: 40, borderRadius: 20, background: `linear-gradient(135deg, ${theme.accentLight}, ${theme.accent})`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, fontWeight: 700, color: "#fff", boxShadow: `0 0 16px ${theme.accent}66` }}>
+            {nombre[0]?.toUpperCase() || "A"}
+          </div>
+          {/* No existía ninguna forma de cerrar sesión desde las pantallas de
+              alumno -- antes se usaba el botón "Login" de la barra de
+              depuración (que ni siquiera cerraba sesión de verdad) para volver
+              ahí. Con esa barra afuera, hace falta un cierre de sesión real. */}
+          <span onClick={() => { supabase.auth.signOut(); onNav("login"); }} style={{ fontSize: 11, fontWeight: 700, color: theme.muted, cursor: "pointer", padding: "2px 8px", borderRadius: 8, border: `1px solid ${theme.border}` }}>Salir</span>
         </div>
       </div>
 
@@ -4270,7 +4423,7 @@ function NutricionScreen({ onNav }) {
             <div style={{ color:theme.muted, fontSize:10, transform: notasAbierta ? "rotate(0deg)" : "rotate(-90deg)", transition:"transform 0.15s" }}>▾</div>
           </div>
           {notasAbierta && (
-            <div style={{ padding:"0 16px 16px", boxSizing:"border-box", textAlign:"left" }}>
+            <div style={{ padding:"0 16px 16px", boxSizing:"border-box", textAlign:"center" }}>
               <div style={{ fontSize:13, color:theme.text, lineHeight:1.6, whiteSpace:"pre-line" }}>{dieta.notas}</div>
             </div>
           )}
@@ -4287,10 +4440,10 @@ function NutricionScreen({ onNav }) {
           <div style={{ color:theme.muted, fontSize:10, transform: habitosAbierta ? "rotate(0deg)" : "rotate(-90deg)", transition:"transform 0.15s" }}>▾</div>
         </div>
         {habitosAbierta && (
-          <div style={{ padding:"0 16px 16px", boxSizing:"border-box", textAlign:"left" }}>
+          <div style={{ padding:"0 16px 16px", boxSizing:"border-box", textAlign:"center" }}>
             <div style={{ display:"flex", flexDirection:"column", gap:9 }}>
               {(dieta.habitos || HABITOS_DIETA_DEFAULT).split("\n").filter(h => h.trim()).map((h, i) => (
-                <div key={i} style={{ display:"flex", gap:8, fontSize:13, color:theme.text, lineHeight:1.5 }}>
+                <div key={i} style={{ display:"flex", justifyContent:"center", gap:8, fontSize:13, color:theme.text, lineHeight:1.5 }}>
                   <span style={{ color:theme.accentLight, flexShrink:0 }}>·</span>
                   <span>{h}</span>
                 </div>
@@ -6130,24 +6283,24 @@ function ProgresoMetricas({ userId }) {
         .order("fecha", { ascending: true });
       if (pasosData) setPasosResumen(pasosData.filter(p => p.pasos != null));
 
-      // Cumplimiento de los últimos 30 días: Entreno / Nutrición / Diario.
+      // Cumplimiento de los últimos 30 días: Entreno / Nutrición. (El círculo
+      // de "Diario" se sacó de esta vista -- la miniencuesta de intensidad y
+      // sueño al final del entreno sigue guardando datos en diario_registros
+      // exactamente igual, esto solo dejó de resumirla acá como porcentaje.)
       const hoyOp30 = fechaOperativa();
       const hace30Str = aFechaStr((() => { const d = new Date(hoyOp30); d.setDate(d.getDate() - 29); return d; })());
-      const [rutinasRes, entRes, diaRes, dieRes] = await Promise.all([
+      const [rutinasRes, entRes, dieRes] = await Promise.all([
         supabase.from("rutinas").select("dia").eq("usuario_id", userId).eq("publicada", true),
         supabase.from("registros_entreno").select("fecha").eq("usuario_id", userId).gte("fecha", hace30Str),
-        supabase.from("diario_registros").select("fecha").eq("usuario_id", userId).gte("fecha", hace30Str),
         supabase.from("dieta_registros").select("fecha, estado").eq("usuario_id", userId).gte("fecha", hace30Str),
       ]);
       const entreno30 = new Set((entRes.data || []).map(r => r.fecha)).size;
-      const diario30 = new Set((diaRes.data || []).map(r => r.fecha)).size;
       const dieta30 = dieRes.data || [];
       const nutriPct = dieta30.length > 0 ? Math.round((dieta30.filter(r => r.estado === "completada").length / dieta30.length) * 100) : null;
       const diasPorSemana = new Set((rutinasRes.data || []).map(r => r.dia)).size;
       const planEntreno30 = diasPorSemana > 0 ? Math.round(diasPorSemana * 30 / 7) : 0;
       const entrenoPct = planEntreno30 > 0 ? Math.min(100, Math.round((entreno30 / planEntreno30) * 100)) : null;
-      const diarioPct = Math.round((diario30 / 30) * 100);
-      setAnillos30({ entrenoPct, nutriPct, diarioPct });
+      setAnillos30({ entrenoPct, nutriPct });
 
       // Foto "antes": la de la Anamnesis. Foto "actual": el check-in más reciente con foto.
       const { data: usr } = await supabase.from("usuarios").select("foto_frente").eq("id", userId).single();
@@ -6228,11 +6381,10 @@ function ProgresoMetricas({ userId }) {
       {anillos30 && (
         <Card style={{ marginBottom: 14, padding: "12px 10px" }}>
           <div style={{ fontSize: 10, color: theme.muted, letterSpacing: 1, marginBottom: 10, textAlign: "center" }}>CUMPLIMIENTO · ÚLTIMOS 30 DÍAS</div>
-          <div style={{ display: "flex", justifyContent: "space-around" }}>
+          <div style={{ display: "flex", justifyContent: "center", gap: 48 }}>
             {[
               { label: "Entreno", pct: anillos30.entrenoPct, color: theme.accentLight, icon: "🏋️" },
               { label: "Nutrición", pct: anillos30.nutriPct, color: theme.success, icon: "🥗" },
-              { label: "Diario", pct: anillos30.diarioPct, color: "#A78BFA", icon: "📝" },
             ].map(a => (
               <div key={a.label} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
                 <div style={{ width: 56, height: 56, borderRadius: "50%", background: a.pct == null ? theme.surface : `conic-gradient(${a.color} ${Math.max(0, Math.min(100, a.pct)) * 3.6}deg, ${theme.surface} 0deg)`, display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -6858,6 +7010,351 @@ const VUELTA_CALMA_DEFAULTS = {
     { nombre: "Estiramiento de trapecio/cuello", detalle: "30 segundos por lado" },
   ],
 };
+// Tarjeta de volumen semanal por grupo muscular (series planificadas + kg
+// realmente registrados esta semana). Es un componente aparte, con su
+// propia carga de datos, para poder mostrarse tanto en la pestaña "Rutina"
+// como en "Progreso" sin duplicar la lógica.
+//
+// Las series efectivas suman con el peso que le asignaste a cada músculo en
+// el ejercicio (1 / 0.5 / 0.25 -- ver SelectorMusculoEjercicio), porque ahí
+// sí tiene sentido repartir el "crédito" de estímulo. El tonelaje (kg × reps)
+// en cambio SOLO se le asigna al músculo con peso 1 en ese ejercicio (el
+// motor principal real) -- repartir kilos por fracción no representa nada
+// físico real (el tríceps no "movió la mitad de los kilos" del press banca,
+// movió los mismos kilos que el pecho, solo que con menor protagonismo), así
+// que los músculos secundarios/terciarios de un ejercicio no suman tonelaje
+// de ese ejercicio, solo de los que tengan tageados con peso 1.
+function VolumenSemanal({ alumno }) {
+  const [rutinas, setRutinas] = useState([]);
+  const [cargas, setCargas] = useState({});
+  const [mapaImagenes, setMapaImagenes] = useState({});
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!alumno?.id) return;
+    setLoading(true);
+    (async () => {
+      const [{ data: rutinasData }, { data: cargasData }, mapa] = await Promise.all([
+        supabase.from("rutinas").select("*, ejercicios(*)").eq("usuario_id", alumno.id),
+        supabase.from("registros_entreno").select("ejercicio_id, kg, reps, fecha").eq("usuario_id", alumno.id),
+        cargarMapaImagenesEjercicios(),
+      ]);
+      if (rutinasData) setRutinas(rutinasData);
+      if (cargasData) {
+        const grouped = {};
+        cargasData.forEach(c => { (grouped[c.ejercicio_id] ||= []).push(c); });
+        setCargas(grouped);
+      }
+      setMapaImagenes(mapa);
+      setLoading(false);
+    })();
+  }, [alumno?.id]);
+
+  const inicioSemanaStr = inicioSemanaActualStr();
+  let volumenPorMusculo = {};
+  let tonelajePorMusculo = {};
+  let seriesSinClasificar = 0;
+  let tonelajeSinClasificar = 0;
+  rutinas.filter(r => r.publicada !== false && !r.es_descanso).forEach(r => {
+    (r.ejercicios || []).forEach(ej => {
+      const efectivas = (ej.series || []).filter(s => s.tipo === "efectiva").length;
+      const tonelajeEjercicio = (cargas[ej.id] || [])
+        .filter(c => c.fecha >= inicioSemanaStr)
+        .reduce((acc, c) => acc + (parseFloat(c.kg) || 0) * (parseInt(c.reps) || 0), 0);
+      if (efectivas === 0 && tonelajeEjercicio === 0) return;
+      const musculos = parsearMusculos(buscarInfoEjercicio(ej.nombre, mapaImagenes)?.musculo);
+      if (musculos.length === 0) {
+        seriesSinClasificar += efectivas;
+        tonelajeSinClasificar += tonelajeEjercicio;
+        return;
+      }
+      musculos.forEach(({ musculo, peso }) => {
+        volumenPorMusculo[musculo] = (volumenPorMusculo[musculo] || 0) + efectivas * peso;
+        if (peso === 1) tonelajePorMusculo[musculo] = (tonelajePorMusculo[musculo] || 0) + tonelajeEjercicio;
+      });
+    });
+  });
+  const formatearSeries = (n) => Number(n.toFixed(2)).toString();
+  const formatearKg = (n) => Math.round(n).toLocaleString("es-CL");
+  const musculosOrdenVolumen = Object.keys({ ...volumenPorMusculo, ...tonelajePorMusculo });
+  const volumenOrdenado = musculosOrdenVolumen
+    .map(musculo => [musculo, volumenPorMusculo[musculo] || 0, tonelajePorMusculo[musculo] || 0])
+    .sort((a, b) => b[1] - a[1]);
+
+  // Guarda una "foto" del volumen planificado del mesociclo activo en
+  // "volumen_mesociclo_historial", para el gráfico de tendencia por bloque
+  // de HistorialVolumenTonelaje (ver Progreso). Se actualiza sola cada vez
+  // que cambian los datos -- no requiere ninguna acción del coach, y una
+  // vez que el mesociclo termina esa fila queda congelada (solo se sigue
+  // escribiendo la del bloque que está corriendo).
+  const firmaVolumen = JSON.stringify(volumenPorMusculo);
+  useEffect(() => {
+    if (loading || !alumno?.id) return;
+    const entradas = Object.entries(volumenPorMusculo).filter(([, series]) => series > 0);
+    if (entradas.length === 0) return;
+    const numeroMesociclo = mesocicloNumeroDeFecha(fechaOperativa(), alumno?.fecha_inicio_plan);
+    const filas = entradas.map(([musculo, series]) => ({
+      usuario_id: alumno.id, musculo, mesociclo_numero: numeroMesociclo, series,
+      actualizado_en: new Date().toISOString(),
+    }));
+    supabase.from("volumen_mesociclo_historial").upsert(filas, { onConflict: "usuario_id,musculo,mesociclo_numero" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, alumno?.id, alumno?.fecha_inicio_plan, firmaVolumen]);
+
+  if (loading || volumenOrdenado.length === 0) return null;
+  return (
+    <Card style={{ marginBottom:14 }}>
+      <div style={{ fontSize:12, color:theme.muted, marginBottom:2 }}>📊 VOLUMEN SEMANAL POR GRUPO MUSCULAR</div>
+      <div style={{ fontSize:10, color:theme.muted, marginBottom:10 }}>Series: lo planificado en la rutina (con el peso de cada músculo). Tonelaje: lo realmente registrado esta semana (desde el lunes), solo del músculo motor principal de cada ejercicio.</div>
+      <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+        {volumenOrdenado.map(([musculo, series, kg]) => (
+          <div key={musculo} style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline" }}>
+            <span style={{ fontSize:13, color:theme.text }}>{musculo}</span>
+            <span style={{ textAlign:"right" }}>
+              <span style={{ fontSize:13, fontWeight:800, color:theme.accentLight }}>{formatearSeries(series)} series</span>
+              {kg > 0 && <span style={{ fontSize:11, color:theme.muted, marginLeft:8 }}>· {formatearKg(kg)} kg</span>}
+            </span>
+          </div>
+        ))}
+      </div>
+      {(seriesSinClasificar > 0 || tonelajeSinClasificar > 0) && (
+        <div style={{ fontSize:11, color:theme.muted, marginTop:10, paddingTop:8, borderTop:`1px solid ${theme.border}` }}>
+          {formatearSeries(seriesSinClasificar)} series ({formatearKg(tonelajeSinClasificar)} kg) de ejercicios sin músculo asignado todavía -- asignalo en "Músculos que trabaja" junto a cada ejercicio para que entren en el conteo.
+        </div>
+      )}
+    </Card>
+  );
+}
+// Colores para diferenciar músculos en los gráficos de tendencia -- paleta
+// fija (nunca se genera un color al vuelo), pensada para el fondo oscuro de
+// la app. El mismo músculo usa siempre el mismo color entre el gráfico de
+// tonelaje y el de volumen. Si aparecen más de 8 músculos distintos a la
+// vez se repiten los colores (caso raro).
+const COLORES_MUSCULO = ["#3987e5","#d95926","#199e70","#c98500","#d55181","#4CAF50","#9085e9","#e66767"];
+function colorMusculo(musculo, ordenMusculos) {
+  const idx = Math.max(0, ordenMusculos.indexOf(musculo));
+  return COLORES_MUSCULO[idx % COLORES_MUSCULO.length];
+}
+// Evolución en el tiempo del tonelaje semanal y el volumen por mesociclo,
+// por grupo muscular -- a diferencia de VolumenSemanal (la foto de la
+// semana/bloque actual), esto sirve para ver la tendencia: ¿el tonelaje
+// viene subiendo o se estancó?, ¿cómo fue escalando el volumen bloque a
+// bloque? El tonelaje se arma con historial completo desde los registros
+// reales (registros_entreno ya tiene fecha). El volumen por mesociclo
+// depende de "volumen_mesociclo_historial" (ver VolumenSemanal, que la va
+// completando sola) -- antes de que esa tabla exista/acumule datos, esa
+// mitad del componente simplemente no muestra nada. Solo se usa en la
+// pestaña Progreso.
+function HistorialVolumenTonelaje({ alumno }) {
+  const [rutinas, setRutinas] = useState([]);
+  const [registros, setRegistros] = useState([]);
+  const [mapaImagenes, setMapaImagenes] = useState({});
+  const [historialVolumen, setHistorialVolumen] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [semanaSel, setSemanaSel] = useState(null);
+  const [mesocicloSel, setMesocicloSel] = useState(null);
+
+  useEffect(() => {
+    if (!alumno?.id) return;
+    setLoading(true);
+    (async () => {
+      const [{ data: rutinasData }, { data: registrosData }, mapa, { data: historialData }] = await Promise.all([
+        supabase.from("rutinas").select("*, ejercicios(*)").eq("usuario_id", alumno.id),
+        supabase.from("registros_entreno").select("ejercicio_id, kg, reps, fecha").eq("usuario_id", alumno.id).order("fecha", { ascending: true }),
+        cargarMapaImagenesEjercicios(),
+        supabase.from("volumen_mesociclo_historial").select("musculo, mesociclo_numero, series").eq("usuario_id", alumno.id).order("mesociclo_numero", { ascending: true }),
+      ]);
+      setRutinas(rutinasData || []);
+      setRegistros(registrosData || []);
+      setMapaImagenes(mapa);
+      setHistorialVolumen(historialData || []);
+      setLoading(false);
+    })();
+  }, [alumno?.id]);
+
+  if (loading) return null;
+
+  const musculosPorEjercicio = {};
+  rutinas.forEach(r => {
+    (r.ejercicios || []).forEach(ej => {
+      musculosPorEjercicio[ej.id] = parsearMusculos(buscarInfoEjercicio(ej.nombre, mapaImagenes)?.musculo);
+    });
+  });
+
+  // -- Tonelaje semanal real (solo el/los músculo(s) motor principal, peso === 1) --
+  const tonelajePorSemana = {};
+  registros.forEach(reg => {
+    const musculos = musculosPorEjercicio[reg.ejercicio_id];
+    if (!musculos || musculos.length === 0) return;
+    const kgSerie = (parseFloat(reg.kg) || 0) * (parseInt(reg.reps) || 0);
+    if (kgSerie <= 0) return;
+    const lunes = aFechaStr(getMondayGlobal(new Date(reg.fecha + "T00:00:00")));
+    musculos.filter(m => m.peso === 1).forEach(({ musculo }) => {
+      tonelajePorSemana[lunes] ||= {};
+      tonelajePorSemana[lunes][musculo] = (tonelajePorSemana[lunes][musculo] || 0) + kgSerie;
+    });
+  });
+  const semanasKeys = Object.keys(tonelajePorSemana).sort();
+
+  // -- Volumen por mesociclo (planificado, desde volumen_mesociclo_historial) --
+  const volumenPorMesociclo = {};
+  historialVolumen.forEach(r => {
+    volumenPorMesociclo[r.mesociclo_numero] ||= {};
+    volumenPorMesociclo[r.mesociclo_numero][r.musculo] = r.series;
+  });
+  const mesociclosKeys = Object.keys(volumenPorMesociclo).map(Number).sort((a, b) => a - b);
+
+  if (semanasKeys.length === 0 && mesociclosKeys.length === 0) return null;
+
+  // Orden de músculos por magnitud total (tonelaje + volumen), para asignar
+  // colores estables y mostrar los más relevantes primero en la leyenda.
+  const totalPorMusculo = {};
+  semanasKeys.forEach(s => Object.entries(tonelajePorSemana[s]).forEach(([m, v]) => { totalPorMusculo[m] = (totalPorMusculo[m] || 0) + v; }));
+  mesociclosKeys.forEach(c => Object.entries(volumenPorMesociclo[c]).forEach(([m, v]) => { totalPorMusculo[m] = (totalPorMusculo[m] || 0) + v; }));
+  const ordenMusculos = Object.keys(totalPorMusculo).sort((a, b) => totalPorMusculo[b] - totalPorMusculo[a]);
+
+  const formatearKg = (n) => Math.round(n).toLocaleString("es-CL");
+  const formatearSeries = (n) => Number(n.toFixed(2)).toString();
+  const formatearRangoSemana = (lunesStr) => {
+    const lunes = new Date(lunesStr + "T00:00:00");
+    const domingo = new Date(lunes); domingo.setDate(lunes.getDate() + 6);
+    const fmt = (d) => d.toLocaleDateString("es-CL", { day: "numeric", month: "short" });
+    return `${fmt(lunes)} - ${fmt(domingo)}`;
+  };
+  const corta = (lunesStr) => { const d = new Date(lunesStr + "T00:00:00"); return `${d.getDate()}/${d.getMonth() + 1}`; };
+
+  const semanaActiva = (semanaSel && semanasKeys.includes(semanaSel)) ? semanaSel : semanasKeys[semanasKeys.length - 1];
+  const mesocicloActivo = (mesocicloSel && mesociclosKeys.includes(mesocicloSel)) ? mesocicloSel : mesociclosKeys[mesociclosKeys.length - 1];
+
+  // ---- Gráfico de línea: tonelaje semanal ----
+  const AP = 44, ALTO = 150, PT = 14, PB = 20, PL = 6, PR = 6;
+  const anchoLinea = Math.max(300, semanasKeys.length * AP);
+  const altoUtil = ALTO - PT - PB;
+  let maxTonelaje = 1;
+  semanasKeys.forEach(s => Object.values(tonelajePorSemana[s]).forEach(v => { if (v > maxTonelaje) maxTonelaje = v; }));
+  const xSemana = (i) => PL + i * AP + AP / 2;
+  const ySemana = (v) => PT + altoUtil - (v / maxTonelaje) * altoUtil;
+
+  // ---- Gráfico de barras: volumen por mesociclo ----
+  const AB = 56, GAP_BLOQUE = 26, GAP_SEG = 2, ALTO_B = 150, PTB = 20, PBB = 20;
+  const anchoBarras = Math.max(300, mesociclosKeys.length * (AB + GAP_BLOQUE));
+  const altoUtilB = ALTO_B - PTB - PBB;
+  const filasPorMesociclo = mesociclosKeys.map(c => {
+    const datos = ordenMusculos.map(m => ({ musculo: m, valor: volumenPorMesociclo[c][m] || 0 })).filter(d => d.valor > 0);
+    return { mesociclo: c, datos, total: datos.reduce((a, d) => a + d.valor, 0) };
+  });
+  const maxVolumen = Math.max(1, ...filasPorMesociclo.map(f => f.total)) * 1.15;
+
+  return (
+    <>
+      {semanasKeys.length > 0 && (
+        <Card style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 12, color: theme.muted, marginBottom: 2 }}>📈 TENDENCIA DE TONELAJE SEMANAL</div>
+          <div style={{ fontSize: 10, color: theme.muted, marginBottom: 10 }}>kg reales movidos por semana, solo del músculo motor principal de cada ejercicio. Tocá un punto para ver el detalle de esa semana.</div>
+          <div style={{ overflowX: "auto" }}>
+            <svg width={anchoLinea} height={ALTO} style={{ display: "block" }}>
+              <line x1={PL} x2={anchoLinea - PR} y1={PT + altoUtil} y2={PT + altoUtil} stroke={theme.border} strokeWidth={1} />
+              {ordenMusculos.map(m => {
+                const pts = semanasKeys.map((s, i) => [xSemana(i), ySemana(tonelajePorSemana[s][m] || 0)]);
+                const d = pts.map((p, i) => (i === 0 ? "M" : "L") + p[0].toFixed(1) + "," + p[1].toFixed(1)).join(" ");
+                return (
+                  <g key={m}>
+                    <path d={d} fill="none" stroke={colorMusculo(m, ordenMusculos)} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+                    {pts.map((p, i) => (tonelajePorSemana[semanasKeys[i]][m] > 0) && (
+                      <circle key={i} cx={p[0]} cy={p[1]} r={semanasKeys[i] === semanaActiva ? 5 : 3.5}
+                        fill={colorMusculo(m, ordenMusculos)} stroke={theme.bg} strokeWidth={2}
+                        style={{ cursor: "pointer" }} onClick={() => setSemanaSel(semanasKeys[i])} />
+                    ))}
+                  </g>
+                );
+              })}
+              {semanasKeys.map((s, i) => (
+                <rect key={s} x={PL + i * AP} y={0} width={AP} height={ALTO} fill="transparent"
+                  style={{ cursor: "pointer" }} onClick={() => setSemanaSel(s)} />
+              ))}
+              {semanasKeys.map((s, i) => (
+                <text key={s} x={xSemana(i)} y={ALTO - 5} textAnchor="middle" fontSize="8.5" fill={theme.muted}>{corta(s)}</text>
+              ))}
+            </svg>
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 8 }}>
+            {ordenMusculos.map(m => (
+              <div key={m} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                <span style={{ width: 12, height: 2, borderRadius: 1, background: colorMusculo(m, ordenMusculos), display: "inline-block" }} />
+                <span style={{ fontSize: 10.5, color: theme.muted }}>{m}</span>
+              </div>
+            ))}
+          </div>
+          {semanaActiva && (
+            <div style={{ marginTop: 10, paddingTop: 8, borderTop: `1px solid ${theme.border}` }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: theme.text, marginBottom: 4 }}>Semana {formatearRangoSemana(semanaActiva)}</div>
+              {ordenMusculos.filter(m => tonelajePorSemana[semanaActiva][m] > 0).sort((a, b) => tonelajePorSemana[semanaActiva][b] - tonelajePorSemana[semanaActiva][a]).map(m => (
+                <div key={m} style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, color: theme.muted, marginTop: 2 }}>
+                  <span>{m}</span><span style={{ color: theme.text, fontWeight: 700 }}>{formatearKg(tonelajePorSemana[semanaActiva][m])} kg</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      )}
+      {mesociclosKeys.length > 0 && (
+        <Card style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 12, color: theme.muted, marginBottom: 2 }}>📊 VOLUMEN POR MESOCICLO</div>
+          <div style={{ fontSize: 10, color: theme.muted, marginBottom: 10 }}>
+            Series planificadas (con el peso de cada músculo), una barra por bloque de 4 semanas. Tocá una barra para ver el detalle de ese bloque.
+            {mesociclosKeys.length < 2 && " Todavía es el primer bloque -- vas a poder comparar en cuanto armes el próximo mesociclo."}
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <svg width={anchoBarras} height={ALTO_B} style={{ display: "block" }}>
+              <line x1={0} x2={anchoBarras} y1={PTB + altoUtilB} y2={PTB + altoUtilB} stroke={theme.border} strokeWidth={1} />
+              {filasPorMesociclo.map((fila, i) => {
+                const bx = 12 + i * (AB + GAP_BLOQUE);
+                let cum = 0;
+                return (
+                  <g key={fila.mesociclo}>
+                    {fila.datos.map((d, di) => {
+                      const segH = (d.valor / maxVolumen) * altoUtilB;
+                      const y = PTB + altoUtilB - cum - segH;
+                      const esUltimo = di === fila.datos.length - 1;
+                      const drawH = Math.max(segH - GAP_SEG, 1);
+                      cum += segH;
+                      return (
+                        <rect key={d.musculo} x={bx} y={y} width={AB} height={drawH}
+                          fill={colorMusculo(d.musculo, ordenMusculos)} rx={esUltimo ? 4 : 0} ry={esUltimo ? 4 : 0}
+                          opacity={fila.mesociclo === mesocicloActivo ? 1 : 0.75}
+                          style={{ cursor: "pointer" }} onClick={() => setMesocicloSel(fila.mesociclo)} />
+                      );
+                    })}
+                    <text x={bx + AB / 2} y={PTB - 6} textAnchor="middle" fontSize="10" fontWeight="700" fill={theme.text}>{formatearSeries(fila.total)}</text>
+                    <text x={bx + AB / 2} y={ALTO_B - 5} textAnchor="middle" fontSize="9" fill={theme.muted}>{`Bloque ${fila.mesociclo}`}</text>
+                  </g>
+                );
+              })}
+            </svg>
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 8 }}>
+            {ordenMusculos.map(m => (
+              <div key={m} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                <span style={{ width: 10, height: 10, borderRadius: 2, background: colorMusculo(m, ordenMusculos), display: "inline-block" }} />
+                <span style={{ fontSize: 10.5, color: theme.muted }}>{m}</span>
+              </div>
+            ))}
+          </div>
+          {mesocicloActivo && volumenPorMesociclo[mesocicloActivo] && (
+            <div style={{ marginTop: 10, paddingTop: 8, borderTop: `1px solid ${theme.border}` }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: theme.text, marginBottom: 4 }}>Bloque {mesocicloActivo}</div>
+              {ordenMusculos.filter(m => volumenPorMesociclo[mesocicloActivo][m] > 0).sort((a, b) => volumenPorMesociclo[mesocicloActivo][b] - volumenPorMesociclo[mesocicloActivo][a]).map(m => (
+                <div key={m} style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, color: theme.muted, marginTop: 2 }}>
+                  <span>{m}</span><span style={{ color: theme.text, fontWeight: 700 }}>{formatearSeries(volumenPorMesociclo[mesocicloActivo][m])} series</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      )}
+    </>
+  );
+}
 function RutinaCoach({ alumno }) {
   const [rutinas, setRutinas] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -7534,6 +8031,7 @@ function RutinaCoach({ alumno }) {
                   <ImagenReferenciaEjercicio nombre={ej.nombre} mapa={mapaImagenes} size={72} />
                   <BotonSubirImagenEjercicio nombre={ej.nombre} onSubida={({ normalizado, url }) => setMapaImagenes(prev => ({ ...prev, [normalizado]: { ...(prev[normalizado]||{}), url } }))} />
                   <EditorResenaEjercicio nombre={ej.nombre} mapa={mapaImagenes} onGuardado={({ normalizado, resena }) => setMapaImagenes(prev => ({ ...prev, [normalizado]: { ...(prev[normalizado]||{}), resena } }))} />
+                  <SelectorMusculoEjercicio nombre={ej.nombre} mapa={mapaImagenes} onGuardado={({ normalizado, musculo }) => setMapaImagenes(prev => ({ ...prev, [normalizado]: { ...(prev[normalizado]||{}), musculo } }))} />
                 </div>
               </div>
 
@@ -7802,6 +8300,12 @@ function RutinaCoach({ alumno }) {
     </>
   );
 
+  // Volumen semanal por grupo muscular: suma las series efectivas (no las
+  // de aproximación) de cada ejercicio de las rutinas publicadas y activas
+  // (no días de descanso), agrupadas por el músculo principal que se le
+  // asignó a ese ejercicio (ver SelectorMusculoEjercicio). Los ejercicios
+  // sin músculo asignado todavía se cuentan aparte, para que se note que
+  // falta clasificarlos.
   return (
     <div>
       {exito && (
@@ -7823,6 +8327,8 @@ function RutinaCoach({ alumno }) {
           </button>
         </div>
       </Card>
+
+      <VolumenSemanal alumno={alumno} />
 
       {/* Rutinas existentes */}
       {loading ? (
@@ -8311,7 +8817,7 @@ cargarMensajes();  }, [alumno]);
 const CAMPOS_EDITABLES_ANAMNESIS = [
   "nombre", "edad", "sexo", "estatura", "peso_actual", "porc_grasa",
   "whatsapp", "instagram", "ocupacion", "actividad_laboral", "nivel_actividad",
-  "objetivo", "ha_entrenado", "que_entrenamiento", "dias_semana", "horario_entreno", "horario_entreno_hasta",
+  "objetivo", "ha_entrenado", "que_entrenamiento", "dias_semana", "lugar_entreno", "lugar_entreno_detalle", "horario_entreno", "horario_entreno_hasta",
   "enfermedad_lesion", "cual_enfermedad", "medicamento", "cual_medicamento",
   "sustancia_farmacologica", "sustancia_cuales", "sustancia_tiempo", "sustancia_hace_cuanto",
   "consume_suplemento", "cual_suplemento",
@@ -8439,6 +8945,7 @@ function CoachAlumno({ onNav, alumno }) {
                   ["Ha entrenado", datosCompletos?.ha_entrenado],
                   ["Entrenamiento previo", datosCompletos?.que_entrenamiento],
                   ["Días/semana", datosCompletos?.dias_semana],
+                  ["Dónde entrena", datosCompletos?.lugar_entreno_detalle ? `${datosCompletos.lugar_entreno} (${datosCompletos.lugar_entreno_detalle})` : datosCompletos?.lugar_entreno],
                   ["Horario entreno", datosCompletos?.horario_entreno_hasta ? `${datosCompletos?.horario_entreno || "?"} y ${datosCompletos.horario_entreno_hasta}` : datosCompletos?.horario_entreno],
                   ["Enfermedad/Lesión", datosCompletos?.enfermedad_lesion === "Sí" ? datosCompletos?.cual_enfermedad : "No"],
                   ["Medicamento", datosCompletos?.medicamento === "Sí" ? datosCompletos?.cual_medicamento : "No"],
@@ -8529,6 +9036,10 @@ function CoachAlumno({ onNav, alumno }) {
                 <CampoEditable campo="ha_entrenado" label="Ha entrenado antes" tipo="select" opciones={["Sí","No"]} formDatos={formDatos} setCampo={setCampo} />
                 {formDatos?.ha_entrenado === "Sí" && <CampoEditable campo="que_entrenamiento" label="Qué entrenamiento o deporte" formDatos={formDatos} setCampo={setCampo} />}
                 <CampoEditable campo="dias_semana" label="Días de entreno a la semana" tipo="select" opciones={["1 día","2 días","3 días","4 días","5 días","6 días"]} formDatos={formDatos} setCampo={setCampo} />
+                <CampoEditable campo="lugar_entreno" label="Dónde entrena" tipo="select" opciones={["Gimnasio","En casa","Parque o aire libre","Otro"]} formDatos={formDatos} setCampo={setCampo} />
+                {(formDatos?.lugar_entreno === "Gimnasio" || formDatos?.lugar_entreno === "Otro") && (
+                  <CampoEditable campo="lugar_entreno_detalle" label={formDatos?.lugar_entreno === "Gimnasio" ? "Nombre del gimnasio" : "Especifique dónde"} formDatos={formDatos} setCampo={setCampo} />
+                )}
                 <span style={editLabelStyle}>Horario de entreno</span>
                 <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:10 }}>
                   <input style={{ ...editInputStyle, flex:1 }} type="time" value={formDatos?.horario_entreno ?? ""} onChange={e => setCampo("horario_entreno", e.target.value)} />
@@ -8594,6 +9105,8 @@ function CoachAlumno({ onNav, alumno }) {
         {tab==="Pagos"&&(<PagosCoach alumno={alumno}/>)}
         {tab==="Progreso"&&(
           <>
+            <VolumenSemanal alumno={{ ...alumno, ...(datosCompletos||{}) }} />
+            <HistorialVolumenTonelaje alumno={{ ...alumno, ...(datosCompletos||{}) }} />
             <ProgresoMetricas userId={alumno.id} />
             <DiarioCoach alumno={{ ...alumno, ...(datosCompletos||{}) }}/>
           </>
@@ -8712,30 +9225,43 @@ export default function App() {
     }
   };
 
+  // El marco de celular (bisel, notch, fondo oscuro) es solo una vista de
+  // presentación para pantallas grandes (PC/notebook) -- en un celular real
+  // ese "marco" ya lo pone el dispositivo, así que ahí la app pasa a ocupar
+  // toda la pantalla real (sin bisel, sin fondo oscuro alrededor). El corte
+  // es un media query en CSS (min-width: 880px), no detección de dispositivo,
+  // así que también depende del ancho de la ventana en desktop.
   return (
-    <div style={{ background:"#0d0d1a",minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Inter',-apple-system,sans-serif",padding:16 }}>
-      <div style={{ textAlign:"center" }}>
-        <div style={{ fontSize:11,color:"#444",marginBottom:10,letterSpacing:2 }}>MIQUEL COACH PERFORMANCE · PROTOTIPO</div>
-        <div style={{ position:"relative",width:375,height:720,margin:"0 auto" }}>
-          <div style={{ position:"absolute",inset:-12,border:"12px solid #1e1e2e",borderRadius:48,boxShadow:"0 0 0 2px #2e2e3e, 0 32px 80px rgba(0,0,0,0.9)",pointerEvents:"none",zIndex:10 }}/>
-          <div style={{ position:"absolute",top:-18,left:"50%",transform:"translateX(-50%)",width:90,height:7,background:"#1e1e2e",borderRadius:4,zIndex:11 }}/>
-          <div style={{ width:375,height:720,background:theme.bg,borderRadius:36,overflow:"auto",position:"relative" }}>
-            {renderScreen()}
-            {mostrarGuiaInstalar && (
-              <div style={{ position:"absolute", top:12, left:12, right:12, zIndex:3000, background:theme.card, border:`1px solid ${theme.accentLight}66`, borderRadius:12, padding:"12px 14px", boxShadow:`0 4px 20px rgba(0,0,0,0.5), 0 0 18px ${theme.accent}44` }}>
-                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:8 }}>
-                  <div style={{ fontSize:12, fontWeight:800, color:theme.text }}>📲 Instala esta app en tu celular</div>
-                  <span onClick={cerrarGuiaInstalar} style={{ cursor:"pointer", color:theme.muted, fontSize:14, lineHeight:1, flexShrink:0 }}>✕</span>
-                </div>
-                <div style={{ fontSize:11, color:theme.muted, marginTop:6, lineHeight:1.5 }}>
-                  {guiaInstalarTexto} Así te queda como una app normal, sin tener que entrar por el navegador cada vez.
-                </div>
+    <div className="mcp-page">
+      <style>{`
+        .mcp-page { background:#0d0d1a; min-height:100vh; min-height:100dvh; display:flex; align-items:center; justify-content:center; font-family:'Inter',-apple-system,sans-serif; }
+        .mcp-frame-outer { position:relative; width:100%; height:100vh; height:100dvh; margin:0 auto; }
+        .mcp-frame-inner { width:100%; height:100%; background:${theme.bg}; overflow:auto; position:relative; }
+        .mcp-bezel, .mcp-notch { display:none; }
+        @media (min-width: 880px) {
+          .mcp-page { padding:16px; }
+          .mcp-frame-outer { width:375px; height:720px; }
+          .mcp-frame-inner { border-radius:36px; }
+          .mcp-bezel { display:block; position:absolute; inset:-12px; border:12px solid #1e1e2e; border-radius:48px; box-shadow:0 0 0 2px #2e2e3e, 0 32px 80px rgba(0,0,0,0.9); pointer-events:none; z-index:10; }
+          .mcp-notch { display:block; position:absolute; top:-18px; left:50%; transform:translateX(-50%); width:90px; height:7px; background:#1e1e2e; border-radius:4px; z-index:11; }
+        }
+      `}</style>
+      <div className="mcp-frame-outer">
+        <div className="mcp-bezel" />
+        <div className="mcp-notch" />
+        <div className="mcp-frame-inner">
+          {renderScreen()}
+          {mostrarGuiaInstalar && (
+            <div style={{ position:"absolute", top:12, left:12, right:12, zIndex:3000, background:theme.card, border:`1px solid ${theme.accentLight}66`, borderRadius:12, padding:"12px 14px", boxShadow:`0 4px 20px rgba(0,0,0,0.5), 0 0 18px ${theme.accent}44` }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:8 }}>
+                <div style={{ fontSize:12, fontWeight:800, color:theme.text }}>📲 Instala esta app en tu celular</div>
+                <span onClick={cerrarGuiaInstalar} style={{ cursor:"pointer", color:theme.muted, fontSize:14, lineHeight:1, flexShrink:0 }}>✕</span>
               </div>
-            )}
-          </div>
-        </div>
-        <div style={{ marginTop:20,display:"flex",gap:8,flexWrap:"wrap",justifyContent:"center",maxWidth:420 }}>
-          {[["login","Login"],["registro","Registro"],["confirmar_correo","Confirmar correo"],["anamnesis","Anamnesis"],["alumno_home","Inicio"],["rutina","Rutina"],["nutricion","Dieta"],["checkin","Check-in"],["progreso","Progreso"],["coach_panel","Coach Panel"],["coach_alumno","Perfil Alumno"]].map(([id,label])=>(<button key={id} onClick={()=>setScreen(id)} style={{ background:screen===id?"#2563EB":"#13131a",border:`1px solid ${screen===id?"#2563EB":"#2a2a38"}`,color:screen===id?"#fff":"#666",borderRadius:8,padding:"6px 12px",fontSize:11,cursor:"pointer",fontWeight:600 }}>{label}</button>))}
+              <div style={{ fontSize:11, color:theme.muted, marginTop:6, lineHeight:1.5 }}>
+                {guiaInstalarTexto} Así te queda como una app normal, sin tener que entrar por el navegador cada vez.
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
