@@ -4886,6 +4886,8 @@ function DietaCoach({ alumno }) {
   const [equivalenciaAbierta, setEquivalenciaAbierta] = useState(null); // "ci-ai" de la fila con equivalencias automáticas desplegadas, o null
   const [busquedaSustituto, setBusquedaSustituto] = useState({}); // "ci-ai" -> texto tipeado para agregar un sustituto manual
   const [cantidadesSustitutoEditando, setCantidadesSustitutoEditando] = useState({}); // "ci-ai-idSustituto" -> texto del gramaje mientras se edita a mano
+  const [reemplazandoSustituto, setReemplazandoSustituto] = useState(null); // "ci-ai-idSustituto" de la fila en modo reemplazo, o null
+  const [busquedaReemplazoSustituto, setBusquedaReemplazoSustituto] = useState({}); // "ci-ai-idSustituto" -> texto tipeado para reemplazarlo
   const [calculadoraAbierta, setCalculadoraAbierta] = useState(false);
   // Panel para ver/editar/eliminar cualquier alimento de la biblioteca,
   // esté o no usado en la dieta que se está armando ahora mismo.
@@ -4893,6 +4895,7 @@ function DietaCoach({ alumno }) {
   const [editandoAlimentoId, setEditandoAlimentoId] = useState(null);
   const [agregandoAlimentoBiblioteca, setAgregandoAlimentoBiblioteca] = useState(false);
   const [busquedaBiblioteca, setBusquedaBiblioteca] = useState("");
+  const [filtroGrupoBiblioteca, setFiltroGrupoBiblioteca] = useState("todos"); // "todos" | key de GRUPOS_ALIMENTO | "sin_grupo"
   // Plantillas de dieta (mismo patrón que las plantillas de rutina): no son
   // de ningún alumno en particular, se reutilizan como base para cualquiera.
   const [plantillasDieta, setPlantillasDieta] = useState([]);
@@ -5075,6 +5078,19 @@ function DietaCoach({ alumno }) {
     const nuevasEntradas = entradasActuales.map(e =>
       idDeEntradaSustituto(e) === idSustituto ? { id: idSustituto, cantidad: nuevaCantidad, cantidadOrigen: cantidadOrigenActual } : e
     );
+    actualizarSustitutosAlimento(alim, nuevasEntradas);
+  };
+  // Cambia qué alimento es el sustituto en esa fila puntual, sin tener que
+  // sacarlo con la ✕ y volver a agregarlo aparte -- queda en el mismo lugar
+  // de la lista. El gramaje vuelve a calcularse automático para el nuevo
+  // alimento (el que tenía el sustituto anterior no tiene sentido para uno
+  // distinto).
+  const reemplazarSustituto = (alim, opcionesActuales, idViejo, idNuevo) => {
+    if (idNuevo === alim.id || idNuevo === idViejo) return;
+    const ids = opcionesActuales.map(o => o.alimento.id);
+    if (ids.includes(idNuevo)) return;
+    const entradasActuales = Array.isArray(alim.sustitutos_ids) ? alim.sustitutos_ids : ids;
+    const nuevasEntradas = entradasActuales.map(e => idDeEntradaSustituto(e) === idViejo ? idNuevo : e);
     actualizarSustitutosAlimento(alim, nuevasEntradas);
   };
 
@@ -5274,7 +5290,7 @@ function DietaCoach({ alumno }) {
   const guardarComoPlantillaDieta = async () => {
     if (!nombrePlantillaDietaNueva.trim()) { alert("Ponle un nombre a la plantilla."); return; }
     setGuardandoPlantillaDieta(true);
-    const { error } = await supabase.from("dieta_plantillas").insert({
+    const datos = {
       nombre: nombrePlantillaDietaNueva.trim(),
       calorias: parseInt(calorias) || null,
       proteinas: parseInt(proteinas) || null,
@@ -5288,7 +5304,23 @@ function DietaCoach({ alumno }) {
       suplementos_opcionales: suplementosOpcionales.filter(s => s.nombre && s.momento),
       notas,
       habitos,
-    });
+    };
+    // Si ya existe una plantilla de dieta con el mismo nombre, se actualiza
+    // esa misma fila en vez de crear una nueva (mismo criterio que ya usa
+    // guardarComoPlantilla para rutinas, para que no queden plantillas
+    // repetidas con el mismo nombre en la lista). Se pide confirmación
+    // porque reemplaza la plantilla compartida: no afecta a ningún alumno
+    // que ya tenga una dieta asignada a partir de ella.
+    const existente = plantillasDieta.find(p => normalizarNombreAlimento(p.nombre) === normalizarNombreAlimento(datos.nombre));
+    if (existente) {
+      if (!confirm(`Ya existe una plantilla llamada "${existente.nombre}". Si continuás, se va a reemplazar esa plantilla compartida con esta versión -- esto afecta a futuros alumnos que la usen (no a los que ya la tienen asignada). ¿Confirmás?`)) {
+        setGuardandoPlantillaDieta(false);
+        return;
+      }
+    }
+    const { error } = existente
+      ? await supabase.from("dieta_plantillas").update(datos).eq("id", existente.id)
+      : await supabase.from("dieta_plantillas").insert(datos);
     recordarSuplementosEnBiblioteca(suplementosOpcionales.filter(s => s.nombre && s.momento));
     setGuardandoPlantillaDieta(false);
     if (error) { alert("Error guardando la plantilla: " + error.message); return; }
@@ -5450,6 +5482,29 @@ function DietaCoach({ alumno }) {
                           const enEdicion = cantidadesSustitutoEditando[editKey];
                           const cantidadMostrada = enEdicion != null ? enEdicion : String(o.cantidad);
                           const macrosSustituto = calcularMacrosAlimento(o.alimento, parseFloat(cantidadMostrada) || 0);
+                          if (reemplazandoSustituto === editKey) {
+                            return (
+                              <div key={o.alimento.id} style={{ display:"flex", alignItems:"center", gap:6, marginBottom:4 }}>
+                                <input autoFocus style={{ ...inputStyle, fontSize:11, padding:"5px 8px" }} placeholder={`Reemplazar "${o.alimento.nombre}" por...`}
+                                  value={busquedaReemplazoSustituto[editKey] || ""} list={`lista-reemplazo-${editKey}`}
+                                  onChange={e => {
+                                    const val = e.target.value;
+                                    const match = mapaAlimentos[normalizarNombreAlimento(val)];
+                                    if (match && !idsUsados.has(match.id)) {
+                                      reemplazarSustituto(alim, opciones, o.alimento.id, match.id);
+                                      setBusquedaReemplazoSustituto(prev => { const n = { ...prev }; delete n[editKey]; return n; });
+                                      setReemplazandoSustituto(null);
+                                    } else {
+                                      setBusquedaReemplazoSustituto(prev => ({ ...prev, [editKey]: val }));
+                                    }
+                                  }}
+                                  onBlur={() => setReemplazandoSustituto(null)} />
+                                <datalist id={`lista-reemplazo-${editKey}`}>
+                                  {alimentosBiblioteca.filter(a2 => !idsUsados.has(a2.id)).map(a2 => <option key={a2.id} value={a2.nombre} />)}
+                                </datalist>
+                              </div>
+                            );
+                          }
                           return (
                             <div key={o.alimento.id} style={{ display:"flex", alignItems:"center", gap:6, marginBottom:4 }}>
                               <input type="number" step="0.5" value={cantidadMostrada}
@@ -5460,7 +5515,8 @@ function DietaCoach({ alumno }) {
                                   setCantidadesSustitutoEditando(prev => { const n = { ...prev }; delete n[editKey]; return n; });
                                 }}
                                 style={{ width:52, background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:6, padding:"3px 5px", color:theme.text, fontSize:11, textAlign:"right" }} />
-                              <div style={{ fontSize:11, color:theme.text, flex:1, minWidth:0 }}>
+                              <div onClick={() => setReemplazandoSustituto(editKey)} title="Tocar para cambiar el alimento sustituto"
+                                style={{ fontSize:11, color:theme.text, flex:1, minWidth:0, cursor:"pointer" }}>
                                 <div>{esUnidadPorUno(o.alimento.unidad) ? o.alimento.unidad : "g"} {o.alimento.nombre}{o.alimento.estado_preparacion ? ` (pesado ${o.alimento.estado_preparacion})` : ""}</div>
                                 <div style={{ fontSize:9.5, color:theme.muted }}>{macrosSustituto.calorias} kcal · {macrosSustituto.proteinas}p · {macrosSustituto.carbos}c · {macrosSustituto.grasas}g</div>
                               </div>
@@ -5681,6 +5737,14 @@ function DietaCoach({ alumno }) {
       {!creando && mostrarBiblioteca && (
         <Card style={{ marginTop:10 }}>
           <div style={{ fontSize:12, color:theme.muted, marginBottom:10 }}>BIBLIOTECA DE ALIMENTOS</div>
+          <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginBottom:10 }}>
+            {[{ key:"todos", label:"Todos" }, ...GRUPOS_ALIMENTO.map(g => ({ key:g.key, label:g.label })), { key:"sin_grupo", label:"Sin grupo" }].map(f => (
+              <button key={f.key} onClick={() => setFiltroGrupoBiblioteca(f.key)}
+                style={{ background:filtroGrupoBiblioteca===f.key?theme.accent:"transparent", border:`1px solid ${filtroGrupoBiblioteca===f.key?theme.accent:theme.border}`, borderRadius:8, padding:"5px 10px", color:filtroGrupoBiblioteca===f.key?"#fff":theme.muted, fontSize:11, fontWeight:600, cursor:"pointer", whiteSpace:"nowrap" }}>
+                {f.label}
+              </button>
+            ))}
+          </div>
           <input style={{ ...inputStyle, marginBottom:10 }} placeholder="Buscar alimento..." value={busquedaBiblioteca} onChange={e => setBusquedaBiblioteca(e.target.value)} />
           {!agregandoAlimentoBiblioteca ? (
             <button onClick={() => setAgregandoAlimentoBiblioteca(true)} style={{ background:"transparent", border:`1px dashed ${theme.accent}`, borderRadius:8, padding:"8px", color:theme.accentLight, fontSize:12, fontWeight:600, cursor:"pointer", width:"100%", marginBottom:10 }}>+ Agregar alimento</button>
@@ -5692,7 +5756,10 @@ function DietaCoach({ alumno }) {
           )}
           {alimentosBiblioteca.length === 0 ? (
             <div style={{ fontSize:13, color:theme.muted, marginTop:10 }}>Todavía no cargaste ningún alimento. Agregalo arriba, o se carga solo desde el armador de dieta al escribir un alimento que no existe todavía.</div>
-          ) : alimentosBiblioteca.filter(a => normalizarNombreAlimento(a.nombre).includes(normalizarNombreAlimento(busquedaBiblioteca))).map(a => (
+          ) : alimentosBiblioteca
+              .filter(a => normalizarNombreAlimento(a.nombre).includes(normalizarNombreAlimento(busquedaBiblioteca)))
+              .filter(a => filtroGrupoBiblioteca === "todos" || (filtroGrupoBiblioteca === "sin_grupo" ? !a.grupo : a.grupo === filtroGrupoBiblioteca))
+              .map(a => (
             <div key={a.id} style={{ padding:"8px 0", borderBottom:`1px solid ${theme.border}` }}>
               {editandoAlimentoId === a.id ? (
                 <NuevoAlimentoForm
@@ -8940,6 +9007,158 @@ cargarMensajes();  }, [alumno]);
   );
 }
 
+// Formatea compacto una serie de ejercicio (aproximación o efectiva) para
+// la Vista previa -- no busca replicar la pantalla interactiva del alumno
+// (con inputs de kg/reps, checks, etc), es un resumen de solo lectura
+// pensado para que el coach revise rápido que la rutina quedó bien armada.
+function resumenSerieEjercicio(s) {
+  if (s.tipo === "aproximacion" || s.tipo === "calentamiento") {
+    return `${s.reps || "?"} reps @ ${s.pctDesde || "?"}-${s.pctHasta || "?"}% de tu efectiva`;
+  }
+  const tecnica = s.tecnica && s.tecnica !== "normal" ? ` · ${s.tecnica}` : "";
+  return `${s.reps || "?"} reps · RIR ${s.rir ?? "?"}${tecnica}`;
+}
+// Vista previa de solo lectura: lo que el coach usa para revisar, con los
+// datos REALES ya guardados del alumno (nunca datos de mentira), que la
+// rutina y la dieta que le armó quedaron bien antes de avisarle que ya
+// puede entrar a la app. No es interactiva a propósito (no tiene checks,
+// inputs de carga, ni nada que el alumno pueda tocar) -- es solo para
+// que el coach lea y confirme. El aviso final es un mensaje interno común
+// (tabla "mensajes"), igual que cualquier otro mensaje del coach.
+function VistaPreviaCoach({ alumno }) {
+  const [loading, setLoading] = useState(true);
+  const [rutinas, setRutinas] = useState([]);
+  const [dietas, setDietas] = useState([]);
+  const [mapaAlimentos, setMapaAlimentos] = useState({});
+  const [enviando, setEnviando] = useState(false);
+  const [avisado, setAvisado] = useState(false);
+
+  useEffect(() => {
+    const cargar = async () => {
+      if (!alumno?.id) return;
+      setLoading(true);
+      const [{ data: rutinasData }, { data: dietasData }, biblioteca] = await Promise.all([
+        supabase.from("rutinas").select("*, ejercicios(*)").eq("usuario_id", alumno.id).eq("publicada", true),
+        supabase.from("dietas").select("*").eq("usuario_id", alumno.id).eq("publicada", true).order("created_at", { ascending: false }),
+        cargarAlimentosBiblioteca(),
+      ]);
+      const ordenDia = (dia) => { const i = ORDEN_DIAS_SEMANA.indexOf(dia); return i >= 0 ? i : ORDEN_DIAS_SEMANA.length; };
+      setRutinas((rutinasData || []).slice().sort((a, b) => ordenDia(a.dia) - ordenDia(b.dia)));
+      setDietas(ordenarDietasPorDia(dietasData || []));
+      const mapa = {};
+      (biblioteca || []).forEach(al => { mapa[al.id] = al; });
+      setMapaAlimentos(mapa);
+      setLoading(false);
+      setAvisado(false);
+    };
+    cargar();
+  }, [alumno]);
+
+  const avisarAlumno = async () => {
+    setEnviando(true);
+    await supabase.from("mensajes").insert({
+      usuario_id: alumno.id,
+      de: "coach",
+      texto: "¡Ya está lista tu rutina y tu dieta! Entrá a la app cuando quieras para revisarlas. 💪",
+    });
+    setEnviando(false);
+    setAvisado(true);
+  };
+
+  if (loading) return <Card style={{ textAlign:"center", padding:20 }}><div style={{ color:theme.muted }}>Cargando vista previa...</div></Card>;
+
+  const hayContenido = rutinas.length > 0 || dietas.length > 0;
+
+  return (
+    <div>
+      <div style={{ fontSize:11, color:theme.muted, marginBottom:12, background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:8, padding:"8px 10px" }}>
+        👁 Esto es lo que {alumno?.nombre || "el alumno"} va a ver, armado con sus datos reales ya guardados. Revisalo antes de avisarle que ya puede entrar.
+      </div>
+
+      {!hayContenido && (
+        <Card style={{ textAlign:"center", padding:24 }}>
+          <div style={{ color:theme.muted, fontSize:13 }}>Todavía no hay ninguna rutina ni dieta publicada para {alumno?.nombre || "este alumno"}.</div>
+        </Card>
+      )}
+
+      {rutinas.length > 0 && (
+        <Card style={{ marginBottom:12 }}>
+          <div style={{ fontSize:12, color:theme.muted, marginBottom:10, fontWeight:700 }}>🏋️ RUTINA</div>
+          {rutinas.map(r => (
+            <div key={r.id} style={{ marginBottom:14, paddingBottom:14, borderBottom:`1px solid ${theme.border}` }}>
+              <div style={{ fontSize:13, fontWeight:800, color:theme.text, marginBottom:6 }}>{r.dia}{r.grupo_muscular ? ` -- ${r.grupo_muscular}` : ""}</div>
+              {r.es_descanso ? (
+                <div style={{ fontSize:12, color:theme.muted }}>
+                  😴 Día de descanso{r.meta_pasos ? ` · Meta: ${r.meta_pasos} pasos` : ""}{Array.isArray(r.cardio) && r.cardio.length > 0 ? " · con cardio sugerido" : ""}
+                </div>
+              ) : (
+                <>
+                  {r.meta_pasos && <div style={{ fontSize:11, color:theme.muted, marginBottom:6 }}>Meta de pasos: {r.meta_pasos}</div>}
+                  {(r.ejercicios || []).slice().sort((a,b) => (a.orden||0)-(b.orden||0)).map(ej => (
+                    <div key={ej.id} style={{ marginBottom:8 }}>
+                      <div style={{ fontSize:12.5, fontWeight:700, color:theme.text }}>
+                        {ej.nombre}{ej.grupo_superserie ? ` (superserie ${ej.grupo_superserie})` : ""}
+                      </div>
+                      <div style={{ fontSize:10.5, color:theme.muted, marginBottom:2 }}>Tempo {ej.tempo || "--"} · Descanso {ej.descanso_desde ? `${ej.descanso_desde}-` : ""}{ej.descanso}s</div>
+                      {(ej.series || []).map((s, i) => (
+                        <div key={i} style={{ fontSize:11, color:theme.text, paddingLeft:10 }}>• {resumenSerieEjercicio(s)}</div>
+                      ))}
+                    </div>
+                  ))}
+                </>
+              )}
+            </div>
+          ))}
+        </Card>
+      )}
+
+      {dietas.length > 0 && (
+        <Card style={{ marginBottom:12 }}>
+          <div style={{ fontSize:12, color:theme.muted, marginBottom:10, fontWeight:700 }}>🥗 DIETA</div>
+          {dietas.map(d => (
+            <div key={d.id} style={{ marginBottom:14, paddingBottom:14, borderBottom:`1px solid ${theme.border}` }}>
+              <div style={{ fontSize:13, fontWeight:800, color:theme.text, marginBottom:4 }}>
+                {Array.isArray(d.dias) && d.dias.length > 0 ? d.dias.join(", ") : "Todos los días"}
+              </div>
+              <div style={{ fontSize:11, color:theme.muted, marginBottom:8 }}>
+                Objetivo: {d.calorias || "--"} kcal · {d.proteinas || "--"}p · {d.carbos || "--"}c · {d.grasas || "--"}g
+              </div>
+              {(d.comidas || []).map((c, ci) => (
+                <div key={ci} style={{ marginBottom:8 }}>
+                  <div style={{ fontSize:12, fontWeight:700, color:theme.text }}>{c.nombre}{c.hora ? ` -- ${c.hora}` : ""}</div>
+                  {(c.alimentos || []).map((a, ai) => {
+                    const alim = a.alimento_id ? mapaAlimentos[a.alimento_id] : null;
+                    if (!alim) return null;
+                    const macros = calcularMacrosAlimento(alim, a.cantidad);
+                    return (
+                      <div key={ai} style={{ fontSize:11, color:theme.muted, paddingLeft:10 }}>
+                        • {a.cantidad}{esUnidadPorUno(alim.unidad) ? ` ${alim.unidad}` : "g"} {alim.nombre} ({macros.calorias} kcal)
+                      </div>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+          ))}
+        </Card>
+      )}
+
+      {hayContenido && (
+        <Card style={{ textAlign:"center", padding:16 }}>
+          {avisado ? (
+            <div style={{ color:theme.success, fontSize:13, fontWeight:700 }}>✓ Mensaje enviado a {alumno?.nombre}</div>
+          ) : (
+            <>
+              <div style={{ fontSize:12, color:theme.muted, marginBottom:10 }}>¿Está todo correcto? Avisale que ya puede entrar.</div>
+              <Btn onClick={avisarAlumno} disabled={enviando}>{enviando ? "Enviando..." : "✅ Avisar al alumno"}</Btn>
+            </>
+          )}
+        </Card>
+      )}
+    </div>
+  );
+}
+
 // Campos de la anamnesis que el coach puede corregir desde el perfil del
 // alumno (todo salvo el email, que va ligado a la cuenta de autenticación,
 // y las fotos iniciales, que se suben aparte).
@@ -8957,7 +9176,7 @@ const CAMPOS_EDITABLES_ANAMNESIS = [
 ];
 
 function CoachAlumno({ onNav, alumno }) {
-  const tabs=["Datos","Rutina","Dieta","Reportes","Pagos","Progreso","Mensajes"];
+  const tabs=["Datos","Rutina","Dieta","Vista previa","Reportes","Pagos","Progreso","Mensajes"];
   const [tab,setTab]=useState(alumno?.tabInicial || "Datos");
   const [datosCompletos, setDatosCompletos] = useState(null);
   const [lightbox, setLightbox] = useState(null);
@@ -9231,6 +9450,7 @@ function CoachAlumno({ onNav, alumno }) {
 {tab==="Mensajes"&&(<MensajesCoach alumno={alumno}/>)}
         {tab==="Rutina"&&(<RutinaCoach alumno={{ ...alumno, ...(datosCompletos||{}) }}/>)}
         {tab==="Dieta"&&(<DietaCoach alumno={alumno}/>)}
+        {tab==="Vista previa"&&(<VistaPreviaCoach alumno={alumno}/>)}
         {tab==="Pagos"&&(<PagosCoach alumno={alumno}/>)}
         {tab==="Progreso"&&(
           <>
