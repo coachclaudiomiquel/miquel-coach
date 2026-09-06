@@ -189,6 +189,31 @@ const FotoMiniatura = ({ url, alt, size = 44 }) => {
     </>
   );
 };
+// Ícono de referencia para cómo tomar una medida corporal (cintura, cadera,
+// brazo, pecho, pierna). La imagen vive en /public/medidas/<zona>.jpg -- si
+// el archivo todavía no existe (por ejemplo, mientras se van preparando)
+// el ícono simplemente no se muestra, sin romper nada. En cuanto se agregue
+// el archivo con ese nombre exacto en esa carpeta, el ícono aparece solo,
+// sin necesidad de tocar código de nuevo.
+const ZONAS_MEDIDA_IMG = {
+  cintura: "/medidas/cintura.jpg",
+  cadera: "/medidas/cadera.jpg",
+  brazo: "/medidas/brazo.jpg",
+  pecho: "/medidas/pecho.jpg",
+  pierna: "/medidas/pierna.jpg",
+};
+const IconoReferenciaMedida = ({ zona, onAbrir }) => {
+  const [disponible, setDisponible] = useState(true);
+  const src = ZONAS_MEDIDA_IMG[zona];
+  if (!src || !disponible) return null;
+  return (
+    <button onClick={() => onAbrir(src)} title="Ver cómo tomar esta medida"
+      style={{ background:"transparent", border:"none", cursor:"pointer", padding:0, marginLeft:6, fontSize:12, lineHeight:1, verticalAlign:"middle" }}>
+      📏
+      <img src={src} alt="" style={{ display:"none" }} onError={() => setDisponible(false)} />
+    </button>
+  );
+};
 // Helpers compartidos de fotos (comprimir + subir a Supabase Storage).
 // Usados por AnamnesisScreen (fotos iniciales) y también por la edición
 // posterior de fotos (alumno en Progreso, coach en Datos del alumno).
@@ -1352,6 +1377,117 @@ function ConfirmarCorreoScreen({ onNav, email }) {
   );
 }
 
+// Mapea los campos del formulario de Anamnesis a las columnas de la tabla
+// "usuarios" -- se usa tanto para el guardado parcial al avanzar de paso
+// como para el envío final, para que ambos casos queden siempre iguales.
+function camposAnamnesisAColumnas(form) {
+  return {
+    nombre: form.nombre,
+    edad: parseInt(form.edad) || null,
+    sexo: form.sexo,
+    ocupacion: form.ocupacion,
+    actividad_laboral: form.actividadLaboral,
+    nivel_actividad: form.nivelActividad || null,
+    whatsapp: form.whatsapp,
+    instagram: form.instagram,
+    peso_actual: parseFloat(form.peso) || null,
+    estatura: parseFloat(form.estatura) || null,
+    porc_grasa: parseFloat(form.porcGrasa) || null,
+    cintura_inicial: parseFloat(form.cintura) || null,
+    cadera_inicial: parseFloat(form.cadera) || null,
+    brazo_inicial: parseFloat(form.brazo) || null,
+    pecho_inicial: parseFloat(form.pecho) || null,
+    pierna_inicial: parseFloat(form.pierna) || null,
+    objetivo: form.objetivo,
+    ha_entrenado: form.haEntrenado,
+    que_entrenamiento: form.queEntrenamiento,
+    dias_semana: form.diasSemana,
+    lugar_entreno: form.lugarEntreno,
+    lugar_entreno_detalle: form.lugarEntrenoDetalle,
+    horario_entreno: form.horarioEntreno,
+    horario_entreno_hasta: form.horarioEntrenoHasta,
+    enfermedad_lesion: form.enfermedadLesion,
+    cual_enfermedad: form.cualEnfermedad,
+    medicamento: form.medicamento,
+    cual_medicamento: form.cualMedicamento,
+    sustancia_farmacologica: form.sustanciaFarmacologica,
+    sustancia_cuales: form.sustanciaCuales,
+    sustancia_tiempo: form.sustanciaTiempo,
+    sustancia_hace_cuanto: form.sustanciaHaceCuanto,
+    consume_suplemento: form.consumeSuplemento,
+    cual_suplemento: form.cualSuplemento,
+    alimentacion_diferente: form.alimentacionDiferente,
+    alergia: form.alergia,
+    cual_alergia: form.cualAlergia,
+    no_le_gustan: form.noLeGustan,
+    favoritos: form.favoritos,
+    hora_levanta: form.horaLevanta,
+    hora_duerme: form.horaDuerme,
+    comidas_dia: form.comidasDia,
+    resumen_desayuno: form.desayuno,
+    resumen_snack: form.snack,
+    resumen_almuerzo: form.almuerzo,
+    resumen_once: form.once,
+    resumen_cena: form.cena,
+  };
+}
+// Camino inverso: a partir de una fila ya guardada de "usuarios" (un
+// guardado parcial de una anamnesis que quedó a mitad de camino), arma el
+// objeto "form" para precargar el formulario justo donde se quedó.
+function columnasUsuarioACamposAnamnesis(row) {
+  if (!row) return null;
+  const num = (v) => (v === null || v === undefined ? "" : String(v));
+  return {
+    nombre: row.nombre || "",
+    edad: num(row.edad),
+    sexo: row.sexo || "",
+    ocupacion: row.ocupacion || "",
+    actividadLaboral: row.actividad_laboral || "",
+    nivelActividad: row.nivel_actividad || 5,
+    whatsapp: row.whatsapp || "",
+    instagram: row.instagram || "",
+    peso: num(row.peso_actual),
+    estatura: num(row.estatura),
+    porcGrasa: num(row.porc_grasa),
+    cintura: num(row.cintura_inicial),
+    cadera: num(row.cadera_inicial),
+    brazo: num(row.brazo_inicial),
+    pecho: num(row.pecho_inicial),
+    pierna: num(row.pierna_inicial),
+    objetivo: row.objetivo || "",
+    haEntrenado: row.ha_entrenado || "",
+    queEntrenamiento: row.que_entrenamiento || "",
+    diasSemana: row.dias_semana || "",
+    lugarEntreno: row.lugar_entreno || "",
+    lugarEntrenoDetalle: row.lugar_entreno_detalle || "",
+    horarioEntreno: row.horario_entreno || "",
+    horarioEntrenoHasta: row.horario_entreno_hasta || "",
+    enfermedadLesion: row.enfermedad_lesion || "",
+    cualEnfermedad: row.cual_enfermedad || "",
+    medicamento: row.medicamento || "",
+    cualMedicamento: row.cual_medicamento || "",
+    sustanciaFarmacologica: row.sustancia_farmacologica || "",
+    sustanciaCuales: row.sustancia_cuales || "",
+    sustanciaTiempo: row.sustancia_tiempo || "",
+    sustanciaHaceCuanto: row.sustancia_hace_cuanto || "",
+    consumeSuplemento: row.consume_suplemento || "",
+    cualSuplemento: row.cual_suplemento || "",
+    alimentacionDiferente: row.alimentacion_diferente || "",
+    alergia: row.alergia || "",
+    cualAlergia: row.cual_alergia || "",
+    noLeGustan: row.no_le_gustan || "",
+    favoritos: row.favoritos || "",
+    horaLevanta: row.hora_levanta || "",
+    horaDuerme: row.hora_duerme || "",
+    comidasDia: row.comidas_dia || "",
+    desayuno: row.resumen_desayuno || "",
+    snack: row.resumen_snack || "",
+    almuerzo: row.resumen_almuerzo || "",
+    once: row.resumen_once || "",
+    cena: row.resumen_cena || "",
+  };
+}
+
 function AnamnesisScreen({ onNav }) {
   const [paso, setPaso] = useState(1);
   const [lightbox, setLightbox] = useState(null);
@@ -1359,7 +1495,7 @@ function AnamnesisScreen({ onNav }) {
   const [form, setForm] = useState({
     nombre: "", edad: "", sexo: "", ocupacion: "", actividadLaboral: "", nivelActividad: 5,
     instagram: "", whatsapp: "",
-    peso: "", estatura: "", porcGrasa: "", objetivo: "",
+    peso: "", estatura: "", porcGrasa: "", cintura: "", cadera: "", brazo: "", pecho: "", pierna: "", objetivo: "",
     haEntrenado: "", queEntrenamiento: "", diasSemana: "", lugarEntreno: "", lugarEntrenoDetalle: "", horarioEntreno: "", horarioEntrenoHasta: "",
     enfermedadLesion: "", cualEnfermedad: "", medicamento: "", cualMedicamento: "",
     sustanciaFarmacologica: "", sustanciaCuales: "", sustanciaTiempo: "", sustanciaHaceCuanto: "",
@@ -1373,6 +1509,44 @@ function AnamnesisScreen({ onNav }) {
 
   const [fotosArchivos, setFotosArchivos] = useState({ fotoFrente: null, fotoEspalda: null, fotoPerfDer: null, fotoPerfIzq: null });
   const [enviandoAnamnesis, setEnviandoAnamnesis] = useState(false);
+
+  // Si el alumno ya había empezado la anamnesis en otra sesión y no llegó a
+  // terminarla (por ejemplo, se quedó sin cinta métrica para medirse), acá
+  // se recupera lo que ya había completado y se lo lleva directo al paso
+  // donde quedó, en vez de hacerlo empezar de cero.
+  useEffect(() => {
+    const cargarProgreso = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      const { data } = await supabase.from("usuarios").select("*").eq("id", user.id).maybeSingle();
+      if (data && !data.anamnesis_completada) {
+        const formGuardado = columnasUsuarioACamposAnamnesis(data);
+        if (formGuardado) setForm(prev => ({ ...prev, ...formGuardado }));
+        if (data.anamnesis_paso) setPaso(Math.min(Math.max(data.anamnesis_paso, 1), totalPasos));
+      }
+    };
+    cargarProgreso();
+  }, []);
+
+  // Guardado silencioso al avanzar de paso, para que si el alumno cierra la
+  // app antes de terminar, la próxima vez que inicie sesión retome justo
+  // donde quedó (ver cargarProgreso arriba). No incluye las fotos: esas
+  // recién se suben al final, así que si llega a esa parte y se va, tiene
+  // que volver a elegirlas.
+  const guardarProgresoParcial = async (pasoDestino) => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      await supabase.from("usuarios").upsert({
+        id: user.id,
+        email: user.email,
+        anamnesis_paso: pasoDestino,
+        ...camposAnamnesisAColumnas(form),
+      }, { onConflict: "id" });
+    } catch (e) {
+      console.error("Error guardando progreso de anamnesis:", e);
+    }
+  };
 
   const comprimirFoto = (file) => {
     return new Promise((resolve) => {
@@ -1493,6 +1667,22 @@ function AnamnesisScreen({ onNav }) {
               <img src={GRASA_IMG} alt="Referencia % grasa" onClick={() => setLightbox(GRASA_IMG)} style={{ width: "100%", borderRadius: 6, cursor: "pointer", display: "block" }} />
             </div>
             <div style={{ fontSize: 11, color: theme.muted, marginTop: 4 }}>Si no lo sabes, deja en blanco</div>
+
+            <span style={labelStyle}>Medidas iniciales (cm) -- opcional, si no tienes cinta métrica a mano puedes dejarlo en blanco y completarlo más tarde</span>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 6 }}>
+              {[
+                ["Cintura", "cintura"],
+                ["Cadera/Glúteos", "cadera"],
+                ["Brazo (contracción)", "brazo"],
+                ["Pecho", "pecho"],
+                ["Pierna", "pierna"],
+              ].map(([label, campo]) => (
+                <div key={campo}>
+                  <div style={{ fontSize: 11, color: theme.muted, marginBottom: 4 }}>{label}<IconoReferenciaMedida zona={campo} onAbrir={setLightbox} /></div>
+                  <input style={inputStyle} placeholder="0" type="number" value={form[campo]} onChange={e => set(campo, e.target.value)} />
+                </div>
+              ))}
+            </div>
 
             <span style={labelStyle}>¿Cuál es tu objetivo principal? *</span>
             <select style={selectStyle} value={form.objetivo} onChange={e => set("objetivo", e.target.value)}>
@@ -1700,7 +1890,7 @@ function AnamnesisScreen({ onNav }) {
           }}>← Anterior</button>
         )}
         {paso < totalPasos ? (
-          <button onClick={() => setPaso(paso + 1)} style={{
+          <button onClick={() => { const siguiente = paso + 1; setPaso(siguiente); guardarProgresoParcial(siguiente); }} style={{
             flex: 2, background: theme.accent, border: "none",
             borderRadius: 10, padding: "12px", color: "#fff",
             fontSize: 14, fontWeight: 700, cursor: "pointer"
@@ -1716,50 +1906,12 @@ function AnamnesisScreen({ onNav }) {
                 const urlEspalda = fotosArchivos.fotoEspalda ? await subirFoto(user.id, "espalda", fotosArchivos.fotoEspalda) : null;
                 const urlPerfDer = fotosArchivos.fotoPerfDer ? await subirFoto(user.id, "perfDer", fotosArchivos.fotoPerfDer) : null;
                 const urlPerfIzq = fotosArchivos.fotoPerfIzq ? await subirFoto(user.id, "perfIzq", fotosArchivos.fotoPerfIzq) : null;
-const { error } = await supabase.from("usuarios").upsert({                  id: user.id,
-                  nombre: form.nombre,
+const { error } = await supabase.from("usuarios").upsert({
+                  id: user.id,
                   email: user.email,
-                  edad: parseInt(form.edad) || null,
-                  sexo: form.sexo,
-                  ocupacion: form.ocupacion,
-                  actividad_laboral: form.actividadLaboral,
-                  nivel_actividad: form.nivelActividad || null,
-                  whatsapp: form.whatsapp,
-                  instagram: form.instagram,
-                  peso_actual: parseFloat(form.peso) || null,
-                  estatura: parseFloat(form.estatura) || null,
-                  porc_grasa: parseFloat(form.porcGrasa) || null,
-                  objetivo: form.objetivo,
-                  ha_entrenado: form.haEntrenado,
-                  que_entrenamiento: form.queEntrenamiento,
-                  dias_semana: form.diasSemana,
-                  lugar_entreno: form.lugarEntreno,
-                  lugar_entreno_detalle: form.lugarEntrenoDetalle,
-                  horario_entreno: form.horarioEntreno,
-                  horario_entreno_hasta: form.horarioEntrenoHasta,
-                  enfermedad_lesion: form.enfermedadLesion,
-                  cual_enfermedad: form.cualEnfermedad,
-                  medicamento: form.medicamento,
-                  cual_medicamento: form.cualMedicamento,
-                  sustancia_farmacologica: form.sustanciaFarmacologica,
-                  sustancia_cuales: form.sustanciaCuales,
-                  sustancia_tiempo: form.sustanciaTiempo,
-                  sustancia_hace_cuanto: form.sustanciaHaceCuanto,
-                  consume_suplemento: form.consumeSuplemento,
-                  cual_suplemento: form.cualSuplemento,
-                  alimentacion_diferente: form.alimentacionDiferente,
-                  alergia: form.alergia,
-                  cual_alergia: form.cualAlergia,
-                  no_le_gustan: form.noLeGustan,
-                  favoritos: form.favoritos,
-                  hora_levanta: form.horaLevanta,
-                  hora_duerme: form.horaDuerme,
-                  comidas_dia: form.comidasDia,
-                  resumen_desayuno: form.desayuno,
-                  resumen_snack: form.snack,
-                  resumen_almuerzo: form.almuerzo,
-                  resumen_once: form.once,
-                  resumen_cena: form.cena,
+                  ...camposAnamnesisAColumnas(form),
+                  anamnesis_completada: true,
+                  anamnesis_paso: totalPasos,
                   foto_frente: urlFrente,
                   foto_espalda: urlEspalda,
                   foto_perf_der: urlPerfDer,
@@ -5782,7 +5934,7 @@ function DietaCoach({ alumno }) {
                     </div>
                   </div>
                   <div style={{ display:"flex", gap:6, flexShrink:0 }}>
-                    <button onClick={() => setEditandoAlimentoId(a.id)} style={{ background:`${theme.success}22`, border:`1px solid ${theme.success}44`, borderRadius:6, padding:"4px 8px", color:theme.success, fontSize:11, cursor:"pointer", fontWeight:700 }}>✏️</button>
+                    <button onClick={() => setEditandoAlimentoId(editandoAlimentoId === a.id ? null : a.id)} style={{ background:`${theme.success}22`, border:`1px solid ${theme.success}44`, borderRadius:6, padding:"4px 8px", color:theme.success, fontSize:11, cursor:"pointer", fontWeight:700 }}>✏️</button>
                     <button onClick={() => eliminarAlimentoBiblioteca(a)} style={{ background:`${theme.danger}22`, border:`1px solid ${theme.danger}44`, borderRadius:6, padding:"4px 8px", color:theme.danger, fontSize:11, cursor:"pointer", fontWeight:700 }}>×</button>
                   </div>
                 </div>
@@ -6219,14 +6371,14 @@ function ReporteScreen({ onNav }) {
             <div style={{ fontSize: 12, color: theme.muted, marginBottom: 10 }}>MEDIDAS (cm)</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
               {[
-                ["Cintura", cintura, setCintura],
-                ["Brazo (contracción)", brazo, setBrazo],
-                ["Pecho", pecho, setPecho],
-                ["Pierna", pierna, setPierna],
-                ["Cadera/Glúteos", cadera, setCadera],
-              ].map(([label, val, set]) => (
+                ["Cintura", cintura, setCintura, "cintura"],
+                ["Brazo (contracción)", brazo, setBrazo, "brazo"],
+                ["Pecho", pecho, setPecho, "pecho"],
+                ["Pierna", pierna, setPierna, "pierna"],
+                ["Cadera/Glúteos", cadera, setCadera, "cadera"],
+              ].map(([label, val, set, zona]) => (
                 <div key={label}>
-                  <div style={{ fontSize: 11, color: theme.muted, marginBottom: 4 }}>{label}</div>
+                  <div style={{ fontSize: 11, color: theme.muted, marginBottom: 4 }}>{label}<IconoReferenciaMedida zona={zona} onAbrir={setLightbox} /></div>
                   <input value={val} onChange={e => set(e.target.value)} placeholder="0" type="number"
                     style={{ background: theme.surface, border: `1px solid ${theme.border}`, borderRadius: 8, padding: "8px 12px", color: theme.text, fontSize: 15, width: "100%", textAlign: "center", outline: "none", boxSizing: "border-box" }} />
                 </div>
@@ -6855,10 +7007,13 @@ function CoachPanel({ onNav, onVerAlumno }) {
     const cargarAlumnos = async () => {
       const { data } = await supabase
         .from("usuarios")
-        .select("id, nombre, email, whatsapp, objetivo, peso_actual, edad, sexo, estatura, created_at")
+        .select("id, nombre, email, whatsapp, objetivo, peso_actual, edad, sexo, estatura, created_at, anamnesis_completada")
         .order("created_at", { ascending: false });
       if (data) {
-          const alumnosFiltrados = data.filter(a => a.email !== "coach.claudiomiquel@gmail.com");
+          // Los guardados parciales de una anamnesis a medio terminar crean
+          // fila en "usuarios" antes de tiempo -- se excluyen acá para que
+          // no aparezcan como alumnos hasta que de verdad terminen.
+          const alumnosFiltrados = data.filter(a => a.email !== "coach.claudiomiquel@gmail.com" && a.anamnesis_completada);
           const { data: msjs } = await supabase.from("mensajes").select("usuario_id").eq("de", "alumno").eq("leido", false);
           const idsConMensaje = new Set((msjs || []).map(m => m.usuario_id));
           setAlumnos(alumnosFiltrados.map(a => ({ ...a, tieneMensaje: idsConMensaje.has(a.id) })));
@@ -9164,6 +9319,7 @@ function VistaPreviaCoach({ alumno }) {
 // y las fotos iniciales, que se suben aparte).
 const CAMPOS_EDITABLES_ANAMNESIS = [
   "nombre", "edad", "sexo", "estatura", "peso_actual", "porc_grasa",
+  "cintura_inicial", "cadera_inicial", "brazo_inicial", "pecho_inicial", "pierna_inicial",
   "whatsapp", "instagram", "ocupacion", "actividad_laboral", "nivel_actividad",
   "objetivo", "ha_entrenado", "que_entrenamiento", "dias_semana", "lugar_entreno", "lugar_entreno_detalle", "horario_entreno", "horario_entreno_hasta",
   "enfermedad_lesion", "cual_enfermedad", "medicamento", "cual_medicamento",
@@ -9214,7 +9370,7 @@ function CoachAlumno({ onNav, alumno }) {
     const cambios = {};
     CAMPOS_EDITABLES_ANAMNESIS.forEach(k => {
       let v = formDatos[k];
-      if (["edad", "estatura", "peso_actual", "porc_grasa", "nivel_actividad"].includes(k)) {
+      if (["edad", "estatura", "peso_actual", "porc_grasa", "nivel_actividad", "cintura_inicial", "cadera_inicial", "brazo_inicial", "pecho_inicial", "pierna_inicial"].includes(k)) {
         v = v === "" || v === null || v === undefined ? null : parseFloat(v);
       } else if (v === "") {
         v = null;
@@ -9274,6 +9430,11 @@ function CoachAlumno({ onNav, alumno }) {
                   ["Estatura", datosCompletos?.estatura ? datosCompletos.estatura + " cm" : null],
                   ["Peso actual", datosCompletos?.peso_actual ? datosCompletos.peso_actual + " kg" : null],
                   ["% grasa estimado", datosCompletos?.porc_grasa ? datosCompletos.porc_grasa + " %" : null],
+                  ["Cintura inicial", datosCompletos?.cintura_inicial ? datosCompletos.cintura_inicial + " cm" : null],
+                  ["Cadera inicial", datosCompletos?.cadera_inicial ? datosCompletos.cadera_inicial + " cm" : null],
+                  ["Brazo inicial", datosCompletos?.brazo_inicial ? datosCompletos.brazo_inicial + " cm" : null],
+                  ["Pecho inicial", datosCompletos?.pecho_inicial ? datosCompletos.pecho_inicial + " cm" : null],
+                  ["Pierna inicial", datosCompletos?.pierna_inicial ? datosCompletos.pierna_inicial + " cm" : null],
                   ["WhatsApp", datosCompletos?.whatsapp],
                   ["Instagram", datosCompletos?.instagram],
                   ["Ocupación", datosCompletos?.ocupacion],
@@ -9365,6 +9526,11 @@ function CoachAlumno({ onNav, alumno }) {
                 <CampoEditable campo="estatura" label="Estatura (cm)" tipo="number" formDatos={formDatos} setCampo={setCampo} />
                 <CampoEditable campo="peso_actual" label="Peso actual (kg)" tipo="number" formDatos={formDatos} setCampo={setCampo} />
                 <CampoEditable campo="porc_grasa" label="% grasa estimado" tipo="number" formDatos={formDatos} setCampo={setCampo} />
+                <CampoEditable campo="cintura_inicial" label="Cintura inicial (cm)" tipo="number" formDatos={formDatos} setCampo={setCampo} />
+                <CampoEditable campo="cadera_inicial" label="Cadera inicial (cm)" tipo="number" formDatos={formDatos} setCampo={setCampo} />
+                <CampoEditable campo="brazo_inicial" label="Brazo inicial (cm)" tipo="number" formDatos={formDatos} setCampo={setCampo} />
+                <CampoEditable campo="pecho_inicial" label="Pecho inicial (cm)" tipo="number" formDatos={formDatos} setCampo={setCampo} />
+                <CampoEditable campo="pierna_inicial" label="Pierna inicial (cm)" tipo="number" formDatos={formDatos} setCampo={setCampo} />
                 <CampoEditable campo="whatsapp" label="WhatsApp" formDatos={formDatos} setCampo={setCampo} />
                 <CampoEditable campo="instagram" label="Instagram" formDatos={formDatos} setCampo={setCampo} />
                 <CampoEditable campo="ocupacion" label="Ocupación" formDatos={formDatos} setCampo={setCampo} />
@@ -9468,12 +9634,15 @@ function CoachAlumno({ onNav, alumno }) {
 
 const COACH_EMAIL = "coach.claudiomiquel@gmail.com";
 
-// Un alumno ya completó la anamnesis si su fila en "usuarios" tiene nombre
-// guardado — esa fila solo se crea/actualiza al final del formulario de
-// anamnesis (ver AnamnesisScreen), así que sirve como bandera confiable.
+// Un alumno ya completó la anamnesis si su fila en "usuarios" tiene la
+// marca "anamnesis_completada" en true. Ya no se usa la presencia de
+// "nombre" para esto, porque ahora la fila se crea/actualiza también con
+// guardados parciales mientras el alumno va avanzando de paso (ver
+// AnamnesisScreen) -- si no, un alumno a mitad de camino aparecería como
+// que ya terminó.
 async function anamnesisCompleta(userId) {
-  const { data } = await supabase.from("usuarios").select("nombre").eq("id", userId).maybeSingle();
-  return !!data?.nombre;
+  const { data } = await supabase.from("usuarios").select("anamnesis_completada").eq("id", userId).maybeSingle();
+  return !!data?.anamnesis_completada;
 }
 
 export default function App() {
