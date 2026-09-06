@@ -1488,8 +1488,8 @@ function columnasUsuarioACamposAnamnesis(row) {
   };
 }
 
-function AnamnesisScreen({ onNav }) {
-  const [paso, setPaso] = useState(1);
+function AnamnesisScreen({ onNav, modoPreview = false, pasoInicial = 1 }) {
+  const [paso, setPaso] = useState(pasoInicial);
   const [lightbox, setLightbox] = useState(null);
   const totalPasos = 4;
   const [form, setForm] = useState({
@@ -1515,6 +1515,7 @@ function AnamnesisScreen({ onNav }) {
   // se recupera lo que ya había completado y se lo lleva directo al paso
   // donde quedó, en vez de hacerlo empezar de cero.
   useEffect(() => {
+    if (modoPreview) return; // vista previa del coach: no toca datos reales
     const cargarProgreso = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
@@ -1526,7 +1527,7 @@ function AnamnesisScreen({ onNav }) {
       }
     };
     cargarProgreso();
-  }, []);
+  }, [modoPreview]);
 
   // Guardado silencioso al avanzar de paso, para que si el alumno cierra la
   // app antes de terminar, la próxima vez que inicie sesión retome justo
@@ -1534,6 +1535,7 @@ function AnamnesisScreen({ onNav }) {
   // recién se suben al final, así que si llega a esa parte y se va, tiene
   // que volver a elegirlas.
   const guardarProgresoParcial = async (pasoDestino) => {
+    if (modoPreview) return; // vista previa del coach: no guarda nada
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
@@ -1597,6 +1599,12 @@ function AnamnesisScreen({ onNav }) {
     <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
       {/* Header */}
       <div style={{ padding: "16px 16px 12px", background: theme.surface, borderBottom: `1px solid ${theme.border}` }}>
+        {modoPreview && (
+          <div onClick={() => onNav("coach_panel")} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", background:`${theme.accent}22`, border:`1px solid ${theme.accent}44`, borderRadius:8, padding:"6px 10px", marginBottom:10, cursor:"pointer" }}>
+            <span style={{ fontSize:11, fontWeight:700, color:theme.accentLight }}>🔍 VISTA PREVIA -- no se guarda nada</span>
+            <span style={{ fontSize:11, fontWeight:700, color:theme.accentLight }}>✕ Cerrar</span>
+          </div>
+        )}
         <div style={{ fontSize: 11, color: theme.muted, marginBottom: 4 }}>PASO {paso} DE {totalPasos}</div>
         <div style={{ fontSize: 17, fontWeight: 800, color: theme.text }}>
           {paso === 1 && "Datos Personales"}
@@ -1898,6 +1906,7 @@ function AnamnesisScreen({ onNav }) {
         ) : (
           <button disabled={enviandoAnamnesis} onClick={async () => {
             if (enviandoAnamnesis) return;
+            if (modoPreview) { alert("Vista previa -- no se guardó nada."); onNav("coach_panel"); return; }
             setEnviandoAnamnesis(true);
             try {
               const { data: { user } } = await supabase.auth.getUser();
@@ -5913,13 +5922,6 @@ function DietaCoach({ alumno }) {
               .filter(a => filtroGrupoBiblioteca === "todos" || (filtroGrupoBiblioteca === "sin_grupo" ? !a.grupo : a.grupo === filtroGrupoBiblioteca))
               .map(a => (
             <div key={a.id} style={{ padding:"8px 0", borderBottom:`1px solid ${theme.border}` }}>
-              {editandoAlimentoId === a.id ? (
-                <NuevoAlimentoForm
-                  alimentoExistente={a}
-                  onCancelar={() => setEditandoAlimentoId(null)}
-                  onCreado={(alimentoEditado) => { onAlimentoGuardadoEnBiblioteca(alimentoEditado); setEditandoAlimentoId(null); }}
-                />
-              ) : (
                 <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:8 }}>
                   <div style={{ display:"flex", alignItems:"center", gap:8, minWidth:0 }}>
                     {a.imagen_url && <img src={a.imagen_url} alt="" style={{ width:36, height:36, borderRadius:6, objectFit:"cover", flexShrink:0 }} />}
@@ -5934,9 +5936,20 @@ function DietaCoach({ alumno }) {
                     </div>
                   </div>
                   <div style={{ display:"flex", gap:6, flexShrink:0 }}>
-                    <button onClick={() => setEditandoAlimentoId(editandoAlimentoId === a.id ? null : a.id)} style={{ background:`${theme.success}22`, border:`1px solid ${theme.success}44`, borderRadius:6, padding:"4px 8px", color:theme.success, fontSize:11, cursor:"pointer", fontWeight:700 }}>✏️</button>
+                    <button onClick={() => setEditandoAlimentoId(editandoAlimentoId === a.id ? null : a.id)}
+                      style={{ background: editandoAlimentoId === a.id ? `${theme.muted}22` : `${theme.success}22`, border:`1px solid ${editandoAlimentoId === a.id ? theme.muted : theme.success}44`, borderRadius:6, padding:"4px 8px", color: editandoAlimentoId === a.id ? theme.muted : theme.success, fontSize:11, cursor:"pointer", fontWeight:700 }}>
+                      {editandoAlimentoId === a.id ? "▲" : "✏️"}
+                    </button>
                     <button onClick={() => eliminarAlimentoBiblioteca(a)} style={{ background:`${theme.danger}22`, border:`1px solid ${theme.danger}44`, borderRadius:6, padding:"4px 8px", color:theme.danger, fontSize:11, cursor:"pointer", fontWeight:700 }}>×</button>
                   </div>
+                </div>
+              {editandoAlimentoId === a.id && (
+                <div style={{ marginTop:8 }}>
+                  <NuevoAlimentoForm
+                    alimentoExistente={a}
+                    onCancelar={() => setEditandoAlimentoId(null)}
+                    onCreado={(alimentoEditado) => { onAlimentoGuardadoEnBiblioteca(alimentoEditado); setEditandoAlimentoId(null); }}
+                  />
                 </div>
               )}
             </div>
@@ -7067,6 +7080,13 @@ function CoachPanel({ onNav, onVerAlumno }) {
           </Card>
         ))}
       </div>
+
+      {/* Botón temporal -- solo para chequear visualmente cómo quedaron los
+          campos de medidas nuevos en la Anamnesis. Se puede sacar cuando ya
+          no se necesite. */}
+      <button onClick={() => onNav("anamnesis_preview")} style={{ background:"transparent", border:`1px dashed ${theme.accent}`, borderRadius:8, padding:"8px", color:theme.accentLight, fontSize:11, fontWeight:600, cursor:"pointer", width:"100%", marginBottom:14 }}>
+        🔍 Vista previa (temporal): pantalla de medidas en la Anamnesis
+      </button>
 
       {/* Lista alumnos reales */}
       {mensajesPendientes > 0 && (
@@ -9729,6 +9749,7 @@ export default function App() {
       case "registro": return <RegistroScreen onNav={setScreen} onRegistroExitoso={setEmailPendiente}/>;
       case "confirmar_correo": return <ConfirmarCorreoScreen onNav={setScreen} email={emailPendiente}/>;
       case "anamnesis": return <AnamnesisScreen onNav={setScreen}/>;
+      case "anamnesis_preview": return <AnamnesisScreen onNav={setScreen} modoPreview pasoInicial={2}/>;
       case "alumno_home": return <AlumnoHome onNav={setScreen}/>;
       case "rutina": return <RutinaScreen onNav={setScreen}/>;
       case "nutricion": return <NutricionScreen onNav={setScreen}/>;
