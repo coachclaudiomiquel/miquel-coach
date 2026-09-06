@@ -1661,6 +1661,12 @@ function AnamnesisScreen({ onNav, modoPreview = false, pasoInicial = 1 }) {
         {/* PASO 2 — Físico y objetivo */}
         {paso === 2 && (
           <div>
+            <span style={labelStyle}>¿Cuál es tu objetivo principal? *</span>
+            <select style={selectStyle} value={form.objetivo} onChange={e => set("objetivo", e.target.value)}>
+              <option value="">Selecciona...</option>
+              {opciones(["Bajar grasa", "Ganar masa muscular", "Recomposición corporal", "Mejorar rendimiento deportivo", "Mantener peso y mejorar salud"])}
+            </select>
+
             <span style={labelStyle}>Peso actual (kg) *</span>
             <input style={inputStyle} placeholder="Ej: 80" type="number" value={form.peso} onChange={e => set("peso", e.target.value)} />
 
@@ -1691,12 +1697,6 @@ function AnamnesisScreen({ onNav, modoPreview = false, pasoInicial = 1 }) {
                 </div>
               ))}
             </div>
-
-            <span style={labelStyle}>¿Cuál es tu objetivo principal? *</span>
-            <select style={selectStyle} value={form.objetivo} onChange={e => set("objetivo", e.target.value)}>
-              <option value="">Selecciona...</option>
-              {opciones(["Bajar grasa", "Ganar masa muscular", "Recomposición corporal", "Mejorar rendimiento deportivo", "Mantener peso y mejorar salud"])}
-            </select>
           </div>
         )}
 
