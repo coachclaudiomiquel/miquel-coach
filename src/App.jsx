@@ -1198,7 +1198,7 @@ const SelectorMusculoEjercicio = ({ nombre, mapa, onGuardado }) => {
   );
 };
 const NavBar = ({ active, onNav, mensajesNoLeidos = 0 }) => {
-  const items = [{ id: "alumno_home", icon: "home", label: "Inicio" }, { id: "rutina", icon: "dumbbell", label: "Entreno" }, { id: "nutricion", icon: "fork_knife", label: "Dieta" }, { id: "checkin", icon: "chart", label: "Check-in" }, { id: "progreso", icon: "calendar_check", label: "Progreso" }];
+  const items = [{ id: "alumno_home", icon: "home", label: "Inicio" }, { id: "rutina", icon: "dumbbell", label: "Entreno" }, { id: "nutricion", icon: "fork_knife", label: "Dieta" }, { id: "reporte", icon: "chart", label: "Reporte" }, { id: "progreso", icon: "calendar_check", label: "Progreso" }];
   return (
     <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, background: theme.surface, borderTop: `1px solid ${theme.border}`, display: "flex", padding: "10px 0 16px" }}>
       {items.map(i => {
@@ -1817,7 +1817,7 @@ function AlumnoHome({ onNav }) {
 const [rutina, setRutina] = useState(null);
 const [tieneRutinas, setTieneRutinas] = useState(false);
 const [estadoPago, setEstadoPago] = useState(null);
-  const [checkin, setCheckin] = useState(null);
+  const [reporte, setReporte] = useState(null);
   const [dieta, setDieta] = useState(null);
   const [semana, setSemana] = useState(null); const [mensajesNoLeidos, setMensajesNoLeidos] = useState(0); const pagoVencido = false;
   const [ultimoMensajeCoach, setUltimoMensajeCoach] = useState(null);
@@ -1872,8 +1872,8 @@ const [estadoPago, setEstadoPago] = useState(null);
           const { data: pasosReg } = await supabase.from("pasos_registros").select("pasos").eq("usuario_id", user.id).eq("fecha", hoyStrPasos).maybeSingle();
           setPasosHoy(pasosReg?.pasos != null ? String(pasosReg.pasos) : "");
         }
-        const { data: checkins } = await supabase.from("checkins").select("peso").eq("usuario_id", user.id).order("fecha", { ascending: false }).limit(1);
-        if (checkins && checkins.length > 0) setCheckin(checkins[0]);
+        const { data: reportesRecientes } = await supabase.from("reportes").select("peso").eq("usuario_id", user.id).order("fecha", { ascending: false }).limit(1);
+        if (reportesRecientes && reportesRecientes.length > 0) setReporte(reportesRecientes[0]);
         const { data: dietas } = await supabase.from("dietas").select("calorias, suplementos_opcionales, dias").eq("usuario_id", user.id).eq("publicada", true).order("created_at", { ascending: false });
         if (dietas && dietas.length > 0) {
           // Mismo criterio que usa NutricionScreen para elegir el plan: el que
@@ -2134,7 +2134,7 @@ const [estadoPago, setEstadoPago] = useState(null);
         {[
           { id: "rutina", icon: "dumbbell", label: "Entreno" },
           { id: "nutricion", icon: "fork_knife", label: "Dieta" },
-          { id: "checkin", icon: "chart", label: "Check-in", fechaCorta: checkin ? (() => { const fecha = new Date(checkin.fecha || new Date()); fecha.setDate(fecha.getDate() + 28); return fecha.toLocaleDateString("es-CL", { day: "numeric", month: "short" }); })() : null },
+          { id: "reporte", icon: "chart", label: "Reporte", fechaCorta: reporte ? (() => { const fecha = new Date(reporte.fecha || new Date()); fecha.setDate(fecha.getDate() + 28); return fecha.toLocaleDateString("es-CL", { day: "numeric", month: "short" }); })() : null },
           { id: "progreso", icon: "calendar_check", label: "Progreso" },
           { id: "pagos_alumno", icon: "card", label: "Pagos" },
           { id: "mensajes", icon: "chat", label: "Mensajes", badge: mensajesNoLeidos },
@@ -6021,7 +6021,7 @@ function DiarioScreen({ onNav }) {
   );
 }
 
-function CheckinScreen({ onNav }) {
+function ReporteScreen({ onNav }) {
   const [lightbox, setLightbox] = useState(null);
   const [peso, setPeso] = useState("");
   const [porcGrasa, setPorcGrasa] = useState("");
@@ -6033,7 +6033,7 @@ function CheckinScreen({ onNav }) {
   const [comentarios, setComentarios] = useState("");
   const [enviado, setEnviado] = useState(false);
   const [guardando, setGuardando] = useState(false);
-  const [checkins, setCheckins] = useState([]);
+  const [reportes, setReportes] = useState([]);
   const [fotos, setFotos] = useState({ frente: null, espalda: null, perfDer: null, perfIzq: null });
   const [fotosPreview, setFotosPreview] = useState({ frente: null, espalda: null, perfDer: null, perfIzq: null });
 
@@ -6042,12 +6042,12 @@ function CheckinScreen({ onNav }) {
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
         const { data } = await supabase
-          .from("checkins")
+          .from("reportes")
           .select("*")
           .eq("usuario_id", user.id)
           .order("fecha", { ascending: false })
           .limit(4);
-        if (data) setCheckins(data);
+        if (data) setReportes(data);
       }
     };
     cargar();
@@ -6091,7 +6091,7 @@ function CheckinScreen({ onNav }) {
     return publicUrl;
   };
 
-  const enviarCheckin = async () => {
+  const enviarReporte = async () => {
     setGuardando(true);
     const { data: { user } } = await supabase.auth.getUser();
     if (user) {
@@ -6100,7 +6100,7 @@ function CheckinScreen({ onNav }) {
       const urlPerfDer = fotos.perfDer ? await subirFoto(user.id, "perfDer", fotos.perfDer) : null;
       const urlPerfIzq = fotos.perfIzq ? await subirFoto(user.id, "perfIzq", fotos.perfIzq) : null;
 
-      await supabase.from("checkins").insert({
+      await supabase.from("reportes").insert({
         usuario_id: user.id,
         peso: parseFloat(peso) || null,
         porc_grasa: parseFloat(porcGrasa) || null,
@@ -6125,14 +6125,14 @@ function CheckinScreen({ onNav }) {
       <div style={{ marginBottom: 20 }}>
         <span onClick={() => onNav("alumno_home")} style={{ fontSize: 16, cursor: "pointer", color: theme.text, marginBottom: 6, display: "inline-block" }}>← Inicio</span>
         <div style={{ color: theme.muted, fontSize: 12, marginTop: 4 }}>SEGUIMIENTO CADA 4 SEMANAS</div>
-        <div style={{ fontSize: 22, fontWeight: 800, color: theme.text }}>Check-In 📊</div>
+        <div style={{ fontSize: 22, fontWeight: 800, color: theme.text }}>Reporte 📊</div>
       </div>
 
-      {checkins.length > 0 && (
+      {reportes.length > 0 && (
         <Card style={{ marginBottom: 14 }}>
           <div style={{ fontSize: 12, color: theme.muted, marginBottom: 10 }}>HISTORIAL RECIENTE</div>
           <div style={{ display: "flex", gap: 8, overflowX: "auto" }}>
-            {checkins.map((c, i) => (
+            {reportes.map((c, i) => (
               <div key={i} style={{ background: theme.surface, borderRadius: 10, padding: "10px 12px", flexShrink: 0, textAlign: "center", minWidth: 80 }}>
                 <div style={{ fontSize: 10, color: theme.muted, marginBottom: 4 }}>{c.fecha}</div>
                 <div style={{ fontSize: 16, fontWeight: 800, color: theme.text }}>{c.peso}kg</div>
@@ -6232,24 +6232,24 @@ function CheckinScreen({ onNav }) {
               style={{ background: theme.surface, border: `1px solid ${theme.border}`, borderRadius: 8, padding: "10px 12px", color: theme.text, fontSize: 13, width: "100%", minHeight: 80, resize: "none", outline: "none", boxSizing: "border-box" }} />
           </Card>
 
-          <Btn onClick={enviarCheckin} style={{ fontSize: 15, fontWeight: 800, padding: 16 }}>
-            {guardando ? "Subiendo fotos..." : "Enviar Check-In →"}
+          <Btn onClick={enviarReporte} style={{ fontSize: 15, fontWeight: 800, padding: 16 }}>
+            {guardando ? "Subiendo fotos..." : "Enviar Reporte →"}
           </Btn>
         </>
       ) : (
         <Card style={{ textAlign: "center", padding: 32 }}>
           <div style={{ fontSize: 48, marginBottom: 12 }}>✅</div>
-          <div style={{ fontSize: 18, fontWeight: 800, color: theme.text, marginBottom: 6 }}>¡Check-In enviado!</div>
+          <div style={{ fontSize: 18, fontWeight: 800, color: theme.text, marginBottom: 6 }}>¡Reporte enviado!</div>
           <div style={{ fontSize: 13, color: theme.muted }}>Tu coach revisará tu progreso pronto.</div>
           <Btn onClick={() => {
             setEnviado(false); setPeso(""); setPorcGrasa(""); setCintura(""); setBrazo("");
             setPecho(""); setPierna(""); setCadera(""); setComentarios("");
             setFotos({ frente: null, espalda: null, perfDer: null, perfIzq: null });
             setFotosPreview({ frente: null, espalda: null, perfDer: null, perfIzq: null });
-          }} style={{ marginTop: 20 }} variant="ghost">Nuevo check-in</Btn>
+          }} style={{ marginTop: 20 }} variant="ghost">Nuevo reporte</Btn>
         </Card>
       )}
-      <NavBar active="checkin" onNav={onNav} />
+      <NavBar active="reporte" onNav={onNav} />
       <ImageLightbox src={lightbox} onClose={() => setLightbox(null)} />
     </div>
   );
@@ -6357,7 +6357,7 @@ function MensajesScreen({ onNav }) {
 // duplicar la lógica.
 function ProgresoMetricas({ userId }) {
   const [loading, setLoading] = useState(true);
-  const [checkins, setCheckins] = useState([]);
+  const [reportes, setReportes] = useState([]);
   const [fotoAntes, setFotoAntes] = useState(null);
   const [fotoActual, setFotoActual] = useState(null);
   const [prs, setPrs] = useState([]);
@@ -6413,13 +6413,13 @@ function ProgresoMetricas({ userId }) {
     const cargar = async () => {
       setLoading(true);
 
-      // Peso corporal: historial real de check-ins
-      const { data: checkinsData } = await supabase
-        .from("checkins")
+      // Peso corporal: historial real de reportes
+      const { data: reportesData } = await supabase
+        .from("reportes")
         .select("peso, fecha, foto_frente, porc_grasa, cintura, cadera, brazo, pecho, pierna")
         .eq("usuario_id", userId)
         .order("fecha", { ascending: true });
-      if (checkinsData) setCheckins(checkinsData.filter(c => c.peso));
+      if (reportesData) setReportes(reportesData.filter(c => c.peso));
 
       // Pasos: historial de los últimos 30 días para el gráfico de tendencia
       const hoyPasos = fechaOperativa();
@@ -6456,11 +6456,11 @@ function ProgresoMetricas({ userId }) {
       const entrenoPct = planEntreno30 > 0 ? Math.min(100, Math.round((entreno30 / planEntreno30) * 100)) : null;
       setAnillos30({ entrenoPct, nutriPct, sueñoPct });
 
-      // Foto "antes": la de la Anamnesis. Foto "actual": el check-in más reciente con foto.
+      // Foto "antes": la de la Anamnesis. Foto "actual": el reporte más reciente con foto.
       const { data: usr } = await supabase.from("usuarios").select("foto_frente").eq("id", userId).single();
       setFotoAntes(usr?.foto_frente || null);
-      if (checkinsData) {
-        const conFoto = checkinsData.filter(c => c.foto_frente);
+      if (reportesData) {
+        const conFoto = reportesData.filter(c => c.foto_frente);
         setFotoActual(conFoto.length > 0 ? conFoto[conFoto.length - 1].foto_frente : null);
       }
 
@@ -6522,7 +6522,7 @@ function ProgresoMetricas({ userId }) {
     </Card>
   );
 
-  const pesos = checkins.map(c => c.peso);
+  const pesos = reportes.map(c => c.peso);
   const maxP = pesos.length > 0 ? Math.max(...pesos) : 0;
   const minP = pesos.length > 0 ? Math.min(...pesos) - 0.5 : 0;
   const chartH = 100;
@@ -6557,7 +6557,7 @@ function ProgresoMetricas({ userId }) {
       <Card style={{ marginBottom: 14 }}>
         <div style={{ fontSize: 12, color: theme.muted, marginBottom: 4 }}>PESO CORPORAL</div>
         {pesos.length === 0 ? (
-          <div style={{ fontSize: 13, color: theme.muted, padding: "12px 0" }}>Aún no hay check-ins con peso registrado.</div>
+          <div style={{ fontSize: 13, color: theme.muted, padding: "12px 0" }}>Aún no hay reportes con peso registrado.</div>
         ) : (
           <>
             <div style={{ fontSize: 22, fontWeight: 800, color: theme.text, marginBottom: 12 }}>
@@ -6569,14 +6569,14 @@ function ProgresoMetricas({ userId }) {
             </div>
             {pesos.length > 1 ? (
               <svg width="100%" height={chartH+30} style={{ overflow: "visible" }}>
-                {checkins.map((c,i) => {
-                  const x=(i/(checkins.length-1))*100, y=chartH-((c.peso-minP)/(maxP-minP||1))*chartH;
+                {reportes.map((c,i) => {
+                  const x=(i/(reportes.length-1))*100, y=chartH-((c.peso-minP)/(maxP-minP||1))*chartH;
                   const fechaCorta = new Date(c.fecha).toLocaleDateString("es-CL", { day:"numeric", month:"short" });
-                  return (<g key={i}>{i>0&&(()=>{const px=((i-1)/(checkins.length-1))*100,py=chartH-((checkins[i-1].peso-minP)/(maxP-minP||1))*chartH;return <line x1={`${px}%`} y1={py} x2={`${x}%`} y2={y} stroke={theme.accent} strokeWidth={2}/>;})()}<circle cx={`${x}%`} cy={y} r={4} fill={theme.accent}/><text x={`${x}%`} y={chartH+20} textAnchor="middle" fill={theme.muted} fontSize={9}>{fechaCorta}</text></g>);
+                  return (<g key={i}>{i>0&&(()=>{const px=((i-1)/(reportes.length-1))*100,py=chartH-((reportes[i-1].peso-minP)/(maxP-minP||1))*chartH;return <line x1={`${px}%`} y1={py} x2={`${x}%`} y2={y} stroke={theme.accent} strokeWidth={2}/>;})()}<circle cx={`${x}%`} cy={y} r={4} fill={theme.accent}/><text x={`${x}%`} y={chartH+20} textAnchor="middle" fill={theme.muted} fontSize={9}>{fechaCorta}</text></g>);
                 })}
               </svg>
             ) : (
-              <div style={{ fontSize: 12, color: theme.muted }}>Se necesitan al menos 2 check-ins para ver el gráfico de evolución.</div>
+              <div style={{ fontSize: 12, color: theme.muted }}>Se necesitan al menos 2 reportes para ver el gráfico de evolución.</div>
             )}
           </>
         )}
@@ -6637,8 +6637,8 @@ function ProgresoMetricas({ userId }) {
         })()}
       </Card>
 
-      {checkins.length > 1 && (() => {
-        const primero = checkins[0], ultimo = checkins[checkins.length - 1];
+      {reportes.length > 1 && (() => {
+        const primero = reportes[0], ultimo = reportes[reportes.length - 1];
         const metricas = [
           { label: "% Grasa", key: "porc_grasa", unidad: "%", color: "#B0C4DE" },
           { label: "Cintura", key: "cintura", unidad: "cm", color: "#B0C4DE" },
@@ -6680,7 +6680,7 @@ function ProgresoMetricas({ userId }) {
           <div style={{ fontSize: 13, color: theme.muted }}>Aún no hay fotos para comparar.</div>
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            {[{label:"Antes (Anamnesis)", url: fotoAntes, actual:false},{label:"Actual (Check-in)", url: fotoActual, actual:true}].map(({label,url,actual})=>(
+            {[{label:"Antes (Anamnesis)", url: fotoAntes, actual:false},{label:"Actual (Reporte)", url: fotoActual, actual:true}].map(({label,url,actual})=>(
               <div key={label} style={{ background: theme.surface, borderRadius: 10, overflow:"hidden", border: `1px solid ${actual?theme.accent+"44":theme.border}` }}>
                 {url ? (
                   <img src={url} alt={label} onClick={() => setLightbox(url)} style={{ width:"100%", height:120, objectFit:"cover", cursor:"pointer" }} />
@@ -6808,7 +6808,7 @@ function CoachPanel({ onNav, onVerAlumno }) {
   const [loading, setLoading] = useState(true);
   const [mensajesPendientes, setMensajesPendientes] = useState(0);
   const [alumnosPorVencer, setAlumnosPorVencer] = useState([]);
-  const [checkinsPendientes, setCheckinsPendientes] = useState(0);
+  const [reportesPendientes, setReportesPendientes] = useState(0);
 
   useEffect(() => {
     const cargarAlumnos = async () => {
@@ -6838,8 +6838,8 @@ function CoachPanel({ onNav, onVerAlumno }) {
         }));
         setAlumnosPorVencer(porVencer);
       }
-      const { data: chks } = await supabase.from("checkins").select("id").order("created_at", { ascending: false });
-      if (chks) setCheckinsPendientes(chks.length);
+      const { data: chks } = await supabase.from("reportes").select("id").order("created_at", { ascending: false });
+      if (chks) setReportesPendientes(chks.length);
     };
     cargarAlumnos();
   }, []);
@@ -8894,8 +8894,8 @@ cargarMensajes();  }, [alumno]);
       })}
     </div>
   );
-}function CheckinsCoach({ alumno }) {
-  const [checkins, setCheckins] = useState([]);
+}function ReportesCoach({ alumno }) {
+  const [reportes, setReportes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [lightbox, setLightbox] = useState(null);
 
@@ -8903,11 +8903,11 @@ cargarMensajes();  }, [alumno]);
     const cargar = async () => {
       if (!alumno?.id) return;
       const { data } = await supabase
-        .from("checkins")
+        .from("reportes")
         .select("*")
         .eq("usuario_id", alumno.id)
         .order("fecha", { ascending: false });
-      if (data) setCheckins(data);
+      if (data) setReportes(data);
       setLoading(false);
     };
     cargar();
@@ -8915,16 +8915,16 @@ cargarMensajes();  }, [alumno]);
 
   if (loading) return <Card style={{ textAlign:"center", padding:20 }}><div style={{ color:theme.muted }}>Cargando...</div></Card>;
 
-  if (checkins.length === 0) return (
+  if (reportes.length === 0) return (
     <Card style={{ textAlign:"center", padding:30 }}>
       <div style={{ fontSize:24, marginBottom:8 }}>📊</div>
-      <div style={{ color:theme.muted, fontSize:13 }}>Aún no hay check-ins de {alumno?.nombre || "este alumno"}</div>
+      <div style={{ color:theme.muted, fontSize:13 }}>Aún no hay reportes de {alumno?.nombre || "este alumno"}</div>
     </Card>
   );
 
   return (
     <div>
-      {checkins.map((c, i) => (
+      {reportes.map((c, i) => (
         <Card key={i} style={{ marginBottom:12 }}>
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
             <div style={{ fontSize:14, fontWeight:700, color:theme.text }}>📅 {c.fecha}</div>
@@ -8983,7 +8983,7 @@ const CAMPOS_EDITABLES_ANAMNESIS = [
 ];
 
 function CoachAlumno({ onNav, alumno }) {
-  const tabs=["Datos","Rutina","Dieta","Check-ins","Pagos","Progreso","Mensajes"];
+  const tabs=["Datos","Rutina","Dieta","Reportes","Pagos","Progreso","Mensajes"];
   const [tab,setTab]=useState(alumno?.tabInicial || "Datos");
   const [datosCompletos, setDatosCompletos] = useState(null);
   const [lightbox, setLightbox] = useState(null);
@@ -9253,7 +9253,7 @@ function CoachAlumno({ onNav, alumno }) {
             </>
           )}
         </div>)}
-        {tab==="Check-ins"&&(<CheckinsCoach alumno={alumno}/>)}
+        {tab==="Reportes"&&(<ReportesCoach alumno={alumno}/>)}
 {tab==="Mensajes"&&(<MensajesCoach alumno={alumno}/>)}
         {tab==="Rutina"&&(<RutinaCoach alumno={{ ...alumno, ...(datosCompletos||{}) }}/>)}
         {tab==="Dieta"&&(<DietaCoach alumno={alumno}/>)}
@@ -9370,7 +9370,7 @@ export default function App() {
       case "rutina": return <RutinaScreen onNav={setScreen}/>;
       case "nutricion": return <NutricionScreen onNav={setScreen}/>;
       case "diario": return <DiarioScreen onNav={setScreen}/>;
-      case "checkin": return <CheckinScreen onNav={setScreen}/>;
+      case "reporte": return <ReporteScreen onNav={setScreen}/>;
       case "mensajes": return <MensajesScreen onNav={setScreen}/>;
       case "progreso": return <ProgresoScreen onNav={setScreen}/>;
       case "pagos_alumno": return <PagosAlumnoScreen onNav={setScreen}/>;
