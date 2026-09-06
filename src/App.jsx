@@ -913,69 +913,45 @@ function calcularCantidadEquivalente(alimOrigen, cantidadOrigen, alimSustituto) 
 function redondearCantidadSustituto(cantidad, alimSustituto) {
   return esUnidadPorUno(alimSustituto.unidad) ? Math.round(cantidad * 2) / 2 : Math.round(cantidad / 5) * 5;
 }
-// Busca en la biblioteca los demás alimentos del mismo grupo que el alimento
-// de origen (excluyéndolo a él), cada uno con su cantidad equivalente ya
-// calculada. Si el alimento de origen tiene "sustitutos_ids" cargado (el
-// coach los curó a mano desde el desplegable de equivalencias, ver
-// agregarSustituto/quitarSustituto/ajustarCantidadSustituto en DietaCoach),
-// se devuelven exactamente esos alimentos, en ese orden, sin límite de
-// cantidad -- es una lista elegida a propósito, así que se respeta tal cual.
-// Cada entrada de sustitutos_ids puede ser un id "pelado" (todavía sin
-// ajustar a mano -- se sigue calculando automático, igualando el macro
+// Devuelve los sustitutos que el coach eligió a mano para este alimento
+// (columna "sustitutos_ids", ver agregarSustituto/quitarSustituto/
+// ajustarCantidadSustituto en DietaCoach), cada uno con su cantidad ya
+// calculada -- nunca se sugiere nada solo porque comparta grupo o se
+// parezca en calorías: el coach elige el alimento sustituto a propósito y
+// el sistema únicamente le dice el gramaje aproximado para igualar el
+// macro principal del grupo (así sabe cuánto poner para que se parezca al
+// original). Si el alimento no tiene sustitutos guardados todavía, la
+// lista es simplemente vacía -- no hay modo "automático" que rellene nada.
+// Cada entrada de sustitutos_ids puede ser un id "pelado" (recién elegido,
+// todavía sin ajustar a mano -- se calcula el gramaje igualando el macro
 // principal del grupo) o un objeto { id, cantidad, cantidadOrigen } cuando
 // el coach ajustó el gramaje a mano: ahí se guardó cuánto sustituto puso
 // para cuánta cantidad del original en ese momento, y acá se escala esa
 // misma proporción contra la cantidad del original que corresponda en cada
 // dieta (así el ajuste manual no queda pegado a un número fijo si el
-// alumno tiene que comer una cantidad distinta del alimento original).
-// Si no hay lista propia (sustitutos_ids es null/undefined), se calcula
-// automático: los demás alimentos del mismo grupo, quedándose con los
-// MAX_EQUIVALENCIAS_AUTOMATICAS más parecidos en calorías totales a esa
-// cantidad -- así la lista no se hace larga a medida que crece la
-// biblioteca. Como la cantidad ya se ajustó para igualar el macro principal
-// del grupo, comparar por calorías es una buena forma de detectar además
-// qué tan parecidos son en los otros macros (si el sustituto tiene mucha
-// más grasa o carbohidrato, las calorías a esa cantidad se van a alejar).
-// Se recalcula en vivo contra la biblioteca actual -- no se guarda nada en
-// la dieta (lo que sí se guarda, en la biblioteca y no en la dieta, es la
+// alumno tiene que comer una cantidad distinta del alimento original). Se
+// recalcula en vivo contra la biblioteca actual -- no se guarda nada en la
+// dieta (lo que sí se guarda, en la biblioteca y no en la dieta, es la
 // lista curada de sustitutos_ids).
-const MAX_EQUIVALENCIAS_AUTOMATICAS = 3;
-function alimentosEquivalentesAutomaticos(alimOrigen, cantidadOrigen, biblioteca) {
-  if (!alimOrigen?.grupo) return [];
-  const calcularOpcion = (a) => {
-    const cantidad = calcularCantidadEquivalente(alimOrigen, cantidadOrigen, a);
-    if (cantidad == null || cantidad <= 0) return null;
-    return { alimento: a, cantidad };
-  };
-  if (Array.isArray(alimOrigen.sustitutos_ids)) {
-    return alimOrigen.sustitutos_ids
-      .map(entry => {
-        const id = typeof entry === "object" && entry ? entry.id : entry;
-        const a = (biblioteca || []).find(x => x.id === id);
-        if (!a) return null;
-        if (typeof entry === "object" && entry && entry.cantidad != null && entry.cantidadOrigen) {
-          const cantActual = parseFloat(cantidadOrigen) || 0;
-          const factor = cantActual / entry.cantidadOrigen;
-          const cantidad = redondearCantidadSustituto(entry.cantidad * factor, a);
-          if (!cantidad || cantidad <= 0) return null;
-          return { alimento: a, cantidad };
-        }
-        return calcularOpcion(a);
-      })
-      .filter(Boolean);
-  }
-  const macrosOrigen = calcularMacrosAlimento(alimOrigen, cantidadOrigen);
-  return (biblioteca || [])
-    .filter(a => a.id !== alimOrigen.id && a.grupo === alimOrigen.grupo)
-    .map(a => {
-      const opcion = calcularOpcion(a);
-      if (!opcion) return null;
-      const macrosSustituto = calcularMacrosAlimento(a, opcion.cantidad);
-      return { ...opcion, difKcal: Math.abs(macrosOrigen.calorias - macrosSustituto.calorias) };
+function sustitutosCuradosAlimento(alimOrigen, cantidadOrigen, biblioteca) {
+  if (!alimOrigen?.grupo || !Array.isArray(alimOrigen.sustitutos_ids)) return [];
+  return alimOrigen.sustitutos_ids
+    .map(entry => {
+      const id = typeof entry === "object" && entry ? entry.id : entry;
+      const a = (biblioteca || []).find(x => x.id === id);
+      if (!a) return null;
+      if (typeof entry === "object" && entry && entry.cantidad != null && entry.cantidadOrigen) {
+        const cantActual = parseFloat(cantidadOrigen) || 0;
+        const factor = cantActual / entry.cantidadOrigen;
+        const cantidad = redondearCantidadSustituto(entry.cantidad * factor, a);
+        if (!cantidad || cantidad <= 0) return null;
+        return { alimento: a, cantidad };
+      }
+      const cantidad = calcularCantidadEquivalente(alimOrigen, cantidadOrigen, a);
+      if (cantidad == null || cantidad <= 0) return null;
+      return { alimento: a, cantidad };
     })
-    .filter(Boolean)
-    .sort((a, b) => a.difKcal - b.difKcal)
-    .slice(0, MAX_EQUIVALENCIAS_AUTOMATICAS);
+    .filter(Boolean);
 }
 // Sanitiza texto tipeado en un campo de cantidad/macro que necesita aceptar
 // decimales: deja solo dígitos y un separador decimal (coma o punto), y lo
@@ -4356,7 +4332,7 @@ function NutricionScreen({ onNav }) {
                   const unidadTxt = esUnidadPorUno(alim.unidad) ? ` ${alim.unidad} ` : `${alim.unidad} `;
                   const estadoPrep = alim.estado_preparacion ? ` (pesado ${alim.estado_preparacion})` : "";
                   const key = `${i}-${ai}`;
-                  const opcionesEquiv = alim.grupo ? alimentosEquivalentesAutomaticos(alim, a.cantidad, alimentosBiblioteca) : [];
+                  const opcionesEquiv = alim.grupo ? sustitutosCuradosAlimento(alim, a.cantidad, alimentosBiblioteca) : [];
                   return (
                     <div key={ai} style={{ display:"flex", flexDirection:"column", alignItems:"center", maxWidth:300 }}>
                       <div style={{ fontSize:13, color:theme.muted, lineHeight:1.35, textAlign:"center" }}>
@@ -5061,8 +5037,9 @@ function DietaCoach({ alumno }) {
   // biblioteca (columna "sustitutos_ids"), no en la dieta -- así, una vez
   // que el coach ajusta la lista de un alimento (ej: Pechuga de pollo), esa
   // lista queda de default para cualquier dieta futura de cualquier alumno
-  // que use ese mismo alimento. Mientras no se toque nada, se sigue viendo
-  // la lista automática (ver alimentosEquivalentesAutomaticos).
+  // que use ese mismo alimento. No hay sustitutos sugeridos solos: la lista
+  // empieza vacía y solo tiene lo que el coach agregó a propósito (ver
+  // sustitutosCuradosAlimento).
   const actualizarSustitutosAlimento = async (alimento, nuevaListaIds) => {
     await supabase.from("alimentos").update({ sustitutos_ids: nuevaListaIds }).eq("id", alimento.id);
     setAlimentosBiblioteca(prev => prev.map(a => a.id === alimento.id ? { ...a, sustitutos_ids: nuevaListaIds } : a));
@@ -5088,9 +5065,9 @@ function DietaCoach({ alumno }) {
   };
   // Guarda el gramaje que el coach dejó a mano para un sustituto puntual,
   // junto con la cantidad del alimento original que había en ese momento --
-  // así alimentosEquivalentesAutomaticos puede escalar esa misma proporción
-  // si en otra dieta el original aparece en otra cantidad (ver comentario
-  // ahí arriba).
+  // así sustitutosCuradosAlimento puede escalar esa misma proporción si en
+  // otra dieta el original aparece en otra cantidad (ver comentario ahí
+  // arriba).
   const ajustarCantidadSustituto = (alim, opcionesActuales, idSustituto, nuevaCantidad, cantidadOrigenActual) => {
     if (!(nuevaCantidad > 0)) return;
     const ids = opcionesActuales.map(o => o.alimento.id);
@@ -5457,16 +5434,13 @@ function DietaCoach({ alumno }) {
                     </div>
                   )}
                   {alim && equivalenciaAbierta === key && (() => {
-                    const opciones = alimentosEquivalentesAutomaticos(alim, a.cantidad, alimentosBiblioteca);
-                    const esCurada = Array.isArray(alim.sustitutos_ids);
+                    const opciones = sustitutosCuradosAlimento(alim, a.cantidad, alimentosBiblioteca);
                     const idsUsados = new Set([alim.id, ...opciones.map(o => o.alimento.id)]);
                     const macrosOrigen = calcularMacrosAlimento(alim, a.cantidad);
                     return (
                       <div style={{ background:theme.bg, border:`1px solid ${theme.border}`, borderRadius:8, padding:8, marginTop:4 }}>
                         <div style={{ fontSize:9, color:theme.muted, marginBottom:4 }}>
-                          {esCurada
-                            ? "Sustitutos elegidos para este alimento -- quedan igual por defecto en cualquier dieta futura, hasta que los cambies:"
-                            : `Automático -- mismo grupo (${labelGrupoAlimento(alim.grupo)}), los ${MAX_EQUIVALENCIAS_AUTOMATICAS} más parecidos en calorías. Agregá o sacá alguno para dejarlos fijos para este alimento:`}
+                          Sustitutos elegidos para este alimento -- quedan igual por defecto en cualquier dieta futura, hasta que los cambies:
                         </div>
                         <div style={{ fontSize:10.5, color:theme.text, background:theme.card, border:`1px solid ${theme.border}`, borderRadius:6, padding:"4px 8px", marginBottom:6 }}>
                           Original -- {a.cantidad}{esUnidadPorUno(alim.unidad) ? ` ${alim.unidad}` : "g"} {alim.nombre}: <strong>{macrosOrigen.calorias} kcal · {macrosOrigen.proteinas}p · {macrosOrigen.carbos}c · {macrosOrigen.grasas}g</strong>
@@ -5495,7 +5469,7 @@ function DietaCoach({ alumno }) {
                             </div>
                           );
                         }) : (
-                          <div style={{ fontSize:11, color:theme.muted, marginBottom:4 }}>Sin sustitutos cargados.</div>
+                          <div style={{ fontSize:11, color:theme.muted, marginBottom:4 }}>Todavía no agregaste ningún sustituto para este alimento. Buscalo abajo.</div>
                         )}
                         <input style={{ ...inputStyle, fontSize:11, padding:"5px 8px", marginTop:6 }} placeholder="+ Agregar sustituto (buscar en la biblioteca)"
                           value={busquedaSustituto[key] || ""} list={`lista-sustitutos-${key}`}
