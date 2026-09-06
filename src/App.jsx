@@ -1399,6 +1399,7 @@ function camposAnamnesisAColumnas(form) {
     pecho_inicial: parseFloat(form.pecho) || null,
     pierna_inicial: parseFloat(form.pierna) || null,
     objetivo: form.objetivo,
+    objetivo_detalle: form.objetivoDetalle,
     ha_entrenado: form.haEntrenado,
     que_entrenamiento: form.queEntrenamiento,
     dias_semana: form.diasSemana,
@@ -1455,6 +1456,7 @@ function columnasUsuarioACamposAnamnesis(row) {
     pecho: num(row.pecho_inicial),
     pierna: num(row.pierna_inicial),
     objetivo: row.objetivo || "",
+    objetivoDetalle: row.objetivo_detalle || "",
     haEntrenado: row.ha_entrenado || "",
     queEntrenamiento: row.que_entrenamiento || "",
     diasSemana: row.dias_semana || "",
@@ -1495,7 +1497,7 @@ function AnamnesisScreen({ onNav, modoPreview = false, pasoInicial = 1 }) {
   const [form, setForm] = useState({
     nombre: "", edad: "", sexo: "", ocupacion: "", actividadLaboral: "", nivelActividad: 5,
     instagram: "", whatsapp: "",
-    peso: "", estatura: "", porcGrasa: "", cintura: "", cadera: "", brazo: "", pecho: "", pierna: "", objetivo: "",
+    peso: "", estatura: "", porcGrasa: "", cintura: "", cadera: "", brazo: "", pecho: "", pierna: "", objetivo: "", objetivoDetalle: "",
     haEntrenado: "", queEntrenamiento: "", diasSemana: "", lugarEntreno: "", lugarEntrenoDetalle: "", horarioEntreno: "", horarioEntrenoHasta: "",
     enfermedadLesion: "", cualEnfermedad: "", medicamento: "", cualMedicamento: "",
     sustanciaFarmacologica: "", sustanciaCuales: "", sustanciaTiempo: "", sustanciaHaceCuanto: "",
@@ -1664,8 +1666,11 @@ function AnamnesisScreen({ onNav, modoPreview = false, pasoInicial = 1 }) {
             <span style={labelStyle}>¿Cuál es tu objetivo principal? *</span>
             <select style={selectStyle} value={form.objetivo} onChange={e => set("objetivo", e.target.value)}>
               <option value="">Selecciona...</option>
-              {opciones(["Bajar grasa", "Ganar masa muscular", "Recomposición corporal", "Mejorar rendimiento deportivo", "Mantener peso y mejorar salud"])}
+              {opciones(["Bajar grasa", "Ganar masa muscular", "Recomposición corporal", "Mejorar rendimiento deportivo", "Mantener peso y mejorar salud", "Otro"])}
             </select>
+            {form.objetivo === "Otro" && (
+              <input style={inputStyle} placeholder="Especifica tu objetivo" value={form.objetivoDetalle} onChange={e => set("objetivoDetalle", e.target.value)} />
+            )}
 
             <span style={labelStyle}>Peso actual (kg) *</span>
             <input style={inputStyle} placeholder="Ej: 80" type="number" value={form.peso} onChange={e => set("peso", e.target.value)} />
@@ -9341,7 +9346,7 @@ const CAMPOS_EDITABLES_ANAMNESIS = [
   "nombre", "edad", "sexo", "estatura", "peso_actual", "porc_grasa",
   "cintura_inicial", "cadera_inicial", "brazo_inicial", "pecho_inicial", "pierna_inicial",
   "whatsapp", "instagram", "ocupacion", "actividad_laboral", "nivel_actividad",
-  "objetivo", "ha_entrenado", "que_entrenamiento", "dias_semana", "lugar_entreno", "lugar_entreno_detalle", "horario_entreno", "horario_entreno_hasta",
+  "objetivo", "objetivo_detalle", "ha_entrenado", "que_entrenamiento", "dias_semana", "lugar_entreno", "lugar_entreno_detalle", "horario_entreno", "horario_entreno_hasta",
   "enfermedad_lesion", "cual_enfermedad", "medicamento", "cual_medicamento",
   "sustancia_farmacologica", "sustancia_cuales", "sustancia_tiempo", "sustancia_hace_cuanto",
   "consume_suplemento", "cual_suplemento",
@@ -9470,7 +9475,7 @@ function CoachAlumno({ onNav, alumno }) {
               <Card>
                 <div style={{ fontSize:12,color:theme.muted,marginBottom:10 }}>ANAMNESIS</div>
                 {[
-                  ["Objetivo", datosCompletos?.objetivo],
+                  ["Objetivo", datosCompletos?.objetivo === "Otro" && datosCompletos?.objetivo_detalle ? `Otro (${datosCompletos.objetivo_detalle})` : datosCompletos?.objetivo],
                   ["Ha entrenado", datosCompletos?.ha_entrenado],
                   ["Entrenamiento previo", datosCompletos?.que_entrenamiento],
                   ["Días/semana", datosCompletos?.dias_semana],
@@ -9566,7 +9571,8 @@ function CoachAlumno({ onNav, alumno }) {
               </Card>
               <Card>
                 <div style={{ fontSize:12,color:theme.muted,marginBottom:10 }}>ANAMNESIS</div>
-                <CampoEditable campo="objetivo" label="Objetivo principal" tipo="select" opciones={["Bajar grasa","Ganar masa muscular","Recomposición corporal","Mejorar rendimiento deportivo","Mantener peso y mejorar salud"]} formDatos={formDatos} setCampo={setCampo} />
+                <CampoEditable campo="objetivo" label="Objetivo principal" tipo="select" opciones={["Bajar grasa","Ganar masa muscular","Recomposición corporal","Mejorar rendimiento deportivo","Mantener peso y mejorar salud","Otro"]} formDatos={formDatos} setCampo={setCampo} />
+                {formDatos?.objetivo === "Otro" && <CampoEditable campo="objetivo_detalle" label="Especifica el objetivo" formDatos={formDatos} setCampo={setCampo} />}
                 <CampoEditable campo="ha_entrenado" label="Ha entrenado antes" tipo="select" opciones={["Sí","No"]} formDatos={formDatos} setCampo={setCampo} />
                 {formDatos?.ha_entrenado === "Sí" && <CampoEditable campo="que_entrenamiento" label="Qué entrenamiento o deporte" formDatos={formDatos} setCampo={setCampo} />}
                 <CampoEditable campo="dias_semana" label="Días de entreno a la semana" tipo="select" opciones={["1 día","2 días","3 días","4 días","5 días","6 días"]} formDatos={formDatos} setCampo={setCampo} />
