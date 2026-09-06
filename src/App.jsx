@@ -243,6 +243,18 @@ async function subirFotoGlobal(userId, key, blob) {
   if (error) return null;
   return `https://srlucwsakjuivogvunzx.supabase.co/storage/v1/object/public/fotos-alumnos/${path}`;
 }
+// Igual que subirFotoGlobal, pero para la foto de un reporte puntual --
+// respeta el mismo path (userId/fecha/campo.jpg) que usa ReporteScreen al
+// subir la foto original, así que al reemplazarla se pisa el mismo archivo.
+async function subirFotoReporteGlobal(userId, fecha, key, blob) {
+  if (!blob) return null;
+  const path = `${userId}/${fecha}/${key}.jpg`;
+  const { error } = await supabase.storage
+    .from("fotos-alumnos")
+    .upload(path, blob, { contentType: "image/jpeg", upsert: true });
+  if (error) return null;
+  return `https://srlucwsakjuivogvunzx.supabase.co/storage/v1/object/public/fotos-alumnos/${path}`;
+}
 // Tarjeta reutilizable para reemplazar una foto puntual (anamnesis) ya guardada.
 // userId: dueño de la foto (el alumno, aunque quien sube sea el coach).
 // campoKey: "frente" | "espalda" | "perfDer" | "perfIzq" (debe calzar con subirFotoGlobal).
@@ -269,6 +281,44 @@ const FotoEditable = ({ userId, campoKey, label, urlActual, onSubida }) => {
       )}
       <label style={{ display: "block", textAlign: "center", padding: 3, fontSize: 9, color: theme.accentLight, background: `${theme.accent}18`, cursor: "pointer" }}>
         {subiendo ? "Subiendo..." : `✏️ Cambiar ${label}`}
+        <input type="file" accept="image/*" style={{ display: "none" }} disabled={subiendo} onChange={e => handleChange(e.target.files[0])} />
+      </label>
+    </div>
+  );
+};
+// Foto de un reporte, editable por el coach -- puede sacarla (si el alumno
+// se equivocó al enviarla) o reemplazarla por la correcta. campoKey debe
+// ser "frente"|"espalda"|"perfDer"|"perfIzq" (calza con el path que ya usa
+// ReporteScreen al subir la foto original); dbCol es la columna real en la
+// tabla "reportes" (foto_frente, etc). onCambio(nuevaUrlOnNull) actualiza
+// el estado del reporte en el componente que lo usa.
+const FotoReporteEditable = ({ userId, fecha, campoKey, label, urlActual, onCambio, onVerGrande }) => {
+  const [subiendo, setSubiendo] = useState(false);
+  const handleChange = async (file) => {
+    if (!file || !userId) return;
+    setSubiendo(true);
+    const comprimida = await comprimirFotoGlobal(file);
+    const url = await subirFotoReporteGlobal(userId, fecha, campoKey, comprimida);
+    setSubiendo(false);
+    if (url) onCambio(`${url}?t=${new Date().getTime()}`);
+    else alert("No se pudo subir la foto. Intenta de nuevo.");
+  };
+  const eliminar = () => {
+    if (!confirm(`¿Sacar esta foto (${label}) de este reporte? No se puede deshacer.`)) return;
+    onCambio(null);
+  };
+  return (
+    <div style={{ borderRadius: 8, overflow: "hidden", border: `1px solid ${theme.border}`, position: "relative" }}>
+      {urlActual ? (
+        <>
+          <img src={urlActual} alt={label} onClick={() => onVerGrande?.(urlActual)} style={{ width: "100%", height: 80, objectFit: "cover", display: "block", cursor: "pointer" }} />
+          <button onClick={eliminar} title={`Sacar foto (${label})`} style={{ position: "absolute", top: 3, right: 3, width: 18, height: 18, borderRadius: "50%", background: "rgba(0,0,0,0.65)", border: "none", color: "#fff", fontSize: 11, lineHeight: 1, padding: 0, cursor: "pointer" }}>✕</button>
+        </>
+      ) : (
+        <div style={{ width: "100%", height: 80, display: "flex", alignItems: "center", justifyContent: "center", background: theme.surface, color: theme.muted, fontSize: 20 }}>📷</div>
+      )}
+      <label style={{ display: "block", textAlign: "center", padding: 3, fontSize: 9, color: theme.accentLight, background: `${theme.accent}18`, cursor: "pointer" }}>
+        {subiendo ? "Subiendo..." : urlActual ? `✏️ Cambiar` : "+ Agregar"}
         <input type="file" accept="image/*" style={{ display: "none" }} disabled={subiendo} onChange={e => handleChange(e.target.files[0])} />
       </label>
     </div>
@@ -9143,10 +9193,18 @@ cargarMensajes();  }, [alumno]);
     </Card>
   );
 
+  // El alumno puede haber mandado una foto equivocada -- esto permite al
+  // coach sacarla o reemplazarla por la correcta directo desde acá.
+  const actualizarFotoReporte = async (reporteId, dbCol, url) => {
+    const { error } = await supabase.from("reportes").update({ [dbCol]: url }).eq("id", reporteId);
+    if (error) { alert("Error al actualizar la foto: " + error.message); return; }
+    setReportes(prev => prev.map(r => r.id === reporteId ? { ...r, [dbCol]: url } : r));
+  };
+
   return (
     <div>
-      {reportes.map((c, i) => (
-        <Card key={i} style={{ marginBottom:12 }}>
+      {reportes.map((c) => (
+        <Card key={c.id} style={{ marginBottom:12 }}>
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
             <div style={{ fontSize:14, fontWeight:700, color:theme.text }}>📅 {c.fecha}</div>
             <div style={{ textAlign:"right" }}>
@@ -9167,19 +9225,29 @@ cargarMensajes();  }, [alumno]);
               "{c.comentarios}"
             </div>
           )}
-          {(c.foto_frente || c.foto_espalda || c.foto_perf_der || c.foto_perf_izq) && (
-            <div style={{ marginTop:10 }}>
-              <div style={{ fontSize:11, color:theme.muted, marginBottom:6 }}>📸 FOTOS</div>
-              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:6 }}>
-                {[["Frente", c.foto_frente], ["Espalda", c.foto_espalda], ["P. Der", c.foto_perf_der], ["P. Izq", c.foto_perf_izq]].map(([label, url]) => url && (
-                  <div key={label} style={{ borderRadius:8, overflow:"hidden", border:`1px solid ${theme.border}` }}>
-                    <img src={url} alt={label} onClick={() => setLightbox(url)} style={{ width:"100%", height:80, objectFit:"cover", cursor:"pointer" }} />
-                    <div style={{ fontSize:9, color:theme.muted, textAlign:"center", padding:3 }}>{label}</div>
-                  </div>
-                ))}
-              </div>
+          <div style={{ marginTop:10 }}>
+            <div style={{ fontSize:11, color:theme.muted, marginBottom:6 }}>📸 FOTOS -- podés sacar o cambiar cualquiera si el alumno se equivocó</div>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:6 }}>
+              {[
+                ["frente","Frente","foto_frente"],
+                ["espalda","Espalda","foto_espalda"],
+                ["perfDer","P. Der","foto_perf_der"],
+                ["perfIzq","P. Izq","foto_perf_izq"],
+              ].map(([campoKey,label,dbCol]) => (
+                <FotoReporteEditable
+                  key={campoKey}
+                  userId={alumno?.id}
+                  fecha={c.fecha}
+                  campoKey={campoKey}
+                  dbCol={dbCol}
+                  label={label}
+                  urlActual={c[dbCol]}
+                  onCambio={(url) => actualizarFotoReporte(c.id, dbCol, url)}
+                  onVerGrande={setLightbox}
+                />
+              ))}
             </div>
-          )}
+          </div>
         </Card>
       ))}
       <ImageLightbox src={lightbox} onClose={() => setLightbox(null)} />
