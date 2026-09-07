@@ -7459,6 +7459,10 @@ const CALENTAMIENTO_DEFAULTS = {
     { nombre: "Posteriores con banda elástica", detalle: "12 repeticiones" },
     { nombre: "Bíceps con banda elástica", detalle: "12 repeticiones" },
   ],
+  // Sin ejercicios por defecto a propósito -- el coach los va cargando él
+  // mismo con "+ Movimiento" a medida que arma sus rutinas de torso, igual
+  // que hace hoy para agregar movimientos extra en las demás categorías.
+  torso: [],
 };
 
 const VUELTA_CALMA_DEFAULTS = {
@@ -7478,6 +7482,9 @@ const VUELTA_CALMA_DEFAULTS = {
     { nombre: "Estiramiento de bíceps contra la pared", detalle: "30 segundos por lado" },
     { nombre: "Estiramiento de trapecio/cuello", detalle: "30 segundos por lado" },
   ],
+  // Igual que en CALENTAMIENTO_DEFAULTS.torso: arranca vacío, el coach lo
+  // va completando a mano con "+ Estiramiento".
+  torso: [],
 };
 // Tarjeta de volumen semanal por grupo muscular (series planificadas + kg
 // realmente registrados esta semana). Es un componente aparte, con su
@@ -8445,7 +8452,7 @@ function RutinaCoach({ alumno }) {
           <div style={{ marginBottom:16 }}>
             <div style={{ fontSize:11, color:theme.muted, marginBottom:6 }}>Calentamiento general de la sesión</div>
             <div style={{ display:"flex", gap:6, marginBottom:10, flexWrap:"wrap" }}>
-              {[["piernas","🦵 Piernas"],["push","💪 Push"],["pull","🎯 Pull"]].map(([key,label]) => (
+              {[["piernas","🦵 Piernas"],["push","💪 Push"],["pull","🎯 Pull"],["torso","🫀 Torso"]].map(([key,label]) => (
                 <button key={key} onClick={() => setCalentamientoGeneral(CALENTAMIENTO_DEFAULTS[key].map(m => ({...m})))}
                   style={{ background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:8, padding:"6px 12px", color:theme.text, fontSize:12, cursor:"pointer" }}>{label}</button>
               ))}
@@ -8701,7 +8708,7 @@ function RutinaCoach({ alumno }) {
           <div style={{ marginBottom:16 }}>
             <div style={{ fontSize:11, color:theme.muted, marginBottom:6 }}>🧘 Vuelta a la calma (estiramientos post-sesión)</div>
             <div style={{ display:"flex", gap:6, marginBottom:10, flexWrap:"wrap" }}>
-              {[["piernas","🦵 Piernas"],["push","💪 Push"],["pull","🎯 Pull"]].map(([key,label]) => (
+              {[["piernas","🦵 Piernas"],["push","💪 Push"],["pull","🎯 Pull"],["torso","🫀 Torso"]].map(([key,label]) => (
                 <button key={key} onClick={() => setVueltaCalma(VUELTA_CALMA_DEFAULTS[key].map(m => ({...m})))}
                   style={{ background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:8, padding:"6px 12px", color:theme.text, fontSize:12, cursor:"pointer" }}>{label}</button>
               ))}
