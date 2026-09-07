@@ -5666,17 +5666,22 @@ function DietaCoach({ alumno }) {
               <div style={{ fontSize:11, fontWeight:700, color:theme.accentLight, marginBottom:8 }}>SUMATORIA DEL PLAN (vs. objetivo de arriba)</div>
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:8, textAlign:"center" }}>
                 {[
-                  { label:"Kcal", valor:planArmado.calorias, objetivo:parseFloat(calorias) || 0 },
-                  { label:"Prot", valor:planArmado.proteinas, objetivo:parseFloat(proteinas) || 0 },
-                  { label:"Carb", valor:planArmado.carbos, objetivo:parseFloat(carbos) || 0 },
-                  { label:"Grasa", valor:planArmado.grasas, objetivo:parseFloat(grasas) || 0 },
+                  { label:"Kcal", valor:planArmado.calorias, objetivo:parseFloat(calorias) || 0, perKg:false },
+                  { label:"Prot", valor:planArmado.proteinas, objetivo:parseFloat(proteinas) || 0, perKg:true },
+                  { label:"Carb", valor:planArmado.carbos, objetivo:parseFloat(carbos) || 0, perKg:true },
+                  { label:"Grasa", valor:planArmado.grasas, objetivo:parseFloat(grasas) || 0, perKg:true },
                 ].map(m => {
                   const delta = m.objetivo ? Math.round(m.valor - m.objetivo) : null;
                   const ok = delta !== null && Math.abs(delta) <= Math.max(1, m.objetivo * 0.05);
+                  const peso = parseFloat(alumno?.peso_actual) || 0;
+                  const gPorKg = m.perKg && peso > 0 ? m.valor / peso : null;
                   return (
                     <div key={m.label}>
                       <div style={{ fontSize:14, fontWeight:800, color:theme.text }}>{Math.round(m.valor)}</div>
                       <div style={{ fontSize:10, color:theme.muted, marginTop:2 }}>{m.label}</div>
+                      {gPorKg !== null && (
+                        <div style={{ fontSize:9, color:theme.muted, marginTop:1 }}>{gPorKg.toFixed(1)} g/kg</div>
+                      )}
                       {delta !== null && (
                         <div style={{ fontSize:10, fontWeight:700, marginTop:2, color: ok ? theme.success : theme.warning }}>
                           {delta > 0 ? `+${delta}` : delta}
