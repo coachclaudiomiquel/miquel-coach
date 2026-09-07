@@ -972,16 +972,9 @@ function labelGrupoAlimento(key) {
 // g/ml, de a 0.5 en und/scoop.
 function calcularCantidadEquivalente(alimOrigen, cantidadOrigen, alimSustituto) {
   const grupo = GRUPOS_ALIMENTO.find(g => g.key === alimOrigen?.grupo);
-  if (!grupo) return null;
+  if (!grupo || !alimSustituto?.[grupo.macro]) return null;
   const cant = parseFloat(cantidadOrigen) || 0;
   if (!cant) return null;
-  // Verdura no tiene macro para igualar (a propósito, ver comentario de
-  // GRUPOS_ALIMENTO) -- en vez de no poder calcular nada y que el
-  // sustituto desaparezca de la lista, se sugiere la misma cantidad que
-  // el original. El coach después puede ajustarla a mano igual que con
-  // cualquier otro sustituto.
-  if (grupo.macro === null) return redondearCantidadSustituto(cant, alimSustituto);
-  if (!alimSustituto?.[grupo.macro]) return null;
   const factorOrigen = esUnidadPorUno(alimOrigen.unidad) ? cant : cant / 100;
   const macroObjetivo = (alimOrigen[grupo.macro] || 0) * factorOrigen;
   if (macroObjetivo <= 0) return null;
