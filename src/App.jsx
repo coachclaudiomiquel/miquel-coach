@@ -439,6 +439,10 @@ const SemanaCard = ({ semana, ctx }) => {
               ejerciciosAgrupados[nombre].push(r);
             });
             Object.values(ejerciciosAgrupados).forEach(arr => arr.sort((a,b) => (a.serie||0) - (b.serie||0)));
+            // Nombre/día de la rutina que originó estos registros -- se toma del
+            // primer registro que traiga el dato (todos los del mismo día deberían
+            // venir de la misma rutina asignada ese día).
+            const rutinaDelDia = entrenoDia.find(r => r.ejercicios?.rutinas)?.ejercicios?.rutinas || null;
 
             return (
               <div key={i} style={{ marginBottom:8 }}>
@@ -486,7 +490,10 @@ const SemanaCard = ({ semana, ctx }) => {
 
                     {Object.keys(ejerciciosAgrupados).length > 0 && (
                       <div style={{ marginBottom:14 }}>
-                        <div style={{ fontSize:11, fontWeight:800, color:theme.muted, marginBottom:8, letterSpacing:0.5 }}>🏋️ ENTRENAMIENTO</div>
+                        <div style={{ fontSize:11, fontWeight:800, color:theme.muted, marginBottom:8, letterSpacing:0.5 }}>
+                          🏋️ ENTRENAMIENTO
+                          {rutinaDelDia && <span style={{ color:theme.text, fontWeight:700, letterSpacing:0, marginLeft:6, textTransform:"none" }}>· {rutinaDelDia.nombre}{rutinaDelDia.dia ? ` (${rutinaDelDia.dia})` : ""}</span>}
+                        </div>
                         {Object.entries(ejerciciosAgrupados).map(([nombre, series]) => (
                           <div key={nombre} style={{ marginBottom:8 }}>
                             <div style={{ fontSize:12, fontWeight:700, color:theme.text, marginBottom:4 }}>{nombre}</div>
@@ -699,9 +706,13 @@ async function cargarCiclosAlumno(usuarioId, fechaInicioPlanOverride) {
     supabase.from("diario_registros").select("fecha").eq("usuario_id", usuarioId).order("fecha", { ascending: true }).limit(1),
     supabase.from("registros_entreno").select("fecha").eq("usuario_id", usuarioId).order("fecha", { ascending: true }).limit(1),
     supabase.from("dieta_registros").select("fecha").eq("usuario_id", usuarioId).order("fecha", { ascending: true }).limit(1),
-    supabase.from("rutinas").select("dia").eq("usuario_id", usuarioId).eq("publicada", true),
+    supabase.from("rutinas").select("dia, es_descanso").eq("usuario_id", usuarioId).eq("publicada", true),
   ]);
-  const diasConRutina = new Set((rutinasAlumno || []).map(r => r.dia).filter(Boolean));
+  // Los días de descanso no cuentan para el total de días planificados -- un
+  // día de descanso nunca puede quedar "entrenado" (no hay nada que
+  // registrar ese día), así que si se contara el contador de la semana
+  // (ej: "6/7") nunca podría llegar al total.
+  const diasConRutina = new Set((rutinasAlumno || []).filter(r => !r.es_descanso).map(r => r.dia).filter(Boolean));
   const diasPlanificados = diasConRutina.size;
   const fechasIniciales = [eDiario?.[0]?.fecha, eEntreno?.[0]?.fecha, eDieta?.[0]?.fecha].filter(Boolean).sort();
   if (fechasIniciales.length === 0 && !fechaInicioPlanOverride) return { ...vacio, diasPlanificados };
@@ -721,7 +732,7 @@ async function cargarCiclosAlumno(usuarioId, fechaInicioPlanOverride) {
 
   const { data: entrenos } = await supabase
     .from("registros_entreno")
-    .select("*, ejercicios(nombre)")
+    .select("*, ejercicios(nombre, rutina_id, rutinas(dia, nombre))")
     .eq("usuario_id", usuarioId)
     .gte("fecha", fechaDesde)
     .order("creado_en", { ascending: true });
@@ -2123,7 +2134,10 @@ const [estadoPago, setEstadoPago] = useState(null);
         if (usr?.created_at) { const inicio = new Date(usr.created_at); const dias = Math.floor((new Date() - inicio) / 86400000); setSemana(Math.floor(dias / 7) + 1); }
         const { data: noLeidos } = await supabase.from("mensajes").select("id").eq("usuario_id", user.id).eq("de", "coach").eq("leido", false);
         if (noLeidos) setMensajesNoLeidos(noLeidos.length);
-        const { data: ultimoMsg } = await supabase.from("mensajes").select("texto, created_at").eq("usuario_id", user.id).eq("de", "coach").order("created_at", { ascending: false }).limit(1);
+        // Solo se muestra si sigue sin leer -- una vez que el alumno entra a
+        // Mensajes y lo lee, este aviso en el Inicio se cae solo (ver
+        // MensajesScreen, que marca los mensajes del coach como leídos).
+        const { data: ultimoMsg } = await supabase.from("mensajes").select("texto, created_at").eq("usuario_id", user.id).eq("de", "coach").eq("leido", false).order("created_at", { ascending: false }).limit(1);
         if (ultimoMsg && ultimoMsg.length > 0) setUltimoMensajeCoach(ultimoMsg[0]);
       }
     };
@@ -6573,8 +6587,10 @@ function MensajesScreen({ onNav }) {
       if (user) {
         setUserId(user.id);
         await cargarMensajes(user.id);
-        // Marcar como leídos los mensajes del coach
-        // mensajes marcados como leidos al abrir el chat
+        // Marcar como leídos los mensajes del coach al abrir el chat -- así
+        // se cae el badge de mensajes sin leer y el aviso de rutina/dieta
+        // lista en el Inicio (ver AlumnoHome).
+        await supabase.from("mensajes").update({ leido: true }).eq("usuario_id", user.id).eq("de", "coach").eq("leido", false);
       }
       setLoading(false);
     };
@@ -6661,7 +6677,7 @@ function MensajesScreen({ onNav }) {
 // la pestaña Progreso del panel de coach (mismo contenido, coach ve el del
 // alumno que esté viendo) -- así ambas vistas se mantienen consistentes sin
 // duplicar la lógica.
-function ProgresoMetricas({ userId }) {
+function ProgresoMetricas({ userId, esCoach = false }) {
   const [loading, setLoading] = useState(true);
   const [reportes, setReportes] = useState([]);
   const [fotoAntes, setFotoAntes] = useState(null);
@@ -6670,6 +6686,13 @@ function ProgresoMetricas({ userId }) {
   const [lightbox, setLightbox] = useState(null);
   const [pasosResumen, setPasosResumen] = useState([]);
   const [anillos30, setAnillos30] = useState(null);
+  // Corrección de pasos mal anotados -- solo el coach puede editarlos (el
+  // alumno sigue anotando los suyos desde el Inicio como siempre), para no
+  // agregarle un flujo extra que le resulte tedioso.
+  const [fechaEditarPasos, setFechaEditarPasos] = useState("");
+  const [valorEditarPasos, setValorEditarPasos] = useState("");
+  const [guardandoPasosCoach, setGuardandoPasosCoach] = useState(false);
+  const [pasosGuardadoOk, setPasosGuardadoOk] = useState(false);
 
   // Detalle de un día puntual en el gráfico de pasos: se arrastra el dedo
   // (o se pasa el mouse) sobre las barras y va apareciendo un globito con el
@@ -6701,6 +6724,31 @@ function ProgresoMetricas({ userId }) {
     clearTimeout(pasosHideTimerRef.current);
     pasosHideTimerRef.current = setTimeout(() => setPasosScrub(null), 900);
   };
+
+  // Guarda (o corrige) los pasos de un día puntual -- mismo upsert que usa el
+  // alumno desde el Inicio para el día de hoy, pero acá el coach puede
+  // apuntar a cualquier fecha de los últimos 30 días del gráfico.
+  const guardarPasosCoach = async () => {
+    if (!fechaEditarPasos || !userId) return;
+    setGuardandoPasosCoach(true);
+    setPasosGuardadoOk(false);
+    const { error } = await supabase.from("pasos_registros").upsert(
+      { usuario_id: userId, fecha: fechaEditarPasos, pasos: valorEditarPasos ? parseInt(valorEditarPasos) : null },
+      { onConflict: "usuario_id,fecha" }
+    );
+    setGuardandoPasosCoach(false);
+    if (error) { alert("Error al guardar los pasos: " + error.message); return; }
+    setPasosGuardadoOk(true);
+    const hoyPasos = fechaOperativa();
+    const desdePasos = new Date(hoyPasos); desdePasos.setDate(hoyPasos.getDate() - 29);
+    const { data: pasosData } = await supabase
+      .from("pasos_registros")
+      .select("fecha, pasos")
+      .eq("usuario_id", userId)
+      .gte("fecha", aFechaStr(desdePasos))
+      .order("fecha", { ascending: true });
+    if (pasosData) setPasosResumen(pasosData.filter(p => p.pasos != null));
+  };
   // El globito se centra en la barra, pero cerca de los bordes de la tarjeta
   // se saldría y quedaría cortado -- este efecto lo corre hacia adentro lo
   // justo para que siempre se vea completo (día + pasos).
@@ -6719,13 +6767,34 @@ function ProgresoMetricas({ userId }) {
     const cargar = async () => {
       setLoading(true);
 
-      // Peso corporal: historial real de reportes
-      const { data: reportesData } = await supabase
-        .from("reportes")
-        .select("peso, fecha, foto_frente, porc_grasa, cintura, cadera, brazo, pecho, pierna")
-        .eq("usuario_id", userId)
-        .order("fecha", { ascending: true });
-      if (reportesData) setReportes(reportesData.filter(c => c.peso));
+      // Peso corporal: historial real de reportes, más el peso cargado en la
+      // Anamnesis como primer punto -- antes había que esperar 2 reportes
+      // recién para ver cualquier gráfico, porque el peso de la Anamnesis
+      // nunca entraba a este historial. No hay una fecha exacta de "cuándo
+      // completó la Anamnesis" guardada, así que se usa la fecha de creación
+      // de la cuenta como aproximación (es lo más cercano disponible).
+      const [{ data: reportesData }, { data: usrPeso }] = await Promise.all([
+        supabase
+          .from("reportes")
+          .select("peso, fecha, foto_frente, porc_grasa, cintura, cadera, brazo, pecho, pierna")
+          .eq("usuario_id", userId)
+          .order("fecha", { ascending: true }),
+        supabase.from("usuarios").select("peso_actual, created_at").eq("id", userId).maybeSingle(),
+      ]);
+      const reportesConPeso = (reportesData || []).filter(c => c.peso);
+      let historialPeso = reportesConPeso;
+      if (usrPeso?.peso_actual && usrPeso?.created_at) {
+        const fechaAnamnesis = aFechaStr(new Date(usrPeso.created_at));
+        const yaHayReporteEsaFecha = reportesConPeso.some(c => c.fecha === fechaAnamnesis);
+        const esRealmenteElMasAntiguo = reportesConPeso.length === 0 || fechaAnamnesis < reportesConPeso[0].fecha;
+        if (!yaHayReporteEsaFecha && esRealmenteElMasAntiguo) {
+          historialPeso = [
+            { peso: usrPeso.peso_actual, fecha: fechaAnamnesis, foto_frente: null, porc_grasa: null, cintura: null, cadera: null, brazo: null, pecho: null, pierna: null, deAnamnesis: true },
+            ...reportesConPeso,
+          ];
+        }
+      }
+      setReportes(historialPeso);
 
       // Pasos: historial de los últimos 30 días para el gráfico de tendencia
       const hoyPasos = fechaOperativa();
@@ -6773,7 +6842,10 @@ function ProgresoMetricas({ userId }) {
       // PRs reales: solo de los 4 ejercicios básicos, y solo si están en su rutina
       const EJERCICIOS_PR_BASICOS = [
         { clave: "press banca", label: "Press Banca" },
-        { clave: "sentadilla", label: "Sentadilla Libre" },
+        // "sentadilla" por sí sola matchearía cualquier variante (hack, búlgara,
+        // sumo, frontal, smith, etc.) -- se excluyen explícitamente para que el
+        // PR de "Sentadilla Libre" solo junte sentadilla libre de verdad.
+        { clave: "sentadilla", label: "Sentadilla Libre", excluye: ["hack", "búlgara", "bulgara", "sumo", "frontal", "smith", "goblet", "copa", "zercher", "pistol", "spanish", "isométrica", "isometrica"] },
         { clave: "hip thrust", label: "Hip Thrust" },
         { clave: "peso muerto rumano", label: "Peso Muerto Rumano" },
         { clave: "peso muerto", label: "Peso Muerto Convencional" },
@@ -6785,7 +6857,11 @@ function ProgresoMetricas({ userId }) {
         const n = (nombreEjercicio || "").toLowerCase();
         // Se ordena por claves más específicas primero (ej: distinguir "peso muerto rumano" de "peso muerto")
         const ordenados = [...EJERCICIOS_PR_BASICOS].sort((a, b) => b.clave.length - a.clave.length);
-        return ordenados.find(b => n.includes(b.clave));
+        return ordenados.find(b => {
+          if (!n.includes(b.clave)) return false;
+          if (b.excluye && b.excluye.some(ex => n.includes(ex))) return false;
+          return true;
+        });
       };
 
       const { data: registros } = await supabase
@@ -6941,6 +7017,29 @@ function ProgresoMetricas({ userId }) {
             </>
           );
         })()}
+        {esCoach && (
+          <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px solid ${theme.border}` }}>
+            <div style={{ fontSize: 11, color: theme.muted, marginBottom: 8 }}>✏️ CORREGIR PASOS DE UN DÍA</div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <input type="date" value={fechaEditarPasos} max={fechaOperativaStr()}
+                onChange={e => {
+                  const f = e.target.value;
+                  setFechaEditarPasos(f);
+                  const existente = pasosResumen.find(p => p.fecha === f);
+                  setValorEditarPasos(existente ? String(existente.pasos) : "");
+                  setPasosGuardadoOk(false);
+                }}
+                style={{ background: theme.bg, border: `1px solid ${theme.border}`, borderRadius: 8, padding: "8px 10px", color: theme.text, fontSize: 12, outline: "none" }} />
+              <input type="number" value={valorEditarPasos} onChange={e => { setValorEditarPasos(e.target.value); setPasosGuardadoOk(false); }} placeholder="Pasos"
+                style={{ flex: 1, minWidth: 90, background: theme.bg, border: `1px solid ${theme.border}`, borderRadius: 8, padding: "8px 10px", color: theme.text, fontSize: 12, outline: "none" }} />
+              <button onClick={guardarPasosCoach} disabled={guardandoPasosCoach || !fechaEditarPasos}
+                style={{ background: theme.accent, border: "none", borderRadius: 8, padding: "8px 14px", color: "#fff", fontSize: 12, fontWeight: 700, cursor: fechaEditarPasos ? "pointer" : "default", opacity: fechaEditarPasos ? 1 : 0.5 }}>
+                {guardandoPasosCoach ? "..." : "Guardar"}
+              </button>
+            </div>
+            {pasosGuardadoOk && <div style={{ fontSize: 11, color: theme.success, marginTop: 6 }}>✅ Pasos actualizados</div>}
+          </div>
+        )}
       </Card>
 
       {reportes.length > 1 && (() => {
@@ -7502,7 +7601,14 @@ const VUELTA_CALMA_DEFAULTS = {
 // movió los mismos kilos que el pecho, solo que con menor protagonismo), así
 // que los músculos secundarios/terciarios de un ejercicio no suman tonelaje
 // de ese ejercicio, solo de los que tengan tageados con peso 1.
-function VolumenSemanal({ alumno }) {
+// Carga rutinas + cargas registradas de un alumno, calcula el volumen
+// semanal por músculo, y de paso guarda sola una "foto" de ese volumen en
+// "volumen_mesociclo_historial" (para el gráfico de tendencia por bloque de
+// HistorialVolumenTonelaje). Se separó de VolumenSemanal (el componente que
+// SE VE) para que ese guardado en segundo plano pueda correr desde
+// cualquier pantalla que monte el hook -- no solo desde donde se muestra la
+// tarjeta -- sin depender de si el coach abrió Rutina o Progreso.
+function useVolumenSemanal(alumno) {
   const [rutinas, setRutinas] = useState([]);
   const [cargas, setCargas] = useState({});
   const [mapaImagenes, setMapaImagenes] = useState({});
@@ -7552,8 +7658,6 @@ function VolumenSemanal({ alumno }) {
       });
     });
   });
-  const formatearSeries = (n) => Number(n.toFixed(2)).toString();
-  const formatearKg = (n) => Math.round(n).toLocaleString("es-CL");
   const musculosOrdenVolumen = Object.keys({ ...volumenPorMusculo, ...tonelajePorMusculo });
   const volumenOrdenado = musculosOrdenVolumen
     .map(musculo => [musculo, volumenPorMusculo[musculo] || 0, tonelajePorMusculo[musculo] || 0])
@@ -7579,24 +7683,51 @@ function VolumenSemanal({ alumno }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, alumno?.id, alumno?.fecha_inicio_plan, firmaVolumen]);
 
-  if (loading || volumenOrdenado.length === 0) return null;
+  return { loading, volumenOrdenado, seriesSinClasificar, tonelajeSinClasificar };
+}
+// Componente invisible: monta el hook de arriba (carga datos + guarda la
+// foto en volumen_mesociclo_historial) sin mostrar ninguna tarjeta. Se usa
+// en pantallas donde no queremos ver el resumen de volumen, pero sí que
+// ese historial se siga actualizando solo (ej: RutinaCoach, para que el
+// guardado no dependa de si el coach también abrió Progreso).
+function VolumenMesocicloSync({ alumno }) {
+  useVolumenSemanal(alumno);
+  return null;
+}
+function VolumenSemanal({ alumno }) {
+  const { loading, volumenOrdenado, seriesSinClasificar, tonelajeSinClasificar } = useVolumenSemanal(alumno);
+  const formatearSeries = (n) => Number(n.toFixed(2)).toString();
+  const formatearKg = (n) => Math.round(n).toLocaleString("es-CL");
+
+  if (loading) return null;
+  const hayClasificados = volumenOrdenado.length > 0;
+  const haySinClasificar = seriesSinClasificar > 0 || tonelajeSinClasificar > 0;
+  // Antes, si no había ningún músculo clasificado la tarjeta entera
+  // desaparecía sin ningún aviso -- incluso cuando SÍ había series/tonelaje
+  // registrado pero sin músculo asignado (el mensaje de "sin clasificar" de
+  // más abajo quedaba inalcanzable). Ahora se distingue entre "no hay nada
+  // esta semana" (se sigue sin mostrar nada) y "hay datos pero faltan por
+  // clasificar" (se avisa el motivo en vez de esconder la tarjeta).
+  if (!hayClasificados && !haySinClasificar) return null;
   return (
     <Card style={{ marginBottom:14 }}>
       <div style={{ fontSize:12, color:theme.muted, marginBottom:2 }}>📊 VOLUMEN SEMANAL POR GRUPO MUSCULAR</div>
       <div style={{ fontSize:10, color:theme.muted, marginBottom:10 }}>Series: lo planificado en la rutina (con el peso de cada músculo). Tonelaje: lo realmente registrado esta semana (desde el lunes), solo del músculo motor principal de cada ejercicio.</div>
-      <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-        {volumenOrdenado.map(([musculo, series, kg]) => (
-          <div key={musculo} style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline" }}>
-            <span style={{ fontSize:13, color:theme.text }}>{musculo}</span>
-            <span style={{ textAlign:"right" }}>
-              <span style={{ fontSize:13, fontWeight:800, color:theme.accentLight }}>{formatearSeries(series)} series</span>
-              {kg > 0 && <span style={{ fontSize:11, color:theme.muted, marginLeft:8 }}>· {formatearKg(kg)} kg</span>}
-            </span>
-          </div>
-        ))}
-      </div>
-      {(seriesSinClasificar > 0 || tonelajeSinClasificar > 0) && (
-        <div style={{ fontSize:11, color:theme.muted, marginTop:10, paddingTop:8, borderTop:`1px solid ${theme.border}` }}>
+      {hayClasificados && (
+        <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+          {volumenOrdenado.map(([musculo, series, kg]) => (
+            <div key={musculo} style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline" }}>
+              <span style={{ fontSize:13, color:theme.text }}>{musculo}</span>
+              <span style={{ textAlign:"right" }}>
+                <span style={{ fontSize:13, fontWeight:800, color:theme.accentLight }}>{formatearSeries(series)} series</span>
+                {kg > 0 && <span style={{ fontSize:11, color:theme.muted, marginLeft:8 }}>· {formatearKg(kg)} kg</span>}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      {haySinClasificar && (
+        <div style={{ fontSize:11, color:theme.muted, marginTop: hayClasificados ? 10 : 0, paddingTop: hayClasificados ? 8 : 0, borderTop: hayClasificados ? `1px solid ${theme.border}` : "none" }}>
           {formatearSeries(seriesSinClasificar)} series ({formatearKg(tonelajeSinClasificar)} kg) de ejercicios sin músculo asignado todavía -- asignalo en "Músculos que trabaja" junto a cada ejercicio para que entren en el conteo.
         </div>
       )}
@@ -8094,7 +8225,11 @@ function RutinaCoach({ alumno }) {
       .select("*, ejercicios(*)")
       .eq("usuario_id", alumno.id)
       .order("created_at", { ascending: false });
-    if (data) setRutinas(data);
+    // Se reordena de lunes a domingo (mismo criterio que ya usa "Vista previa"),
+    // en vez de por fecha de creación, para tener un orden lógico al ir
+    // revisando/editando la rutina del alumno.
+    const ordenDiaRutina = (dia) => { const i = ORDEN_DIAS_SEMANA.indexOf(dia); return i >= 0 ? i : ORDEN_DIAS_SEMANA.length; };
+    if (data) setRutinas(data.slice().sort((a, b) => ordenDiaRutina(a.dia) - ordenDiaRutina(b.dia)));
 
     const { data: cargasData } = await supabase
       .from("registros_entreno")
@@ -8784,12 +8919,48 @@ function RutinaCoach({ alumno }) {
   // asignó a ese ejercicio (ver SelectorMusculoEjercicio). Los ejercicios
   // sin músculo asignado todavía se cuentan aparte, para que se note que
   // falta clasificarlos.
+
+  // Días entrenados esta semana: se arma a partir de datos que esta pantalla
+  // ya carga (rutinas + cargas de registros_entreno), sin consulta extra.
+  // Un día "cuenta" si algún ejercicio de la rutina de ese día tiene al menos
+  // un registro con fecha dentro de la semana actual (lunes a hoy).
+  const diasEntrenadosEstaSemana = useMemo(() => {
+    const inicioSemanaStr = inicioSemanaActualStr();
+    const ejercicioADia = {};
+    rutinas.forEach(r => { (r.ejercicios || []).forEach(ej => { ejercicioADia[ej.id] = r.dia; }); });
+    const set = new Set();
+    Object.entries(cargas).forEach(([ejId, registros]) => {
+      const dia = ejercicioADia[ejId];
+      if (!dia) return;
+      if ((registros || []).some(reg => reg.fecha >= inicioSemanaStr)) set.add(dia);
+    });
+    return set;
+  }, [rutinas, cargas]);
+  const diasConRutinaActiva = ORDEN_DIAS_SEMANA.filter(dia => rutinas.some(r => r.dia === dia && !r.es_descanso));
+
   return (
     <div>
       {exito && (
         <Card style={{ textAlign:"center", padding:16, marginBottom:14, background:`${theme.success}18`, border:`1px solid ${theme.success}44` }}>
           <div style={{ fontSize:20, marginBottom:4 }}>✅</div>
           <div style={{ fontSize:13, fontWeight:700, color:theme.success }}>Rutina guardada correctamente</div>
+        </Card>
+      )}
+
+      {!loading && diasConRutinaActiva.length > 0 && (
+        <Card style={{ marginBottom:14 }}>
+          <div style={{ fontSize:12, color:theme.muted, marginBottom:8 }}>📆 ENTRENOS ESTA SEMANA</div>
+          <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+            {diasConRutinaActiva.map(dia => {
+              const entrenado = diasEntrenadosEstaSemana.has(dia);
+              return (
+                <div key={dia} style={{ display:"flex", alignItems:"center", gap:5, background: entrenado ? `${theme.success}18` : theme.bg, border:`1px solid ${entrenado ? theme.success+"44" : theme.border}`, borderRadius:8, padding:"6px 10px" }}>
+                  <span style={{ fontSize:13 }}>{entrenado ? "✅" : "⬜"}</span>
+                  <span style={{ fontSize:11, fontWeight:700, color: entrenado ? theme.success : theme.muted }}>{dia}</span>
+                </div>
+              );
+            })}
+          </div>
         </Card>
       )}
 
@@ -8806,7 +8977,11 @@ function RutinaCoach({ alumno }) {
         </div>
       </Card>
 
-      <VolumenSemanal alumno={alumno} />
+      {/* La tarjeta visible de volumen semanal se sacó de acá (ya está en
+          Progreso) -- este componente invisible solo mantiene actualizado
+          el historial de volumen por mesociclo en segundo plano, para que
+          no dependa de si el coach también abre Progreso de este alumno. */}
+      <VolumenMesocicloSync alumno={alumno} />
 
       {/* Rutinas existentes */}
       {loading ? (
@@ -9325,6 +9500,7 @@ function resumenSerieEjercicio(s) {
 // inputs de carga, ni nada que el alumno pueda tocar) -- es solo para
 // que el coach lea y confirme. El aviso final es un mensaje interno común
 // (tabla "mensajes"), igual que cualquier otro mensaje del coach.
+const MENSAJE_RUTINA_DIETA_LISTA = "¡Ya está lista tu rutina y tu dieta! Entrá a la app cuando quieras para revisarlas. 💪";
 function VistaPreviaCoach({ alumno }) {
   const [loading, setLoading] = useState(true);
   const [rutinas, setRutinas] = useState([]);
@@ -9337,10 +9513,11 @@ function VistaPreviaCoach({ alumno }) {
     const cargar = async () => {
       if (!alumno?.id) return;
       setLoading(true);
-      const [{ data: rutinasData }, { data: dietasData }, biblioteca] = await Promise.all([
+      const [{ data: rutinasData }, { data: dietasData }, biblioteca, { data: avisosPrevios }] = await Promise.all([
         supabase.from("rutinas").select("*, ejercicios(*)").eq("usuario_id", alumno.id).eq("publicada", true),
         supabase.from("dietas").select("*").eq("usuario_id", alumno.id).eq("publicada", true).order("created_at", { ascending: false }),
         cargarAlimentosBiblioteca(),
+        supabase.from("mensajes").select("created_at").eq("usuario_id", alumno.id).eq("de", "coach").eq("texto", MENSAJE_RUTINA_DIETA_LISTA).order("created_at", { ascending: false }).limit(1),
       ]);
       const ordenDia = (dia) => { const i = ORDEN_DIAS_SEMANA.indexOf(dia); return i >= 0 ? i : ORDEN_DIAS_SEMANA.length; };
       setRutinas((rutinasData || []).slice().sort((a, b) => ordenDia(a.dia) - ordenDia(b.dia)));
@@ -9349,17 +9526,21 @@ function VistaPreviaCoach({ alumno }) {
       (biblioteca || []).forEach(al => { mapa[al.id] = al; });
       setMapaAlimentos(mapa);
       setLoading(false);
-      setAvisado(false);
+      // Si ya se avisó hoy (mismo mensaje exacto), se parte con el botón ya
+      // marcado como "avisado" -- así no importa si el coach cierra y vuelve
+      // a abrir esta vista previa, no se manda el aviso duplicado sin darse cuenta.
+      setAvisado((avisosPrevios || []).some(m => aFechaStr(new Date(m.created_at)) === fechaOperativaStr()));
     };
     cargar();
   }, [alumno]);
 
   const avisarAlumno = async () => {
+    if (avisado || enviando) return;
     setEnviando(true);
     await supabase.from("mensajes").insert({
       usuario_id: alumno.id,
       de: "coach",
-      texto: "¡Ya está lista tu rutina y tu dieta! Entrá a la app cuando quieras para revisarlas. 💪",
+      texto: MENSAJE_RUTINA_DIETA_LISTA,
     });
     setEnviando(false);
     setAvisado(true);
@@ -9768,7 +9949,7 @@ function CoachAlumno({ onNav, alumno }) {
           <>
             <VolumenSemanal alumno={{ ...alumno, ...(datosCompletos||{}) }} />
             <HistorialVolumenTonelaje alumno={{ ...alumno, ...(datosCompletos||{}) }} />
-            <ProgresoMetricas userId={alumno.id} />
+            <ProgresoMetricas userId={alumno.id} esCoach />
             <DiarioCoach alumno={{ ...alumno, ...(datosCompletos||{}) }}/>
           </>
         )}
