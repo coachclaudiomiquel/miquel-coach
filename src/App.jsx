@@ -8440,12 +8440,19 @@ function RutinaCoach({ alumno }) {
       const ultima = anteriores[anteriores.length - 1];
       nueva = ultima ? { reps: ultima.reps, rir: ultima.rir, tecnica: "normal" } : { reps: "10", rir: 2, tecnica: "normal" };
     } else {
-      // Copia reps y % de la última serie de aproximación existente -- antes
-      // quedaba en blanco y, si el coach no la completaba a mano, al alumno
-      // no le aparecía ningún % ni kg sugerido en esa serie.
-      const anteriores = upd[ejIdx][campo];
-      const ultima = anteriores[anteriores.length - 1];
-      nueva = ultima ? { reps: ultima.reps, pctDesde: ultima.pctDesde, pctHasta: ultima.pctHasta } : { reps: "8", pctDesde: "50", pctHasta: "60" };
+      // Progresión por defecto de las series de aproximación (1ra 50-60%,
+      // 2da 70-80%, 3ra 85-90%) -- antes la fila nueva quedaba en blanco y,
+      // si el coach no la completaba a mano, al alumno no le aparecía ningún
+      // % ni kg sugerido en esa serie. De la 4ta en adelante se repite el
+      // último escalón (85-90%), ya que normalmente no hacen falta más de 3.
+      const PROGRESION_APROXIMACION = [
+        { reps: "8", pctDesde: "50", pctHasta: "60" },
+        { reps: "6", pctDesde: "70", pctHasta: "80" },
+        { reps: "3", pctDesde: "85", pctHasta: "90" },
+      ];
+      const indiceNueva = upd[ejIdx][campo].length;
+      const escalon = PROGRESION_APROXIMACION[Math.min(indiceNueva, PROGRESION_APROXIMACION.length - 1)];
+      nueva = { ...escalon };
     }
     upd[ejIdx][campo].push(nueva);
     setEjercicios(upd);
