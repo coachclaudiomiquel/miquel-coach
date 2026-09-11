@@ -874,6 +874,29 @@ function parsearMusculos(raw) {
   }
   return [{ musculo: raw, peso: 1 }];
 }
+// El músculo es texto libre (igual que el nombre de un ejercicio), así que
+// es fácil terminar escribiendo "Bíceps" en un ejercicio y "Biceps" (sin
+// tilde) en otro sin darse cuenta de que ya se venía usando el otro -- eso
+// los deja como dos músculos distintos en todos lados: sugerencias, Volumen
+// semanal, el gráfico de tendencia y la tabla que alimenta el de mesociclo.
+// Estas dos funciones agrupan por nombre ignorando tildes/mayúsculas/
+// espacios de más (mismo criterio que normalizarNombreEjercicio), y eligen
+// qué forma mostrar: la de MUSCULOS_PRINCIPALES si calza, o si no la
+// primera forma que se haya visto (por eso reciben un "cache" compartido,
+// para que esa elección quede estable dentro de un mismo cálculo).
+function claveMusculo(nombre) {
+  return normalizarNombreEjercicio(nombre || "");
+}
+function etiquetaCanonicaMusculo(nombre, cache) {
+  const limpio = (nombre || "").trim();
+  const clave = claveMusculo(limpio);
+  if (!clave) return limpio;
+  if (cache[clave]) return cache[clave];
+  const delCatalogo = MUSCULOS_PRINCIPALES.find(m => claveMusculo(m) === clave);
+  const etiqueta = delCatalogo || limpio;
+  cache[clave] = etiqueta;
+  return etiqueta;
+}
 // Guarda (o actualiza) la lista de músculos + peso de un ejercicio, ligada al
 // mismo nombre normalizado que la imagen/reseña. No toca lo demás ya guardado.
 async function guardarMusculosEjercicio(nombreOriginal, lista) {
@@ -1219,13 +1242,13 @@ const EditorResenaEjercicio = ({ nombre, mapa, onGuardado }) => {
 // pedir nada nuevo a Supabase). Así, un músculo escrito una sola vez queda
 // disponible como sugerencia para siempre, sin tener que volver a tipearlo.
 function musculosSugeridos(mapa) {
-  const usados = new Set();
+  const cache = {};
+  const usados = new Set(MUSCULOS_PRINCIPALES);
   Object.values(mapa || {}).forEach(info => {
     parsearMusculos(info?.musculo).forEach(({ musculo }) => {
-      if (musculo && musculo.trim()) usados.add(musculo.trim());
+      if (musculo && musculo.trim()) usados.add(etiquetaCanonicaMusculo(musculo, cache));
     });
   });
-  MUSCULOS_PRINCIPALES.forEach(m => usados.add(m));
   return [...usados].sort();
 }
 const SelectorMusculoEjercicio = ({ nombre, mapa, onGuardado }) => {
@@ -3180,6 +3203,12 @@ function MinijuegoModal({ tipo, onCerrar }) {
   );
 }
 
+// Check-in automático de fin de semana: se manda solo, por la misma
+// mensajería interna (tabla "mensajes", como si fuera un mensaje del coach),
+// la primera vez que el alumno completa el entreno del ÚLTIMO día de
+// entreno (no descanso) de SU semana -- ese último día se calcula según los
+// días que el alumno realmente tiene asignados, no un día fijo para todos.
+const MENSAJE_CHECKIN_SEMANAL = "¡Terminaste tu semana de entrenamiento! 💪 ¿Cómo te sentiste?";
 function RutinaScreen({ onNav }) {
   const [rutinas, setRutinas] = useState([]);
   const [rutinaActiva, setRutinaActiva] = useState(null);
@@ -4159,6 +4188,27 @@ function RutinaScreen({ onNav }) {
                   return;
                 }
                 await cargarUltimasCargas(user.id);
+              }
+
+              // Check-in automático de fin de semana (ver MENSAJE_CHECKIN_SEMANAL) --
+              // solo si hoy es el último día de entreno de SU semana y todavía no
+              // se le mandó ninguno esta semana.
+              if (rutinaActiva.dia) {
+                const diasEntrenoAlumno = rutinas.filter(r => !r.es_descanso).map(r => r.dia);
+                const ordenDiaCheckin = (dia) => { const i = ORDEN_DIAS_SEMANA.indexOf(dia); return i >= 0 ? i : -1; };
+                const ultimoDiaEntreno = diasEntrenoAlumno.length > 0
+                  ? diasEntrenoAlumno.reduce((max, d) => ordenDiaCheckin(d) > ordenDiaCheckin(max) ? d : max)
+                  : null;
+                if (rutinaActiva.dia === ultimoDiaEntreno) {
+                  const inicioSemanaStr = inicioSemanaActualStr();
+                  const { data: enviadosRecientes } = await supabase.from("mensajes").select("created_at")
+                    .eq("usuario_id", user.id).eq("de", "coach").eq("texto", MENSAJE_CHECKIN_SEMANAL)
+                    .order("created_at", { ascending: false }).limit(5);
+                  const yaEnviadoEstaSemana = (enviadosRecientes || []).some(m => aFechaStr(new Date(m.created_at)) >= inicioSemanaStr);
+                  if (!yaEnviadoEstaSemana) {
+                    await supabase.from("mensajes").insert({ usuario_id: user.id, de: "coach", texto: MENSAJE_CHECKIN_SEMANAL });
+                  }
+                }
               }
             }
             setCompletado(true);
@@ -7639,6 +7689,9 @@ function useVolumenSemanal(alumno) {
   let tonelajePorMusculo = {};
   let seriesSinClasificar = 0;
   let tonelajeSinClasificar = 0;
+  // Cache para que "Bíceps"/"Biceps" (o cualquier otra variante de
+  // tilde/mayúscula del mismo músculo) se sumen bajo una sola etiqueta acá.
+  const cacheEtiquetasMusculo = {};
   rutinas.filter(r => r.publicada !== false && !r.es_descanso).forEach(r => {
     (r.ejercicios || []).forEach(ej => {
       const efectivas = (ej.series || []).filter(s => s.tipo === "efectiva").length;
@@ -7653,8 +7706,9 @@ function useVolumenSemanal(alumno) {
         return;
       }
       musculos.forEach(({ musculo, peso }) => {
-        volumenPorMusculo[musculo] = (volumenPorMusculo[musculo] || 0) + efectivas * peso;
-        if (peso === 1) tonelajePorMusculo[musculo] = (tonelajePorMusculo[musculo] || 0) + tonelajeEjercicio;
+        const etiqueta = etiquetaCanonicaMusculo(musculo, cacheEtiquetasMusculo);
+        volumenPorMusculo[etiqueta] = (volumenPorMusculo[etiqueta] || 0) + efectivas * peso;
+        if (peso === 1) tonelajePorMusculo[etiqueta] = (tonelajePorMusculo[etiqueta] || 0) + tonelajeEjercicio;
       });
     });
   });
@@ -7682,6 +7736,39 @@ function useVolumenSemanal(alumno) {
     supabase.from("volumen_mesociclo_historial").upsert(filas, { onConflict: "usuario_id,musculo,mesociclo_numero" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, alumno?.id, alumno?.fecha_inicio_plan, firmaVolumen]);
+
+  // Fusión automática, una sola vez por alumno cargado, de filas de
+  // "volumen_mesociclo_historial" que quedaron separadas por una variante
+  // de tilde/mayúscula del mismo músculo (ej. una fila "Bíceps" y otra
+  // "Biceps" del mismo mesociclo) -- de mesociclos ya guardados antes de
+  // este arreglo. Si no hay duplicados no escribe nada.
+  useEffect(() => {
+    if (!alumno?.id) return;
+    (async () => {
+      const { data: filas } = await supabase
+        .from("volumen_mesociclo_historial")
+        .select("id, musculo, mesociclo_numero, series")
+        .eq("usuario_id", alumno.id);
+      if (!filas || filas.length === 0) return;
+      const cache = {};
+      const grupos = {};
+      filas.forEach(f => {
+        const etiqueta = etiquetaCanonicaMusculo(f.musculo, cache);
+        const clave = `${f.mesociclo_numero}|${claveMusculo(f.musculo)}`;
+        if (!grupos[clave]) grupos[clave] = { etiqueta, mesocicloNumero: f.mesociclo_numero, series: 0, ids: [] };
+        grupos[clave].series += f.series || 0;
+        grupos[clave].ids.push(f.id);
+      });
+      const aFusionar = Object.values(grupos).filter(g => g.ids.length > 1);
+      for (const g of aFusionar) {
+        await supabase.from("volumen_mesociclo_historial").delete().in("id", g.ids);
+        await supabase.from("volumen_mesociclo_historial").upsert(
+          { usuario_id: alumno.id, musculo: g.etiqueta, mesociclo_numero: g.mesocicloNumero, series: g.series, actualizado_en: new Date().toISOString() },
+          { onConflict: "usuario_id,musculo,mesociclo_numero" }
+        );
+      }
+    })();
+  }, [alumno?.id]);
 
   return { loading, volumenOrdenado, seriesSinClasificar, tonelajeSinClasificar };
 }
@@ -7790,6 +7877,12 @@ function HistorialVolumenTonelaje({ alumno }) {
     });
   });
 
+  // Cache compartido para que una variante de tilde/mayúscula del mismo
+  // músculo (ej. "Bíceps"/"Biceps") no aparezca partida en ninguno de los
+  // dos gráficos de acá abajo -- también sirve de red de seguridad si en
+  // "volumen_mesociclo_historial" quedara alguna fila vieja sin fusionar.
+  const cacheEtiquetasHist = {};
+
   // -- Tonelaje semanal real (solo el/los músculo(s) motor principal, peso === 1) --
   const tonelajePorSemana = {};
   registros.forEach(reg => {
@@ -7799,8 +7892,9 @@ function HistorialVolumenTonelaje({ alumno }) {
     if (kgSerie <= 0) return;
     const lunes = aFechaStr(getMondayGlobal(new Date(reg.fecha + "T00:00:00")));
     musculos.filter(m => m.peso === 1).forEach(({ musculo }) => {
+      const etiqueta = etiquetaCanonicaMusculo(musculo, cacheEtiquetasHist);
       tonelajePorSemana[lunes] ||= {};
-      tonelajePorSemana[lunes][musculo] = (tonelajePorSemana[lunes][musculo] || 0) + kgSerie;
+      tonelajePorSemana[lunes][etiqueta] = (tonelajePorSemana[lunes][etiqueta] || 0) + kgSerie;
     });
   });
   const semanasKeys = Object.keys(tonelajePorSemana).sort();
@@ -7808,19 +7902,42 @@ function HistorialVolumenTonelaje({ alumno }) {
   // -- Volumen por mesociclo (planificado, desde volumen_mesociclo_historial) --
   const volumenPorMesociclo = {};
   historialVolumen.forEach(r => {
+    const etiqueta = etiquetaCanonicaMusculo(r.musculo, cacheEtiquetasHist);
     volumenPorMesociclo[r.mesociclo_numero] ||= {};
-    volumenPorMesociclo[r.mesociclo_numero][r.musculo] = r.series;
+    volumenPorMesociclo[r.mesociclo_numero][etiqueta] = (volumenPorMesociclo[r.mesociclo_numero][etiqueta] || 0) + (r.series || 0);
   });
   const mesociclosKeys = Object.keys(volumenPorMesociclo).map(Number).sort((a, b) => a - b);
 
-  if (semanasKeys.length === 0 && mesociclosKeys.length === 0) return null;
+  // Si no hay ni rutinas ni registros, no hay nada que este componente pueda
+  // explicar (Progreso ya muestra sus propios estados vacíos) -- pero si hay
+  // algo cargado y aun así algún gráfico queda sin datos, se explica el
+  // motivo en vez de desaparecer en silencio (ver más abajo).
+  if (rutinas.length === 0 && registros.length === 0) return null;
 
   // Orden de músculos por magnitud total (tonelaje + volumen), para asignar
-  // colores estables y mostrar los más relevantes primero en la leyenda.
-  const totalPorMusculo = {};
-  semanasKeys.forEach(s => Object.entries(tonelajePorSemana[s]).forEach(([m, v]) => { totalPorMusculo[m] = (totalPorMusculo[m] || 0) + v; }));
-  mesociclosKeys.forEach(c => Object.entries(volumenPorMesociclo[c]).forEach(([m, v]) => { totalPorMusculo[m] = (totalPorMusculo[m] || 0) + v; }));
-  const ordenMusculos = Object.keys(totalPorMusculo).sort((a, b) => totalPorMusculo[b] - totalPorMusculo[a]);
+  // colores estables y mostrar los más relevantes primero en la leyenda. La
+  // paleta tiene 8 colores fijos -- en vez de repetir color entre dos
+  // músculos distintos a partir del 9°, se agrupan los menos relevantes bajo
+  // un solo "Otros" (mismo criterio en los dos gráficos, para que el color
+  // de cada músculo sea siempre el mismo entre ambos).
+  const totalPorMusculoCompleto = {};
+  semanasKeys.forEach(s => Object.entries(tonelajePorSemana[s]).forEach(([m, v]) => { totalPorMusculoCompleto[m] = (totalPorMusculoCompleto[m] || 0) + v; }));
+  mesociclosKeys.forEach(c => Object.entries(volumenPorMesociclo[c]).forEach(([m, v]) => { totalPorMusculoCompleto[m] = (totalPorMusculoCompleto[m] || 0) + v; }));
+  const ordenMusculosCompleto = Object.keys(totalPorMusculoCompleto).sort((a, b) => totalPorMusculoCompleto[b] - totalPorMusculoCompleto[a]);
+  const TOP_MUSCULOS = COLORES_MUSCULO.length - 1;
+  const musculosDestacados = ordenMusculosCompleto.slice(0, TOP_MUSCULOS);
+  const hayOtros = ordenMusculosCompleto.length > TOP_MUSCULOS;
+  const ordenMusculos = hayOtros ? [...musculosDestacados, "Otros"] : musculosDestacados;
+  const agruparOtros = (obj) => {
+    const nuevo = {};
+    Object.entries(obj).forEach(([m, v]) => {
+      const clave = (hayOtros && !musculosDestacados.includes(m)) ? "Otros" : m;
+      nuevo[clave] = (nuevo[clave] || 0) + v;
+    });
+    return nuevo;
+  };
+  semanasKeys.forEach(s => { tonelajePorSemana[s] = agruparOtros(tonelajePorSemana[s]); });
+  mesociclosKeys.forEach(c => { volumenPorMesociclo[c] = agruparOtros(volumenPorMesociclo[c]); });
 
   const formatearKg = (n) => Math.round(n).toLocaleString("es-CL");
   const formatearSeries = (n) => Number(n.toFixed(2)).toString();
@@ -7856,10 +7973,13 @@ function HistorialVolumenTonelaje({ alumno }) {
 
   return (
     <>
-      {semanasKeys.length > 0 && (
-        <Card style={{ marginBottom: 14 }}>
-          <div style={{ fontSize: 12, color: theme.muted, marginBottom: 2 }}>📈 TENDENCIA DE TONELAJE SEMANAL</div>
-          <div style={{ fontSize: 10, color: theme.muted, marginBottom: 10 }}>kg reales movidos por semana, solo del músculo motor principal de cada ejercicio. Tocá un punto para ver el detalle de esa semana.</div>
+      <Card style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 12, color: theme.muted, marginBottom: 2 }}>📈 TENDENCIA DE TONELAJE SEMANAL</div>
+        <div style={{ fontSize: 10, color: theme.muted, marginBottom: 10 }}>kg reales movidos por semana, solo del músculo motor principal de cada ejercicio. Tocá un punto para ver el detalle de esa semana.</div>
+        {semanasKeys.length === 0 ? (
+          <div style={{ fontSize: 12, color: theme.muted, padding: "8px 0" }}>Todavía no hay registros con peso cargados -- este gráfico aparece en cuanto el alumno registre series con kg de un ejercicio con músculo asignado.</div>
+        ) : (
+          <>
           <div style={{ overflowX: "auto" }}>
             <svg width={anchoLinea} height={ALTO} style={{ display: "block" }}>
               <line x1={PL} x2={anchoLinea - PR} y1={PT + altoUtil} y2={PT + altoUtil} stroke={theme.border} strokeWidth={1} />
@@ -7904,11 +8024,15 @@ function HistorialVolumenTonelaje({ alumno }) {
               ))}
             </div>
           )}
-        </Card>
-      )}
-      {mesociclosKeys.length > 0 && (
-        <Card style={{ marginBottom: 14 }}>
+          </>
+        )}
+      </Card>
+      <Card style={{ marginBottom: 14 }}>
           <div style={{ fontSize: 12, color: theme.muted, marginBottom: 2 }}>📊 VOLUMEN POR MESOCICLO</div>
+          {mesociclosKeys.length === 0 ? (
+            <div style={{ fontSize: 12, color: theme.muted, padding: "8px 0" }}>Todavía no hay datos de volumen por bloque. Se guardan solos a medida que abras la Rutina o el Progreso de este alumno, siempre que sus ejercicios tengan un músculo asignado en "Músculos que trabaja".</div>
+          ) : (
+          <>
           <div style={{ fontSize: 10, color: theme.muted, marginBottom: 10 }}>
             Series planificadas (con el peso de cada músculo), una barra por bloque de 4 semanas. Tocá una barra para ver el detalle de ese bloque.
             {mesociclosKeys.length < 2 && " Todavía es el primer bloque -- vas a poder comparar en cuanto armes el próximo mesociclo."}
@@ -7959,8 +8083,9 @@ function HistorialVolumenTonelaje({ alumno }) {
               ))}
             </div>
           )}
+          </>
+          )}
         </Card>
-      )}
     </>
   );
 }
@@ -8315,7 +8440,12 @@ function RutinaCoach({ alumno }) {
       const ultima = anteriores[anteriores.length - 1];
       nueva = ultima ? { reps: ultima.reps, rir: ultima.rir, tecnica: "normal" } : { reps: "10", rir: 2, tecnica: "normal" };
     } else {
-      nueva = { reps: "8", pctDesde: "", pctHasta: "" };
+      // Copia reps y % de la última serie de aproximación existente -- antes
+      // quedaba en blanco y, si el coach no la completaba a mano, al alumno
+      // no le aparecía ningún % ni kg sugerido en esa serie.
+      const anteriores = upd[ejIdx][campo];
+      const ultima = anteriores[anteriores.length - 1];
+      nueva = ultima ? { reps: ultima.reps, pctDesde: ultima.pctDesde, pctHasta: ultima.pctHasta } : { reps: "8", pctDesde: "50", pctHasta: "60" };
     }
     upd[ejIdx][campo].push(nueva);
     setEjercicios(upd);
@@ -9658,7 +9788,7 @@ const CAMPOS_EDITABLES_ANAMNESIS = [
 ];
 
 function CoachAlumno({ onNav, alumno }) {
-  const tabs=["Datos","Rutina","Dieta","Vista previa","Reportes","Pagos","Progreso","Mensajes"];
+  const tabs=["Datos","Rutina","Dieta","Progreso","Vista previa","Reportes","Pagos","Mensajes"];
   const [tab,setTab]=useState(alumno?.tabInicial || "Datos");
   const [datosCompletos, setDatosCompletos] = useState(null);
   const [lightbox, setLightbox] = useState(null);
