@@ -5970,7 +5970,16 @@ function DietaCoach({ alumno }) {
           <textarea style={{ ...inputStyle, minHeight:90, resize:"none", marginBottom:14 }} placeholder="Un hábito por línea..." value={habitos} onChange={e => setHabitos(e.target.value)} />
 
           {!editandoPlantillaDietaId && (!guardarPlantillaDietaAbierto ? (
-            <button onClick={() => { setNombrePlantillaDietaNueva(nombrePlan || ""); setGuardarPlantillaDietaAbierto(true); }}
+            <button onClick={() => {
+                // Mismo criterio que en "Guardar como plantilla" de Rutina: el
+                // nombre sugerido incluye al alumno para saber de dónde salió
+                // cada plantilla en la lista -- editable antes de guardar.
+                const nombreBase = nombrePlan
+                  ? (alumno?.nombre ? `${nombrePlan} (${alumno.nombre})` : nombrePlan)
+                  : (alumno?.nombre ? `Dieta de ${alumno.nombre}` : "");
+                setNombrePlantillaDietaNueva(nombreBase);
+                setGuardarPlantillaDietaAbierto(true);
+              }}
               style={{ background:"transparent", border:`1px dashed ${theme.border}`, borderRadius:8, padding:"8px", color:theme.muted, fontSize:12, cursor:"pointer", width:"100%", marginBottom:12 }}>💾 Guardar como plantilla</button>
           ) : (
             <div style={{ background:theme.surface, borderRadius:8, padding:10, marginBottom:12 }}>
@@ -7614,6 +7623,8 @@ const CALENTAMIENTO_DEFAULTS = {
   // mismo con "+ Movimiento" a medida que arma sus rutinas de torso, igual
   // que hace hoy para agregar movimientos extra en las demás categorías.
   torso: [],
+  // Igual que torso: arranca vacío, el coach lo completa a mano.
+  brazos: [],
 };
 
 const VUELTA_CALMA_DEFAULTS = {
@@ -7636,6 +7647,7 @@ const VUELTA_CALMA_DEFAULTS = {
   // Igual que en CALENTAMIENTO_DEFAULTS.torso: arranca vacío, el coach lo
   // va completando a mano con "+ Estiramiento".
   torso: [],
+  brazos: [],
 };
 // Tarjeta de volumen semanal por grupo muscular (series planificadas + kg
 // realmente registrados esta semana). Es un componente aparte, con su
@@ -8726,7 +8738,7 @@ function RutinaCoach({ alumno }) {
           <div style={{ marginBottom:16 }}>
             <div style={{ fontSize:11, color:theme.muted, marginBottom:6 }}>Calentamiento general de la sesión</div>
             <div style={{ display:"flex", gap:6, marginBottom:10, flexWrap:"wrap" }}>
-              {[["piernas","🦵 Piernas"],["push","💪 Push"],["pull","🎯 Pull"],["torso","🫀 Torso"]].map(([key,label]) => (
+              {[["piernas","🦵 Piernas"],["push","💪 Push"],["pull","🎯 Pull"],["torso","🫀 Torso"],["brazos","🦾 Brazos"]].map(([key,label]) => (
                 <button key={key} onClick={() => setCalentamientoGeneral(CALENTAMIENTO_DEFAULTS[key].map(m => ({...m})))}
                   style={{ background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:8, padding:"6px 12px", color:theme.text, fontSize:12, cursor:"pointer" }}>{label}</button>
               ))}
@@ -8982,7 +8994,7 @@ function RutinaCoach({ alumno }) {
           <div style={{ marginBottom:16 }}>
             <div style={{ fontSize:11, color:theme.muted, marginBottom:6 }}>🧘 Vuelta a la calma (estiramientos post-sesión)</div>
             <div style={{ display:"flex", gap:6, marginBottom:10, flexWrap:"wrap" }}>
-              {[["piernas","🦵 Piernas"],["push","💪 Push"],["pull","🎯 Pull"],["torso","🫀 Torso"]].map(([key,label]) => (
+              {[["piernas","🦵 Piernas"],["push","💪 Push"],["pull","🎯 Pull"],["torso","🫀 Torso"],["brazos","🦾 Brazos"]].map(([key,label]) => (
                 <button key={key} onClick={() => setVueltaCalma(VUELTA_CALMA_DEFAULTS[key].map(m => ({...m})))}
                   style={{ background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:8, padding:"6px 12px", color:theme.text, fontSize:12, cursor:"pointer" }}>{label}</button>
               ))}
@@ -9019,7 +9031,13 @@ function RutinaCoach({ alumno }) {
             </div>
           ) : !guardarPlantillaAbierto ? (
             <button onClick={() => {
-                const nombreBase = nombreRutina || "";
+                // El nombre sugerido incluye al alumno para que, en la lista de
+                // plantillas, quede claro de dónde salió cada una -- se puede
+                // editar antes de guardar si la plantilla es para reutilizar
+                // en cualquier alumno y no quieres dejar un nombre puntual.
+                const nombreBase = nombreRutina
+                  ? (alumno?.nombre ? `${nombreRutina} (${alumno.nombre})` : nombreRutina)
+                  : (alumno?.nombre ? `Rutina de ${alumno.nombre}` : "");
                 setNombrePlantillaNueva(nombreBase);
                 const existente = plantillas.find(p => normalizarNombreAlimento(p.nombre) === normalizarNombreAlimento(nombreBase));
                 setDefaultParaPlantillaNueva(existente?.default_para || "");
