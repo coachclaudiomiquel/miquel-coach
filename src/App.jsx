@@ -3209,7 +3209,14 @@ function MinijuegoModal({ tipo, onCerrar }) {
 // entreno (no descanso) de SU semana -- ese último día se calcula según los
 // días que el alumno realmente tiene asignados, no un día fijo para todos.
 const MENSAJE_CHECKIN_SEMANAL = "¡Terminaste tu semana de entrenamiento! 💪 ¿Cómo te sentiste?";
-function RutinaScreen({ onNav }) {
+// alumnoPreview (opcional): cuando el coach abre "Vista previa" de un
+// alumno, se le pasa acá en vez de que la pantalla busque al usuario
+// logueado -- así se cargan los datos REALES de ese alumno puntual, sin
+// tocar en nada el comportamiento normal (cuando no se pasa, es exactamente
+// lo mismo de siempre). Quien renderiza esta pantalla en modo preview es
+// responsable de bloquear la interacción (ver VistaPreviaCoach), así que acá
+// adentro no hace falta ningún cambio en los botones/inputs.
+function RutinaScreen({ onNav, alumnoPreview }) {
   const [rutinas, setRutinas] = useState([]);
   const [rutinaActiva, setRutinaActiva] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -3374,12 +3381,18 @@ function RutinaScreen({ onNav }) {
 
   useEffect(() => {
     const cargar = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        setUserId(user.id);
-        const { data: usuarioEdad } = await supabase.from("usuarios").select("edad").eq("id", user.id).single();
+      // En vista previa del coach, se usa el id del alumno que se está
+      // revisando en vez del usuario logueado (que sería el coach mismo).
+      let uid = alumnoPreview?.id || null;
+      if (!uid) {
+        const { data: { user } } = await supabase.auth.getUser();
+        uid = user?.id || null;
+      }
+      if (uid) {
+        setUserId(uid);
+        const { data: usuarioEdad } = await supabase.from("usuarios").select("edad").eq("id", uid).single();
         if (usuarioEdad?.edad) setEdadAlumno(usuarioEdad.edad);
-        const { data: pagoData } = await supabase.from("pagos").select("estado").eq("usuario_id", user.id).order("created_at", { ascending: false }).limit(1);
+        const { data: pagoData } = await supabase.from("pagos").select("estado").eq("usuario_id", uid).order("created_at", { ascending: false }).limit(1);
         if (pagoData && pagoData.length > 0 && pagoData[0].estado === "bloqueado") {
           setBloqueado(true);
           setLoading(false);
@@ -3388,7 +3401,7 @@ function RutinaScreen({ onNav }) {
         const { data } = await supabase
           .from("rutinas")
           .select("*, ejercicios(*)")
-          .eq("usuario_id", user.id)
+          .eq("usuario_id", uid)
           .eq("publicada", true)
           .order("created_at", { ascending: false });
         if (data && data.length > 0) {
@@ -3404,12 +3417,12 @@ function RutinaScreen({ onNav }) {
           setRutinaActiva(rutinaHoy || null);
         }
 
-        await cargarUltimasCargas(user.id);
+        await cargarUltimasCargas(uid);
       }
       setLoading(false);
     };
     cargar();
-  }, []);
+  }, [alumnoPreview?.id]);
 
   const setReg = (ejId, sIdx, campo, val) => {
     const key = `${ejId}-${sIdx}`;
@@ -4323,7 +4336,9 @@ function RutinaScreen({ onNav }) {
   );
 }
 
-function NutricionScreen({ onNav }) {
+// alumnoPreview: ver comentario en RutinaScreen -- mismo mecanismo, mismo
+// criterio (no cambia nada del comportamiento normal del alumno).
+function NutricionScreen({ onNav, alumnoPreview }) {
   const [dietas, setDietas] = useState([]);
   const [dieta, setDieta] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -4348,9 +4363,15 @@ function NutricionScreen({ onNav }) {
 
   useEffect(() => {
     const cargar = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        const { data: pagoData } = await supabase.from("pagos").select("estado").eq("usuario_id", user.id).order("created_at", { ascending: false }).limit(1);
+      // En vista previa del coach, se usa el id del alumno que se está
+      // revisando en vez del usuario logueado (que sería el coach mismo).
+      let uid = alumnoPreview?.id || null;
+      if (!uid) {
+        const { data: { user } } = await supabase.auth.getUser();
+        uid = user?.id || null;
+      }
+      if (uid) {
+        const { data: pagoData } = await supabase.from("pagos").select("estado").eq("usuario_id", uid).order("created_at", { ascending: false }).limit(1);
         if (pagoData && pagoData.length > 0 && pagoData[0].estado === "bloqueado") {
           setBloqueado(true);
           setLoading(false);
@@ -4367,9 +4388,9 @@ function NutricionScreen({ onNav }) {
         // Peso actual (para calcular el agua sugerida) y si hoy tiene rutina
         // asignada (para sumar el litro extra de entreno), igual criterio que
         // "rutina de hoy" en RutinaScreen.
-        const { data: usuarioData } = await supabase.from("usuarios").select("peso_actual").eq("id", user.id).single();
+        const { data: usuarioData } = await supabase.from("usuarios").select("peso_actual").eq("id", uid).single();
         if (usuarioData?.peso_actual) setPesoAlumno(usuarioData.peso_actual);
-        const { data: rutinasData } = await supabase.from("rutinas").select("dia").eq("usuario_id", user.id).eq("publicada", true);
+        const { data: rutinasData } = await supabase.from("rutinas").select("dia").eq("usuario_id", uid).eq("publicada", true);
         if (rutinasData) {
           const nombreHoyRutina = nombreDiaOperativo();
           setTieneRutinaHoy(rutinasData.some(r => r.dia === nombreHoyRutina));
@@ -4378,7 +4399,7 @@ function NutricionScreen({ onNav }) {
         const { data } = await supabase
           .from("dietas")
           .select("*")
-          .eq("usuario_id", user.id)
+          .eq("usuario_id", uid)
           .eq("publicada", true)
           .order("created_at", { ascending: false });
         if (data && data.length > 0) {
@@ -4391,13 +4412,13 @@ function NutricionScreen({ onNav }) {
           const dietaHoy = data.find(d => Array.isArray(d.dias) && d.dias.includes(nombreHoy));
           setDieta(dietaHoy || data[0]);
         }
-        setUserId(user.id);
+        setUserId(uid);
 
         // Carga el registro de cumplimiento de hoy (si ya marcó algo antes)
         const { data: regs } = await supabase
           .from("dieta_registros")
           .select("*")
-          .eq("usuario_id", user.id)
+          .eq("usuario_id", uid)
           .eq("fecha", hoyStr);
         if (regs && regs.length > 0) {
           const estadoMap = {};
@@ -4409,7 +4430,7 @@ function NutricionScreen({ onNav }) {
         const { data: suplRegs } = await supabase
           .from("suplemento_registros")
           .select("*")
-          .eq("usuario_id", user.id)
+          .eq("usuario_id", uid)
           .eq("fecha", hoyStr);
         if (suplRegs && suplRegs.length > 0) {
           const suplMap = {};
@@ -4420,7 +4441,7 @@ function NutricionScreen({ onNav }) {
       setLoading(false);
     };
     cargar();
-  }, []);
+  }, [alumnoPreview?.id]);
 
   if (loading) return (
     <div style={{ padding:"20px 16px 90px", height:"100%", boxSizing:"border-box", display:"flex", alignItems:"center", justifyContent:"center" }}>
@@ -5971,13 +5992,11 @@ function DietaCoach({ alumno }) {
 
           {!editandoPlantillaDietaId && (!guardarPlantillaDietaAbierto ? (
             <button onClick={() => {
-                // Mismo criterio que en "Guardar como plantilla" de Rutina: el
-                // nombre sugerido incluye al alumno para saber de dónde salió
-                // cada plantilla en la lista -- editable antes de guardar.
-                const nombreBase = nombrePlan
-                  ? (alumno?.nombre ? `${nombrePlan} (${alumno.nombre})` : nombrePlan)
-                  : (alumno?.nombre ? `Dieta de ${alumno.nombre}` : "");
-                setNombrePlantillaDietaNueva(nombreBase);
+                // El campo arranca vacío a propósito: el coach prefiere
+                // escribir el nombre de la plantilla él mismo cada vez, sin
+                // ninguna sugerencia automática (antes se sugería con el
+                // nombre del alumno al lado, pero no le acomodó).
+                setNombrePlantillaDietaNueva("");
                 setGuardarPlantillaDietaAbierto(true);
               }}
               style={{ background:"transparent", border:`1px dashed ${theme.border}`, borderRadius:8, padding:"8px", color:theme.muted, fontSize:12, cursor:"pointer", width:"100%", marginBottom:12 }}>💾 Guardar como plantilla</button>
@@ -7267,12 +7286,59 @@ function ProgresoScreen({ onNav }) {
     </div>
   );
 }
+// Todas las tablas donde queda información propia de un alumno puntual
+// (todas usan la columna "usuario_id"), aparte de "usuarios" mismo y de
+// "ejercicios" (que cuelga de "rutinas" por rutina_id, no directo del
+// alumno) -- se usa en eliminarAlumno() más abajo.
+const TABLAS_POR_ALUMNO = [
+  "rutinas", "dietas", "registros_entreno", "cardio_registros", "diario_registros",
+  "dieta_registros", "pasos_registros", "suplemento_registros", "mensajes",
+  "pagos", "reportes", "volumen_mesociclo_historial",
+];
+
 function CoachPanel({ onNav, onVerAlumno }) {
   const [alumnos, setAlumnos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [mensajesPendientes, setMensajesPendientes] = useState(0);
   const [alumnosPorVencer, setAlumnosPorVencer] = useState([]);
   const [reportesPendientes, setReportesPendientes] = useState(0);
+  const [eliminandoId, setEliminandoId] = useState(null);
+
+  // Borra TODA la información del alumno (rutinas, dietas, registros,
+  // mensajes, pagos, etc.) de forma permanente -- pide escribir su nombre
+  // exacto para confirmar, porque no se puede deshacer. Ojo: esto NO borra
+  // su cuenta de acceso (el usuario/clave con el que entra a la app), eso
+  // requiere un permiso especial de Supabase que la app no maneja por
+  // seguridad -- si además de borrar sus datos se quiere que no pueda volver
+  // a entrar, hay que borrar esa cuenta a mano desde el panel de Supabase
+  // (Authentication → Users).
+  const eliminarAlumno = async (a) => {
+    const escrito = window.prompt(
+      `Esto borra TODA la información de "${a.nombre}" (rutinas, dietas, registros de entreno, mensajes, pagos, etc.) de forma permanente. No se puede deshacer.\n\nPara confirmar, escribe exactamente su nombre:\n${a.nombre}`
+    );
+    if (escrito === null) return; // canceló
+    if (escrito.trim() !== a.nombre) {
+      alert("El nombre no coincide. No se eliminó nada.");
+      return;
+    }
+    setEliminandoId(a.id);
+    try {
+      const { data: rutinasDelAlumno } = await supabase.from("rutinas").select("id").eq("usuario_id", a.id);
+      const rutinaIds = (rutinasDelAlumno || []).map(r => r.id);
+      if (rutinaIds.length > 0) {
+        await supabase.from("ejercicios").delete().in("rutina_id", rutinaIds);
+      }
+      for (const tabla of TABLAS_POR_ALUMNO) {
+        await supabase.from(tabla).delete().eq("usuario_id", a.id);
+      }
+      await supabase.from("usuarios").delete().eq("id", a.id);
+      setAlumnos(prev => prev.filter(al => al.id !== a.id));
+      alert(`Se eliminó toda la información de ${a.nombre}.\n\nSu cuenta de acceso (correo/clave) sigue existiendo -- si no quieres que pueda volver a entrar, bórrala también desde el panel de Supabase (Authentication → Users).`);
+    } catch (e) {
+      alert("Hubo un error eliminando al alumno: " + (e?.message || e));
+    }
+    setEliminandoId(null);
+  };
 
   useEffect(() => {
     const cargarAlumnos = async () => {
@@ -7398,6 +7464,14 @@ function CoachPanel({ onNav, onVerAlumno }) {
                 <div style={{ fontSize:11,color:theme.muted, display:"flex", alignItems:"center", gap:4 }}>📱 {a.whatsapp || "—"}</div>
                 <div style={{ fontSize:11,color:theme.muted, display:"flex", alignItems:"center", gap:4, justifySelf:"end" }}>🎯 {a.objetivo || "—"}</div>
               </div>
+              <button
+                onClick={(e) => { e.stopPropagation(); eliminarAlumno(a); }}
+                disabled={eliminandoId === a.id}
+                title="Eliminar alumno"
+                style={{ background:"transparent", border:"none", color:theme.danger, fontSize:16, cursor: eliminandoId === a.id ? "default" : "pointer", padding:6, opacity: eliminandoId === a.id ? 0.5 : 1 }}
+              >
+                {eliminandoId === a.id ? "…" : "🗑️"}
+              </button>
             </div>
           </div>
         ))
@@ -7623,8 +7697,11 @@ const CALENTAMIENTO_DEFAULTS = {
   // mismo con "+ Movimiento" a medida que arma sus rutinas de torso, igual
   // que hace hoy para agregar movimientos extra en las demás categorías.
   torso: [],
-  // Igual que torso: arranca vacío, el coach lo completa a mano.
-  brazos: [],
+  brazos: [
+    { nombre: "Rotación de muñecas", detalle: "10 repeticiones por lado, cada sentido" },
+    { nombre: "Curl de bíceps con banda elástica", detalle: "15 repeticiones" },
+    { nombre: "Extensión de tríceps con banda elástica", detalle: "15 repeticiones" },
+  ],
 };
 
 const VUELTA_CALMA_DEFAULTS = {
@@ -7647,7 +7724,10 @@ const VUELTA_CALMA_DEFAULTS = {
   // Igual que en CALENTAMIENTO_DEFAULTS.torso: arranca vacío, el coach lo
   // va completando a mano con "+ Estiramiento".
   torso: [],
-  brazos: [],
+  brazos: [
+    { nombre: "Estiramiento de bíceps contra la pared", detalle: "30 segundos por lado" },
+    { nombre: "Estiramiento de tríceps por encima de la cabeza", detalle: "30 segundos por lado" },
+  ],
 };
 // Tarjeta de volumen semanal por grupo muscular (series planificadas + kg
 // realmente registrados esta semana). Es un componente aparte, con su
@@ -9031,16 +9111,12 @@ function RutinaCoach({ alumno }) {
             </div>
           ) : !guardarPlantillaAbierto ? (
             <button onClick={() => {
-                // El nombre sugerido incluye al alumno para que, en la lista de
-                // plantillas, quede claro de dónde salió cada una -- se puede
-                // editar antes de guardar si la plantilla es para reutilizar
-                // en cualquier alumno y no quieres dejar un nombre puntual.
-                const nombreBase = nombreRutina
-                  ? (alumno?.nombre ? `${nombreRutina} (${alumno.nombre})` : nombreRutina)
-                  : (alumno?.nombre ? `Rutina de ${alumno.nombre}` : "");
-                setNombrePlantillaNueva(nombreBase);
-                const existente = plantillas.find(p => normalizarNombreAlimento(p.nombre) === normalizarNombreAlimento(nombreBase));
-                setDefaultParaPlantillaNueva(existente?.default_para || "");
+                // El campo arranca vacío a propósito: el coach prefiere
+                // escribir el nombre de la plantilla él mismo cada vez, sin
+                // ninguna sugerencia automática (antes se sugería con el
+                // nombre del alumno al lado, pero no le acomodó).
+                setNombrePlantillaNueva("");
+                setDefaultParaPlantillaNueva("");
                 setGuardarPlantillaAbierto(true);
               }}
               style={{ background:"transparent", border:`1px dashed ${theme.border}`, borderRadius:8, padding:"8px", color:theme.muted, fontSize:12, cursor:"pointer", width:"100%", marginBottom:12 }}>💾 Guardar como plantilla</button>
@@ -9637,49 +9713,40 @@ cargarMensajes();  }, [alumno]);
   );
 }
 
-// Formatea compacto una serie de ejercicio (aproximación o efectiva) para
-// la Vista previa -- no busca replicar la pantalla interactiva del alumno
-// (con inputs de kg/reps, checks, etc), es un resumen de solo lectura
-// pensado para que el coach revise rápido que la rutina quedó bien armada.
-function resumenSerieEjercicio(s) {
-  if (s.tipo === "aproximacion" || s.tipo === "calentamiento") {
-    return `${s.reps || "?"} reps @ ${s.pctDesde || "?"}-${s.pctHasta || "?"}% de tu efectiva`;
-  }
-  const tecnica = s.tecnica && s.tecnica !== "normal" ? ` · ${s.tecnica}` : "";
-  return `${s.reps || "?"} reps · RIR ${s.rir ?? "?"}${tecnica}`;
-}
-// Vista previa de solo lectura: lo que el coach usa para revisar, con los
-// datos REALES ya guardados del alumno (nunca datos de mentira), que la
-// rutina y la dieta que le armó quedaron bien antes de avisarle que ya
-// puede entrar a la app. No es interactiva a propósito (no tiene checks,
-// inputs de carga, ni nada que el alumno pueda tocar) -- es solo para
-// que el coach lea y confirme. El aviso final es un mensaje interno común
-// (tabla "mensajes"), igual que cualquier otro mensaje del coach.
+// Vista previa REAL de solo lectura: en vez de armar un resumen aparte,
+// reusa las mismas pantallas que ve el alumno (RutinaScreen/NutricionScreen,
+// vía su prop "alumnoPreview") con los datos REALES ya guardados de este
+// alumno puntual (nunca datos de mentira) -- así el coach ve exactamente lo
+// mismo, con el mismo diseño, fotos de ejercicios, etc. Queda de solo
+// lectura envolviéndolas en un contenedor con pointerEvents:"none" (ver más
+// abajo), en vez de modificar cada botón/input de esas pantallas -- así el
+// comportamiento normal del alumno (RutinaScreen/NutricionScreen sin
+// alumnoPreview) no se toca para nada. El aviso final de "ya puedes entrar"
+// es un mensaje interno común (tabla "mensajes"), igual que cualquier otro
+// mensaje del coach.
 const MENSAJE_RUTINA_DIETA_LISTA = "¡Ya está lista tu rutina y tu dieta! Entrá a la app cuando quieras para revisarlas. 💪";
 function VistaPreviaCoach({ alumno }) {
   const [loading, setLoading] = useState(true);
-  const [rutinas, setRutinas] = useState([]);
-  const [dietas, setDietas] = useState([]);
-  const [mapaAlimentos, setMapaAlimentos] = useState({});
+  const [hayRutinas, setHayRutinas] = useState(false);
+  const [hayDietas, setHayDietas] = useState(false);
   const [enviando, setEnviando] = useState(false);
   const [avisado, setAvisado] = useState(false);
+  const [subTab, setSubTab] = useState("rutina");
 
   useEffect(() => {
     const cargar = async () => {
       if (!alumno?.id) return;
       setLoading(true);
-      const [{ data: rutinasData }, { data: dietasData }, biblioteca, { data: avisosPrevios }] = await Promise.all([
-        supabase.from("rutinas").select("*, ejercicios(*)").eq("usuario_id", alumno.id).eq("publicada", true),
-        supabase.from("dietas").select("*").eq("usuario_id", alumno.id).eq("publicada", true).order("created_at", { ascending: false }),
-        cargarAlimentosBiblioteca(),
+      const [{ data: rutinasData }, { data: dietasData }, { data: avisosPrevios }] = await Promise.all([
+        supabase.from("rutinas").select("id").eq("usuario_id", alumno.id).eq("publicada", true),
+        supabase.from("dietas").select("id").eq("usuario_id", alumno.id).eq("publicada", true),
         supabase.from("mensajes").select("created_at").eq("usuario_id", alumno.id).eq("de", "coach").eq("texto", MENSAJE_RUTINA_DIETA_LISTA).order("created_at", { ascending: false }).limit(1),
       ]);
-      const ordenDia = (dia) => { const i = ORDEN_DIAS_SEMANA.indexOf(dia); return i >= 0 ? i : ORDEN_DIAS_SEMANA.length; };
-      setRutinas((rutinasData || []).slice().sort((a, b) => ordenDia(a.dia) - ordenDia(b.dia)));
-      setDietas(ordenarDietasPorDia(dietasData || []));
-      const mapa = {};
-      (biblioteca || []).forEach(al => { mapa[al.id] = al; });
-      setMapaAlimentos(mapa);
+      const tieneRutinas = (rutinasData || []).length > 0;
+      const tieneDietas = (dietasData || []).length > 0;
+      setHayRutinas(tieneRutinas);
+      setHayDietas(tieneDietas);
+      setSubTab(tieneRutinas ? "rutina" : "dieta");
       setLoading(false);
       // Si ya se avisó hoy (mismo mensaje exacto), se parte con el botón ya
       // marcado como "avisado" -- así no importa si el coach cierra y vuelve
@@ -9703,12 +9770,12 @@ function VistaPreviaCoach({ alumno }) {
 
   if (loading) return <Card style={{ textAlign:"center", padding:20 }}><div style={{ color:theme.muted }}>Cargando vista previa...</div></Card>;
 
-  const hayContenido = rutinas.length > 0 || dietas.length > 0;
+  const hayContenido = hayRutinas || hayDietas;
 
   return (
     <div>
       <div style={{ fontSize:11, color:theme.muted, marginBottom:12, background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:8, padding:"8px 10px" }}>
-        👁 Esto es lo que {alumno?.nombre || "el alumno"} va a ver, armado con sus datos reales ya guardados. Revisalo antes de avisarle que ya puede entrar.
+        👁 Esto es exactamente lo que {alumno?.nombre || "el alumno"} va a ver en su celular, armado con sus datos reales ya guardados -- de solo lectura, no se puede tocar nada desde acá. Revisalo antes de avisarle que ya puede entrar.
       </div>
 
       {!hayContenido && (
@@ -9717,70 +9784,30 @@ function VistaPreviaCoach({ alumno }) {
         </Card>
       )}
 
-      {rutinas.length > 0 && (
-        <Card style={{ marginBottom:12 }}>
-          <div style={{ fontSize:12, color:theme.muted, marginBottom:10, fontWeight:700 }}>🏋️ RUTINA</div>
-          {rutinas.map(r => (
-            <div key={r.id} style={{ marginBottom:14, paddingBottom:14, borderBottom:`1px solid ${theme.border}` }}>
-              <div style={{ fontSize:13, fontWeight:800, color:theme.text, marginBottom:6 }}>{r.dia}{r.grupo_muscular ? ` -- ${r.grupo_muscular}` : ""}</div>
-              {r.es_descanso ? (
-                <div style={{ fontSize:12, color:theme.muted }}>
-                  😴 Día de descanso{r.meta_pasos ? ` · Meta: ${r.meta_pasos} pasos` : ""}{Array.isArray(r.cardio) && r.cardio.length > 0 ? " · con cardio sugerido" : ""}
-                </div>
-              ) : (
-                <>
-                  {r.meta_pasos && <div style={{ fontSize:11, color:theme.muted, marginBottom:6 }}>Meta de pasos: {r.meta_pasos}</div>}
-                  {(r.ejercicios || []).slice().sort((a,b) => (a.orden||0)-(b.orden||0)).map(ej => (
-                    <div key={ej.id} style={{ marginBottom:8 }}>
-                      <div style={{ fontSize:12.5, fontWeight:700, color:theme.text }}>
-                        {ej.nombre}{ej.grupo_superserie ? ` (superserie ${ej.grupo_superserie})` : ""}
-                      </div>
-                      <div style={{ fontSize:10.5, color:theme.muted, marginBottom:2 }}>Tempo {ej.tempo || "--"} · Descanso {ej.descanso_desde ? `${ej.descanso_desde}-` : ""}{ej.descanso}s</div>
-                      {(ej.series || []).map((s, i) => (
-                        <div key={i} style={{ fontSize:11, color:theme.text, paddingLeft:10 }}>• {resumenSerieEjercicio(s)}</div>
-                      ))}
-                    </div>
-                  ))}
-                </>
-              )}
+      {hayContenido && (
+        <>
+          {hayRutinas && hayDietas && (
+            <div style={{ display:"flex", gap:8, marginBottom:12 }}>
+              <button onClick={() => setSubTab("rutina")} style={{ flex:1, background: subTab==="rutina" ? theme.accent : theme.card, border:`1px solid ${subTab==="rutina" ? theme.accent : theme.border}`, borderRadius:8, padding:"8px", color:"#fff", fontSize:12, fontWeight:700, cursor:"pointer" }}>🏋️ Rutina</button>
+              <button onClick={() => setSubTab("dieta")} style={{ flex:1, background: subTab==="dieta" ? theme.accent : theme.card, border:`1px solid ${subTab==="dieta" ? theme.accent : theme.border}`, borderRadius:8, padding:"8px", color:"#fff", fontSize:12, fontWeight:700, cursor:"pointer" }}>🥗 Dieta</button>
             </div>
-          ))}
-        </Card>
-      )}
+          )}
 
-      {dietas.length > 0 && (
-        <Card style={{ marginBottom:12 }}>
-          <div style={{ fontSize:12, color:theme.muted, marginBottom:10, fontWeight:700 }}>🥗 DIETA</div>
-          {dietas.map(d => (
-            <div key={d.id} style={{ marginBottom:14, paddingBottom:14, borderBottom:`1px solid ${theme.border}` }}>
-              <div style={{ fontSize:13, fontWeight:800, color:theme.text, marginBottom:4 }}>
-                {Array.isArray(d.dias) && d.dias.length > 0 ? d.dias.join(", ") : "Todos los días"}
-              </div>
-              <div style={{ fontSize:11, color:theme.muted, marginBottom:8 }}>
-                Objetivo: {d.calorias || "--"} kcal · {d.proteinas || "--"}p · {d.carbos || "--"}c · {d.grasas || "--"}g
-              </div>
-              {(d.comidas || []).map((c, ci) => (
-                <div key={ci} style={{ marginBottom:8 }}>
-                  <div style={{ fontSize:12, fontWeight:700, color:theme.text }}>{c.nombre}{c.hora ? ` -- ${c.hora}` : ""}</div>
-                  {(c.alimentos || []).map((a, ai) => {
-                    const alim = a.alimento_id ? mapaAlimentos[a.alimento_id] : null;
-                    if (!alim) return null;
-                    const macros = calcularMacrosAlimento(alim, a.cantidad);
-                    return (
-                      <div key={ai} style={{ fontSize:11, color:theme.muted, paddingLeft:10 }}>
-                        • {a.cantidad}{esUnidadPorUno(alim.unidad) ? ` ${alim.unidad}` : "g"} {alim.nombre} ({macros.calorias} kcal)
-                      </div>
-                    );
-                  })}
-                </div>
-              ))}
+          {/* pointerEvents:"none" es lo que hace que esto sea de solo lectura:
+              ninguno de los checks/inputs/botones de la pantalla real
+              responde a clics acá adentro, sin haber tenido que tocar esa
+              pantalla para nada. */}
+          <div style={{ background:theme.bg, border:`1px solid ${theme.border}`, borderRadius:16, overflow:"hidden", height:640, maxHeight:"70vh" }}>
+            <div style={{ pointerEvents:"none", height:"100%" }}>
+              {subTab === "rutina" && hayRutinas && <RutinaScreen onNav={() => {}} alumnoPreview={alumno} />}
+              {subTab === "dieta" && hayDietas && <NutricionScreen onNav={() => {}} alumnoPreview={alumno} />}
             </div>
-          ))}
-        </Card>
+          </div>
+        </>
       )}
 
       {hayContenido && (
-        <Card style={{ textAlign:"center", padding:16 }}>
+        <Card style={{ textAlign:"center", padding:16, marginTop:12 }}>
           {avisado ? (
             <div style={{ color:theme.success, fontSize:13, fontWeight:700 }}>✓ Mensaje enviado a {alumno?.nombre}</div>
           ) : (
