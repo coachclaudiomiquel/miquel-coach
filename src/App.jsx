@@ -64,6 +64,32 @@ function estimarPasosEquivalentes(minutos) {
 }
 // Nombre del día de la semana operativo actual (ej: "Lunes"), considerando el corte de las 4 AM.
 function nombreDiaOperativo(base = new Date()) { return DIAS_SEMANA_NOMBRES[fechaOperativa(base).getDay()]; }
+// Calcula qué rutina corresponde hoy: por día de semana (modo normal) o por
+// ciclo rotativo (entrena/descansa alternado, sin importar el día de semana).
+function calcularRutinaHoy(usuario, rutinas) {
+  if (!rutinas || rutinas.length === 0) return null;
+
+  if (usuario?.modo_rutina === "ciclo" && usuario?.fecha_inicio_ciclo && Array.isArray(usuario.secuencia_ciclo) && usuario.secuencia_ciclo.length > 0) {
+    // El coach arma la secuencia del ciclo eligiendo, en orden, cuáles de sus
+    // rutinas ya creadas corresponden a cada día (por id) -- así una misma
+    // rutina de descanso se puede repetir en varios puntos sin duplicarla.
+    const secuencia = usuario.secuencia_ciclo;
+    const cicloLength = secuencia.length;
+
+    const inicio = new Date(usuario.fecha_inicio_ciclo + "T00:00:00");
+    const hoy = fechaOperativa();
+    const hoyMedianoche = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate());
+    const inicioMedianoche = new Date(inicio.getFullYear(), inicio.getMonth(), inicio.getDate());
+    const diasDesdeInicio = Math.round((hoyMedianoche - inicioMedianoche) / 86400000);
+    const pos = ((diasDesdeInicio % cicloLength) + cicloLength) % cicloLength;
+
+    const rutinaId = secuencia[pos];
+    return rutinas.find(r => r.id === rutinaId) || null;
+  }
+
+  const nombreHoy = nombreDiaOperativo();
+  return rutinas.find(r => r.dia === nombreHoy) || null;
+}
 // Agua sugerida para el día: 35 ml por kg de peso corporal, redondeado a los
 // 0.5 L más cercanos, +1 L extra si el alumno tiene rutina asignada hoy.
 // Devuelve null si no hay peso cargado (en ese caso la tarjeta de agua queda
@@ -2094,7 +2120,7 @@ const [estadoPago, setEstadoPago] = useState(null);
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
         setUserIdHome(user.id);
-        const { data: usuario } = await supabase.from("usuarios").select("nombre").eq("id", user.id).single();
+        const { data: usuario } = await supabase.from("usuarios").select("nombre, modo_rutina, fecha_inicio_ciclo, secuencia_ciclo").eq("id", user.id).single();
         if (usuario?.nombre) setNombre(usuario.nombre.split(" ")[0]);
 
         const { data: rutinas } = await supabase
@@ -2105,8 +2131,7 @@ const [estadoPago, setEstadoPago] = useState(null);
           .order("created_at", { ascending: false });
         if (rutinas && rutinas.length > 0) {
           setTieneRutinas(true);
-          const nombreHoy = nombreDiaOperativo();
-          const rutinaHoy = rutinas.find(r => r.dia === nombreHoy);
+          const rutinaHoy = calcularRutinaHoy(usuario, rutinas);
           setRutina(rutinaHoy || null);
           if (rutinaHoy && Array.isArray(rutinaHoy.cardio) && rutinaHoy.cardio.length > 0) {
             const hoyStrCardio = fechaOperativaStr();
@@ -3398,6 +3423,7 @@ function RutinaScreen({ onNav, alumnoPreview }) {
           setLoading(false);
           return;
         }
+        const { data: usuarioModo } = await supabase.from("usuarios").select("modo_rutina, fecha_inicio_ciclo, secuencia_ciclo").eq("id", uid).single();
         const { data } = await supabase
           .from("rutinas")
           .select("*, ejercicios(*)")
@@ -3406,8 +3432,7 @@ function RutinaScreen({ onNav, alumnoPreview }) {
           .order("created_at", { ascending: false });
         if (data && data.length > 0) {
           setRutinas(data);
-          const nombreHoy = nombreDiaOperativo();
-          const rutinaHoy = data.find(r => r.dia === nombreHoy);
+          const rutinaHoy = calcularRutinaHoy(usuarioModo, data);
           // Antes acá se caía a data[0] (la rutina más reciente, sea cual sea
           // su día) cuando hoy no tenía nada asignado -- eso mostraba en
           // silencio la rutina de otro día como si fuera la de hoy. Ahora, si
@@ -4235,7 +4260,7 @@ function RutinaScreen({ onNav, alumnoPreview }) {
                 <div style={{ textAlign: "center", marginBottom: 14 }}>
                   <div style={{ fontSize: 28, marginBottom: 4 }}>🏆</div>
                   <div style={{ fontSize: 15, fontWeight: 700, color: theme.text }}>¡Entrenamiento completado!</div>
-                  <div style={{ fontSize: 12, color: theme.muted, marginTop: 2 }}>Antes de salir, contanos rápido cómo estuvo</div>
+                  <div style={{ fontSize: 12, color: theme.muted, marginTop: 2 }}>Antes de salir, cuéntame qué tal estuvo</div>
                 </div>
 
                 <div style={{ marginBottom: 14 }}>
@@ -4388,12 +4413,11 @@ function NutricionScreen({ onNav, alumnoPreview }) {
         // Peso actual (para calcular el agua sugerida) y si hoy tiene rutina
         // asignada (para sumar el litro extra de entreno), igual criterio que
         // "rutina de hoy" en RutinaScreen.
-        const { data: usuarioData } = await supabase.from("usuarios").select("peso_actual").eq("id", uid).single();
+        const { data: usuarioData } = await supabase.from("usuarios").select("peso_actual, modo_rutina, fecha_inicio_ciclo, secuencia_ciclo").eq("id", uid).single();
         if (usuarioData?.peso_actual) setPesoAlumno(usuarioData.peso_actual);
-        const { data: rutinasData } = await supabase.from("rutinas").select("dia").eq("usuario_id", uid).eq("publicada", true);
+        const { data: rutinasData } = await supabase.from("rutinas").select("id, dia").eq("usuario_id", uid).eq("publicada", true);
         if (rutinasData) {
-          const nombreHoyRutina = nombreDiaOperativo();
-          setTieneRutinaHoy(rutinasData.some(r => r.dia === nombreHoyRutina));
+          setTieneRutinaHoy(!!calcularRutinaHoy(usuarioData, rutinasData));
         }
 
         const { data } = await supabase
@@ -5248,8 +5272,11 @@ function DietaCoach({ alumno }) {
 
   useEffect(() => {
     if (!alumno?.id) return;
-    supabase.from("rutinas").select("dia").eq("usuario_id", alumno.id).eq("publicada", true).then(({ data }) => {
-      if (data) setTieneRutinaHoyCoach(data.some(r => r.dia === nombreDiaOperativo()));
+    Promise.all([
+      supabase.from("rutinas").select("id, dia").eq("usuario_id", alumno.id).eq("publicada", true),
+      supabase.from("usuarios").select("modo_rutina, fecha_inicio_ciclo, secuencia_ciclo").eq("id", alumno.id).single(),
+    ]).then(([{ data }, { data: usuarioModo }]) => {
+      if (data) setTieneRutinaHoyCoach(!!calcularRutinaHoy(usuarioModo, data));
     });
   }, [alumno]);
 
@@ -8196,6 +8223,9 @@ function RutinaCoach({ alumno }) {
   const [cargas, setCargas] = useState({});
   const [nombreRutina, setNombreRutina] = useState("");
   const [diaRutina, setDiaRutina] = useState("");
+  const [modoRutinaAlumno, setModoRutinaAlumno] = useState("semana");
+  const [fechaInicioCiclo, setFechaInicioCiclo] = useState("");
+  const [secuenciaCiclo, setSecuenciaCiclo] = useState([]);
   const [grupoMuscularRutina, setGrupoMuscularRutina] = useState("");
   const [mapaImagenesGrupoMuscular, setMapaImagenesGrupoMuscular] = useState({});
   const [nombresGruposMuscularesUsados, setNombresGruposMuscularesUsados] = useState([]);
@@ -8437,16 +8467,35 @@ function RutinaCoach({ alumno }) {
 
   const cargarRutinas = async () => {
     if (!alumno?.id) return;
+    const { data: usuarioData } = await supabase.from("usuarios").select("modo_rutina, fecha_inicio_ciclo, secuencia_ciclo").eq("id", alumno.id).single();
+    const modoAlumno = usuarioData?.modo_rutina || "semana";
+    const secuenciaAlumno = Array.isArray(usuarioData?.secuencia_ciclo) ? usuarioData.secuencia_ciclo : [];
+    if (usuarioData) {
+      setModoRutinaAlumno(modoAlumno);
+      setFechaInicioCiclo(usuarioData.fecha_inicio_ciclo || "");
+      setSecuenciaCiclo(secuenciaAlumno);
+    }
+
     const { data } = await supabase
       .from("rutinas")
       .select("*, ejercicios(*)")
       .eq("usuario_id", alumno.id)
       .order("created_at", { ascending: false });
-    // Se reordena de lunes a domingo (mismo criterio que ya usa "Vista previa"),
-    // en vez de por fecha de creación, para tener un orden lógico al ir
-    // revisando/editando la rutina del alumno.
-    const ordenDiaRutina = (dia) => { const i = ORDEN_DIAS_SEMANA.indexOf(dia); return i >= 0 ? i : ORDEN_DIAS_SEMANA.length; };
-    if (data) setRutinas(data.slice().sort((a, b) => ordenDiaRutina(a.dia) - ordenDiaRutina(b.dia)));
+    if (data) {
+      if (modoAlumno === "ciclo") {
+        // En modo ciclo se ordena según la primera vez que aparece cada
+        // rutina en la secuencia armada -- las que todavía no están en
+        // ninguna posición quedan al final, para que sea fácil ubicarlas.
+        const posicionEnSecuencia = (r) => { const i = secuenciaAlumno.indexOf(r.id); return i >= 0 ? i : Infinity; };
+        setRutinas(data.slice().sort((a, b) => posicionEnSecuencia(a) - posicionEnSecuencia(b)));
+      } else {
+        // Se reordena de lunes a domingo (mismo criterio que ya usa "Vista previa"),
+        // en vez de por fecha de creación, para tener un orden lógico al ir
+        // revisando/editando la rutina del alumno.
+        const ordenDiaRutina = (dia) => { const i = ORDEN_DIAS_SEMANA.indexOf(dia); return i >= 0 ? i : ORDEN_DIAS_SEMANA.length; };
+        setRutinas(data.slice().sort((a, b) => ordenDiaRutina(a.dia) - ordenDiaRutina(b.dia)));
+      }
+    }
 
     const { data: cargasData } = await supabase
       .from("registros_entreno")
@@ -8610,7 +8659,7 @@ function RutinaCoach({ alumno }) {
       // Edición real: actualiza la rutina y sus ejercicios existentes, sin perder el historial de cargas
       const { error: errRutina } = await supabase
         .from("rutinas")
-        .update({ nombre: nombreRutina, dia: diaRutina, grupo_muscular: grupoMuscularRutina || null, calentamiento_general: calentamientoGeneral, vuelta_calma: vueltaCalma, cardio: cardio, meta_pasos: metaPasos ? parseInt(metaPasos) : null, es_descanso: esDescanso })
+        .update({ nombre: nombreRutina, dia: modoRutinaAlumno === "semana" ? diaRutina : null, grupo_muscular: grupoMuscularRutina || null, calentamiento_general: calentamientoGeneral, vuelta_calma: vueltaCalma, cardio: cardio, meta_pasos: metaPasos ? parseInt(metaPasos) : null, es_descanso: esDescanso })
         .eq("id", editandoRutinaId);
       if (errRutina) { alert("Error actualizando rutina: " + errRutina.message); setGuardando(false); return; }
 
@@ -8655,7 +8704,7 @@ function RutinaCoach({ alumno }) {
       // propio botón "📤 Cargar" en la tarjeta de la rutina.
       const { data: rutina, error: errRutina } = await supabase
         .from("rutinas")
-        .insert({ usuario_id: alumno.id, nombre: nombreRutina, dia: diaRutina, grupo_muscular: grupoMuscularRutina || null, calentamiento_general: calentamientoGeneral, vuelta_calma: vueltaCalma, cardio: cardio, meta_pasos: metaPasos ? parseInt(metaPasos) : null, es_descanso: esDescanso, publicada: false })
+        .insert({ usuario_id: alumno.id, nombre: nombreRutina, dia: modoRutinaAlumno === "semana" ? diaRutina : null, grupo_muscular: grupoMuscularRutina || null, calentamiento_general: calentamientoGeneral, vuelta_calma: vueltaCalma, cardio: cardio, meta_pasos: metaPasos ? parseInt(metaPasos) : null, es_descanso: esDescanso, publicada: false })
         .select().single();
       if (errRutina) { alert("Error creando rutina: " + errRutina.message); setGuardando(false); return; }
 
@@ -8696,7 +8745,6 @@ function RutinaCoach({ alumno }) {
     setEditandoPlantillaId(null);
     setNombreRutina("");
     setDiaRutina("");
-    setGrupoMuscularRutina("");
     setCalentamientoGeneral([]);
     setVueltaCalma([]);
     setCardio([]);
@@ -8714,7 +8762,6 @@ function RutinaCoach({ alumno }) {
   const cargarParaEditar = (rutina, modo) => {
     setNombreRutina(modo === "editar" ? rutina.nombre : rutina.nombre + " (copia)");
     setDiaRutina(rutina.dia || "");
-    setGrupoMuscularRutina(rutina.grupo_muscular || "");
     setCalentamientoGeneral(Array.isArray(rutina.calentamiento_general) ? rutina.calentamiento_general : []);
     setVueltaCalma(Array.isArray(rutina.vuelta_calma) ? rutina.vuelta_calma : []);
     setCardio(Array.isArray(rutina.cardio) ? rutina.cardio : []);
@@ -8783,13 +8830,19 @@ function RutinaCoach({ alumno }) {
             <input style={inputStyle} placeholder="Ej: Push A - Lunes" value={nombreRutina} onChange={e => setNombreRutina(e.target.value)} />
           </div>
 
-          <div style={{ marginBottom:16 }}>
-            <div style={{ fontSize:11, color:theme.muted, marginBottom:4 }}>Día</div>
-            <select style={inputStyle} value={diaRutina} onChange={e => setDiaRutina(e.target.value)}>
-              <option value="">Selecciona...</option>
-              {["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"].map(d => <option key={d} value={d}>{d}</option>)}
-            </select>
-          </div>
+          {modoRutinaAlumno === "ciclo" ? (
+            <div style={{ marginBottom:16, fontSize:11, color:theme.muted }}>
+              Este alumno usa ciclo rotativo -- guardá esta rutina con nombre claro (ej: "Entreno 1", "Descanso") y después armá el orden exacto en "Secuencia del ciclo", arriba en esta pestaña.
+            </div>
+          ) : (
+            <div style={{ marginBottom:16 }}>
+              <div style={{ fontSize:11, color:theme.muted, marginBottom:4 }}>Día</div>
+              <select style={inputStyle} value={diaRutina} onChange={e => setDiaRutina(e.target.value)}>
+                <option value="">Selecciona...</option>
+                {["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"].map(d => <option key={d} value={d}>{d}</option>)}
+              </select>
+            </div>
+          )}
 
           <div onClick={() => toggleEsDescanso(!esDescanso)}
             style={{ display:"flex", alignItems:"center", gap:10, marginBottom:16, cursor:"pointer", background: esDescanso ? `${theme.accentLight}18` : theme.surface, border:`1px solid ${esDescanso ? theme.accentLight : theme.border}`, borderRadius:8, padding:"10px 12px" }}>
@@ -9214,6 +9267,61 @@ function RutinaCoach({ alumno }) {
           no dependa de si el coach también abre Progreso de este alumno. */}
       <VolumenMesocicloSync alumno={alumno} />
 
+      <Card style={{ marginBottom:14, border:`1px solid ${theme.border}` }}>
+        <div style={{ fontSize:11, color:theme.muted, marginBottom:8 }}>MODO DE ASIGNACIÓN DE RUTINAS</div>
+        <div style={{ display:"flex", gap:8, marginBottom: modoRutinaAlumno === "ciclo" ? 12 : 0 }}>
+          {[["semana","📅 Por día de semana"],["ciclo","🔄 Por ciclo rotativo"]].map(([key,label]) => (
+            <button key={key} onClick={async () => {
+              setModoRutinaAlumno(key);
+              await supabase.from("usuarios").update({ modo_rutina: key }).eq("id", alumno.id);
+            }} style={{ flex:1, background: modoRutinaAlumno === key ? `${theme.accent}22` : theme.surface, border:`1px solid ${modoRutinaAlumno === key ? theme.accent : theme.border}`, borderRadius:8, padding:"8px 10px", color: modoRutinaAlumno === key ? theme.accentLight : theme.muted, fontSize:12, fontWeight:700, cursor:"pointer" }}>{label}</button>
+          ))}
+        </div>
+        {modoRutinaAlumno === "ciclo" && (
+          <div>
+            <div style={{ fontSize:11, color:theme.muted, marginBottom:4 }}>Fecha en que arranca el ciclo (posición 1 de la secuencia)</div>
+            <input type="date" style={inputStyle} value={fechaInicioCiclo} onChange={async e => {
+              setFechaInicioCiclo(e.target.value);
+              await supabase.from("usuarios").update({ fecha_inicio_ciclo: e.target.value }).eq("id", alumno.id);
+            }} />
+
+            <div style={{ fontSize:11, color:theme.muted, marginTop:14, marginBottom:6 }}>Secuencia del ciclo (elegí el orden exacto en que se repite; podés repetir la misma rutina de descanso las veces que haga falta)</div>
+            {rutinas.length === 0 ? (
+              <div style={{ fontSize:11, color:theme.muted }}>Primero creá al menos una rutina (entreno o de descanso) más abajo, y después volvé acá para armar el orden.</div>
+            ) : (
+              <>
+                {secuenciaCiclo.map((rid, i) => {
+                  const existe = rutinas.some(r => r.id === rid);
+                  return (
+                    <div key={i} style={{ display:"flex", gap:6, marginBottom:6, alignItems:"center" }}>
+                      <span style={{ width:20, textAlign:"center", color:theme.muted, fontSize:11 }}>{i + 1}.</span>
+                      <select style={{ ...inputStyle, flex:1 }} value={rid} onChange={async e => {
+                        const nueva = [...secuenciaCiclo]; nueva[i] = e.target.value;
+                        setSecuenciaCiclo(nueva);
+                        await supabase.from("usuarios").update({ secuencia_ciclo: nueva }).eq("id", alumno.id);
+                      }}>
+                        {!existe && <option value={rid}>⚠️ Rutina eliminada</option>}
+                        {rutinas.map(r => <option key={r.id} value={r.id}>{r.es_descanso ? "😴 " : "💪 "}{r.nombre}</option>)}
+                      </select>
+                      <span onClick={async () => {
+                        const nueva = secuenciaCiclo.filter((_, idx) => idx !== i);
+                        setSecuenciaCiclo(nueva);
+                        await supabase.from("usuarios").update({ secuencia_ciclo: nueva }).eq("id", alumno.id);
+                      }} style={{ cursor:"pointer", color:theme.danger, fontSize:16 }}>×</span>
+                    </div>
+                  );
+                })}
+                <button onClick={async () => {
+                  const nueva = [...secuenciaCiclo, rutinas[0].id];
+                  setSecuenciaCiclo(nueva);
+                  await supabase.from("usuarios").update({ secuencia_ciclo: nueva }).eq("id", alumno.id);
+                }} style={{ background:"transparent", border:`1px dashed ${theme.border}`, borderRadius:6, padding:"4px 10px", color:theme.muted, fontSize:11, cursor:"pointer" }}>+ Agregar paso al ciclo</button>
+              </>
+            )}
+          </div>
+        )}
+      </Card>
+
       {/* Rutinas existentes */}
       {loading ? (
         <Card style={{ textAlign:"center", padding:20 }}><div style={{ color:theme.muted }}>Cargando...</div></Card>
@@ -9241,7 +9349,7 @@ function RutinaCoach({ alumno }) {
               )}
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8, gap:6, flexWrap:"nowrap" }}>
                 <div style={{ display:"flex", alignItems:"center", gap:6, minWidth:0, overflow:"hidden" }}>
-                  <Tag>{r.dia || "Sin día"}</Tag>
+                  <Tag>{r.dia || (r.es_descanso ? "Descanso" : "Entreno")}</Tag>
                   {r.es_descanso && <Tag color={theme.accentLight}>😴 Descanso</Tag>}
                   {r.grupo_muscular && <Tag>{r.grupo_muscular}</Tag>}
                   {r.created_at && <span style={{ fontSize:10, color:theme.muted, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{new Date(r.created_at).toLocaleDateString("es-CL", { day:"2-digit", month:"short" })}</span>}
@@ -9329,7 +9437,7 @@ function RutinaCoach({ alumno }) {
       {/* Botón crear / usar plantilla */}
       {!creando ? (
         <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-          <Btn onClick={() => { setModoDuplicar(false); setModoPlantilla(false); setEditandoRutinaId(null); setCalentamientoGeneral([]); setVueltaCalma([]); setCardio([]); setMetaPasos("10000"); setEsDescanso(false); setEjerciciosEliminados([]); setAproxExpandida({}); setCreando(true); }}>+ Crear Nueva Rutina</Btn>
+          <Btn onClick={() => { setModoDuplicar(false); setModoPlantilla(false); setEditandoRutinaId(null); setCalentamientoGeneral([]); setVueltaCalma([]); setCardio([]); setMetaPasos("10000"); setEsDescanso(false); setEjerciciosEliminados([]); setAproxExpandida({}); setDiaRutina(""); setCreando(true); }}>+ Crear Nueva Rutina</Btn>
           <Btn variant="ghost" onClick={() => setMostrarPlantillas(!mostrarPlantillas)}>📋 Usar plantilla {mostrarPlantillas ? "▲" : "▼"}</Btn>
         </div>
       ) : null}
