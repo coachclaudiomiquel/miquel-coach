@@ -195,7 +195,7 @@ const Input = ({ placeholder, type = "text", value, onChange }) => (
 const ImageLightbox = ({ src, onClose }) => {
   if (!src) return null;
   return (
-    <div onClick={onClose} style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(5,5,10,0.92)", backdropFilter: "blur(4px)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 24, boxSizing: "border-box" }}>
+    <div onClick={onClose} style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(5,5,10,0.92)", backdropFilter: "blur(4px)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 24, boxSizing: "border-box", pointerEvents: "auto" }}>
       <button onClick={onClose} style={{ position: "absolute", top: 18, right: 18, width: 40, height: 40, borderRadius: "50%", background: theme.card, border: `1px solid ${theme.accent}66`, color: theme.text, fontSize: 20, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: `0 0 16px ${theme.accent}55` }}>×</button>
       <span onClick={onClose} style={{ position: "absolute", top: 22, left: 18, color: theme.accentLight, fontSize: 14, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>← Volver</span>
       <img src={src} alt="Vista ampliada" onClick={e => e.stopPropagation()} style={{ maxWidth: "100%", maxHeight: "85vh", borderRadius: 14, border: `1px solid ${theme.accent}44`, boxShadow: `0 0 30px ${theme.accent}33`, objectFit: "contain" }} />
@@ -879,6 +879,14 @@ const MUSCULOS_PRINCIPALES = [
   "Deltoides anterior", "Deltoides medio", "Deltoides posterior",
   "Bíceps", "Tríceps", "Antebrazo", "Cuádriceps", "Isquiotibiales", "Glúteo", "Aductores", "Abductores",
   "Gemelos", "Core/Abdomen", "Oblicuos",
+];
+// Lista fija (y orden fijo) de músculos que se muestran en los reportes de
+// volumen/tonelaje del coach (tabla de tonelaje semanal, volumen semanal por
+// grupo, y volumen por mesociclo) -- cualquier otro músculo clasificado que
+// no esté acá simplemente no aparece en esos 3 reportes.
+const MUSCULOS_VOLUMEN_PERMITIDOS = [
+  "Cuádriceps", "Glúteo", "Isquiotibiales", "Dorsal ancho", "Pecho",
+  "Deltoides medio", "Deltoides posterior", "Deltoides anterior", "Bíceps", "Tríceps",
 ];
 // Un ejercicio puede trabajar varios músculos con distinto peso (1 = motor
 // principal, 0.5 = ayuda significativa, 0.25 = colabora apenas -- criterio
@@ -3509,7 +3517,7 @@ function RutinaScreen({ onNav, alumnoPreview }) {
           const activa = rutinaActiva?.id === r.id;
           return (
             <button key={r.id} onClick={() => { setRutinaActiva(r); setCompletado(false); setRegistros({}); }}
-              style={{ textAlign: "left", display:"flex", alignItems:"center", gap:6, background: activa ? theme.accent : theme.surface, border: `1px solid ${activa ? theme.accent : theme.border}`, borderRadius: 10, padding: "8px 8px", cursor: "pointer", minWidth: 0 }}>
+              style={{ textAlign: "left", display:"flex", alignItems:"center", gap:6, background: activa ? theme.accent : theme.surface, border: `1px solid ${activa ? theme.accent : theme.border}`, borderRadius: 10, padding: "8px 8px", cursor: "pointer", minWidth: 0, pointerEvents: "auto" }}>
               {r.es_descanso
                 ? <img src={DESCANSO_IMG} alt="Descanso" style={{ width:32, height:32, objectFit:"contain", flexShrink:0 }} />
                 : (r.grupo_muscular && <ImagenGrupoMuscular nombre={r.grupo_muscular} mapa={mapaImagenesGrupoMuscular} size={32} />)}
@@ -3726,7 +3734,7 @@ function RutinaScreen({ onNav, alumnoPreview }) {
           {rutinaActiva.created_at && <div style={{ fontSize: 11, color: theme.muted, marginTop: 2 }}>Desde: {new Date(rutinaActiva.created_at).toLocaleDateString("es-CL", { day:"2-digit", month:"short", year:"numeric" })}</div>}
         </div>
         <button onClick={() => setVerInfoRutina(true)} aria-label="Info de la rutina"
-          style={{ flexShrink:0, width:34, height:34, borderRadius:"50%", background:`${theme.accent}22`, border:`1px solid ${theme.accent}66`, color:theme.accentLight, fontSize:16, fontWeight:800, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" }}>ⓘ</button>
+          style={{ flexShrink:0, width:34, height:34, borderRadius:"50%", background:`${theme.accent}22`, border:`1px solid ${theme.accent}66`, color:theme.accentLight, fontSize:16, fontWeight:800, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", pointerEvents:"auto" }}>ⓘ</button>
       </div>
 
       {rutinaActiva.es_descanso && (
@@ -3784,7 +3792,7 @@ function RutinaScreen({ onNav, alumnoPreview }) {
 
       {verInfoRutina && (
         <div onClick={cerrarInfoRutina}
-          style={{ position:"absolute", inset:0, background:"rgba(0,0,0,0.88)", zIndex:2500, display:"flex", alignItems:"center", justifyContent:"center", padding:24, cursor:"pointer" }}>
+          style={{ position:"absolute", inset:0, background:"rgba(0,0,0,0.88)", zIndex:2500, display:"flex", alignItems:"center", justifyContent:"center", padding:24, cursor:"pointer", pointerEvents:"auto" }}>
           <div onClick={e => e.stopPropagation()} style={{ background:theme.card, border:`1px solid ${theme.border}`, borderRadius:16, padding:20, maxWidth:420, maxHeight:"80vh", overflowY:"auto", cursor:"default" }}>
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
               <div style={{ fontSize:15, fontWeight:800, color:theme.text }}>ℹ️ Sobre tu rutina</div>
@@ -3938,7 +3946,7 @@ function RutinaScreen({ onNav, alumnoPreview }) {
       {/* Calentamiento general de la sesión (colapsado por defecto) */}
       {Array.isArray(rutinaActiva.calentamiento_general) && rutinaActiva.calentamiento_general.length > 0 && (
         <Card style={{ marginBottom: 14, padding:0, overflow:"hidden", border: `1px solid ${theme.accent}44` }}>
-          <div onClick={() => setVerCalentamiento(!verCalentamiento)} style={{ padding:14, cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+          <div onClick={() => setVerCalentamiento(!verCalentamiento)} style={{ padding:14, cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center", pointerEvents:"auto" }}>
             <div style={{ fontSize: 11, fontWeight: 800, color: theme.accentLight, letterSpacing: 0.5 }}>🔥 CALENTAMIENTO GENERAL</div>
             <span style={{ fontSize:11, color:theme.accentLight }}>{verCalentamiento ? "▲ ocultar" : `▼ ver (${rutinaActiva.calentamiento_general.length})`}</span>
           </div>
@@ -4148,7 +4156,7 @@ function RutinaScreen({ onNav, alumnoPreview }) {
       {/* Vuelta a la calma: estiramientos pasivos post-sesión (colapsado por defecto) */}
       {Array.isArray(rutinaActiva.vuelta_calma) && rutinaActiva.vuelta_calma.length > 0 && (
         <Card style={{ marginBottom: 14, padding:0, overflow:"hidden", border: `1px solid ${theme.accent}44` }}>
-          <div onClick={() => setVerVueltaCalma(!verVueltaCalma)} style={{ padding:14, cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+          <div onClick={() => setVerVueltaCalma(!verVueltaCalma)} style={{ padding:14, cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center", pointerEvents:"auto" }}>
             <div style={{ fontSize: 11, fontWeight: 800, color: theme.accentLight, letterSpacing: 0.5 }}>🧘 VUELTA A LA CALMA</div>
             <span style={{ fontSize:11, color:theme.accentLight }}>{verVueltaCalma ? "▲ ocultar" : `▼ ver (${rutinaActiva.vuelta_calma.length})`}</span>
           </div>
@@ -4601,7 +4609,7 @@ function NutricionScreen({ onNav, alumnoPreview }) {
         <div style={{ display:"flex", gap:6, marginBottom:14, flexWrap:"nowrap" }}>
           {dietas.map(d => (
             <button key={d.id} onClick={() => setDieta(d)}
-              style={{ flex:1, minWidth:0, background: dieta.id === d.id ? theme.accent : theme.surface, border: `1px solid ${dieta.id === d.id ? theme.accent : theme.border}`, borderRadius: 8, padding: "6px 6px", color: dieta.id === d.id ? "#fff" : theme.muted, fontSize: 11, cursor: "pointer", fontWeight: 600, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
+              style={{ flex:1, minWidth:0, background: dieta.id === d.id ? theme.accent : theme.surface, border: `1px solid ${dieta.id === d.id ? theme.accent : theme.border}`, borderRadius: 8, padding: "6px 6px", color: dieta.id === d.id ? "#fff" : theme.muted, fontSize: 11, cursor: "pointer", fontWeight: 600, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", pointerEvents:"auto" }}>
               {d.nombre || "Plan sin nombre"}
             </button>
           ))}
@@ -4678,12 +4686,12 @@ function NutricionScreen({ onNav, alumnoPreview }) {
                         <div style={{ display:"flex", alignItems:"center", gap:10, marginTop:3 }}>
                           {alim.imagen_url && (
                             <span onClick={() => setLightbox(alim.imagen_url)} title="Ver foto del alimento"
-                              style={{ fontSize:12, opacity:0.55, cursor:"pointer", lineHeight:1 }}>📷</span>
+                              style={{ fontSize:12, opacity:0.55, cursor:"pointer", lineHeight:1, pointerEvents:"auto" }}>📷</span>
                           )}
                           {alim.grupo && (
                             <span onClick={() => setEquivalenciaAbierta(equivalenciaAbierta === key ? null : key)}
                               title={equivalenciaAbierta === key ? "Ocultar equivalencias" : "Cambiar por un alimento equivalente"}
-                              style={{ fontSize:12, color:theme.accentLight, cursor:"pointer", lineHeight:1 }}>
+                              style={{ fontSize:12, color:theme.accentLight, cursor:"pointer", lineHeight:1, pointerEvents:"auto" }}>
                               {equivalenciaAbierta === key ? "▲" : "🔁"}
                             </span>
                           )}
@@ -4836,7 +4844,7 @@ function NutricionScreen({ onNav, alumnoPreview }) {
       {dieta.notas && (
         <Card style={{ marginBottom:14, padding:0, overflow:"hidden" }}>
           <div onClick={() => setNotasAbierta(v => !v)}
-            style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"14px 16px", boxSizing:"border-box", cursor:"pointer" }}>
+            style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"14px 16px", boxSizing:"border-box", cursor:"pointer", pointerEvents:"auto" }}>
             <div style={{ fontSize:12, color:theme.muted }}>📝 NOTAS DEL COACH</div>
             <div style={{ color:theme.muted, fontSize:10, transform: notasAbierta ? "rotate(0deg)" : "rotate(-90deg)", transition:"transform 0.15s" }}>▾</div>
           </div>
@@ -4853,7 +4861,7 @@ function NutricionScreen({ onNav, alumnoPreview }) {
           DietaCoach. También plegable. */}
       <Card style={{ marginBottom:14, padding:0, overflow:"hidden" }}>
         <div onClick={() => setHabitosAbierta(v => !v)}
-          style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"14px 16px", boxSizing:"border-box", cursor:"pointer" }}>
+          style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"14px 16px", boxSizing:"border-box", cursor:"pointer", pointerEvents:"auto" }}>
           <div style={{ fontSize:12, color:theme.muted }}>🎯 HÁBITOS GENERALES</div>
           <div style={{ color:theme.muted, fontSize:10, transform: habitosAbierta ? "rotate(0deg)" : "rotate(-90deg)", transition:"transform 0.15s" }}>▾</div>
         </div>
@@ -6788,6 +6796,7 @@ function ProgresoMetricas({ userId, esCoach = false }) {
   const [fotoAntes, setFotoAntes] = useState(null);
   const [fotoActual, setFotoActual] = useState(null);
   const [prs, setPrs] = useState([]);
+  const [progresionExpandida, setProgresionExpandida] = useState({});
   const [lightbox, setLightbox] = useState(null);
   const [pasosResumen, setPasosResumen] = useState([]);
   const [anillos30, setAnillos30] = useState(null);
@@ -7097,7 +7106,7 @@ function ProgresoMetricas({ userId, esCoach = false }) {
                     <>
                       <div style={{ position: "absolute", top: 0, bottom: 2, width: 1, left: pasosScrub.left, background: "rgba(240,240,245,0.28)", pointerEvents: "none" }} />
                       <div ref={pasosTooltipRef} style={{ position: "absolute", bottom: "calc(100% + 9px)", left: pasosScrub.left, transform: "translateX(-50%)", background: "#22222E", border: `1px solid ${theme.border}`, borderRadius: 9, padding: "6px 10px", fontSize: 12, whiteSpace: "nowrap", boxShadow: "0 6px 18px rgba(0,0,0,0.4)", pointerEvents: "none", zIndex: 5 }}>
-                        <span style={{ color: theme.muted }}>{DIAS_SEMANA_NOMBRES[new Date(pScrub.fecha).getDay()].slice(0, 3)} {new Date(pScrub.fecha).toLocaleDateString("es-CL", { day: "numeric", month: "short" })}</span>
+                        <span style={{ color: theme.muted }}>{DIAS_SEMANA_NOMBRES[new Date(pScrub.fecha + "T00:00:00").getDay()].slice(0, 3)} {new Date(pScrub.fecha + "T00:00:00").toLocaleDateString("es-CL", { day: "numeric", month: "short" })}</span>
                         {" · "}
                         <span style={{ color: theme.text, fontWeight: 700 }}>{pScrub.pasos ? `${pScrub.pasos.toLocaleString("es-CL")} pasos` : "sin registro"}</span>
                       </div>
@@ -7105,7 +7114,7 @@ function ProgresoMetricas({ userId, esCoach = false }) {
                   )}
                   {pasosResumen.map((p, i) => {
                     const h = Math.max(3, (p.pasos / maxPasos) * barH);
-                    const fechaCorta = new Date(p.fecha).toLocaleDateString("es-CL", { day: "numeric", month: "short" });
+                    const fechaCorta = new Date(p.fecha + "T00:00:00").toLocaleDateString("es-CL", { day: "numeric", month: "short" });
                     return (
                       <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0, width: anchoBarra }}>
                         <div ref={el => (pasosBarRefs.current[i] = el)}
@@ -7214,15 +7223,23 @@ function ProgresoMetricas({ userId, esCoach = false }) {
         ) : (
           prs.map((pr,idx) => {
             const ultimo = pr.historial[pr.historial.length-1];
+            const expandido = !!progresionExpandida[pr.ejercicio];
             return (
               <div key={pr.ejercicio} style={{ marginBottom: 16 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: 16 }}>🏋️</span><span style={{ fontSize: 13, fontWeight: 700, color: theme.text }}>{pr.ejercicio}</span></div>
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: 14, fontWeight: 900, color: theme.warning }}>{ultimo.carga} kg</span>{ultimo.reps && <span style={{ fontSize: 11, color: theme.muted }}>× {ultimo.reps} rep{ultimo.reps!==1?"s":""}</span>}<Tag color={theme.warning}>PR</Tag></div>
                 </div>
-                <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-                  {pr.historial.map((h,i)=>(<div key={i} style={{ display:"flex",alignItems:"center",gap:3 }}><div style={{ background:i===pr.historial.length-1?`${theme.warning}22`:theme.surface,border:`1px solid ${i===pr.historial.length-1?theme.warning+"66":theme.border}`,borderRadius:8,padding:"4px 8px",textAlign:"center" }}><div style={{ fontSize:12,fontWeight:800,color:i===pr.historial.length-1?theme.warning:theme.text }}>{h.carga}kg</div>{h.reps && <div style={{ fontSize:10,color:theme.muted }}>×{h.reps}</div>}</div>{i<pr.historial.length-1&&<span style={{ color:theme.border,fontSize:12 }}>›</span>}</div>))}
-                </div>
+                {pr.historial.length > 1 && (
+                  <div onClick={() => setProgresionExpandida({ ...progresionExpandida, [pr.ejercicio]: !expandido })} style={{ fontSize: 11, color: theme.accentLight, cursor: "pointer", marginBottom: expandido ? 8 : 0 }}>
+                    {expandido ? "▲ Ocultar progresión" : "▼ Ver progresión"}
+                  </div>
+                )}
+                {expandido && (
+                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                    {pr.historial.map((h,i)=>(<div key={i} style={{ display:"flex",alignItems:"center",gap:3 }}><div style={{ display:"flex", alignItems:"baseline", gap:3, whiteSpace:"nowrap", background:i===pr.historial.length-1?`${theme.warning}22`:theme.surface,border:`1px solid ${i===pr.historial.length-1?theme.warning+"66":theme.border}`,borderRadius:8,padding:"4px 8px",textAlign:"center" }}><span style={{ fontSize:12,fontWeight:800,color:i===pr.historial.length-1?theme.warning:theme.text }}>{h.carga}kg</span>{h.reps && <span style={{ fontSize:10,color:theme.muted }}>×{h.reps}</span>}</div>{i<pr.historial.length-1&&<span style={{ color:theme.border,fontSize:12 }}>›</span>}</div>))}
+                  </div>
+                )}
                 {idx<prs.length-1&&<div style={{ borderBottom:`1px solid ${theme.border}`,marginTop:14 }}/>}
               </div>
             );
@@ -7831,7 +7848,7 @@ function useVolumenSemanal(alumno) {
       });
     });
   });
-  const musculosOrdenVolumen = Object.keys({ ...volumenPorMusculo, ...tonelajePorMusculo });
+  const musculosOrdenVolumen = Object.keys({ ...volumenPorMusculo, ...tonelajePorMusculo }).filter(m => MUSCULOS_VOLUMEN_PERMITIDOS.includes(m));
   const volumenOrdenado = musculosOrdenVolumen
     .map(musculo => [musculo, volumenPorMusculo[musculo] || 0, tonelajePorMusculo[musculo] || 0])
     .sort((a, b) => b[1] - a[1]);
@@ -8043,20 +8060,14 @@ function HistorialVolumenTonelaje({ alumno }) {
   semanasKeys.forEach(s => Object.entries(tonelajePorSemana[s]).forEach(([m, v]) => { totalPorMusculoCompleto[m] = (totalPorMusculoCompleto[m] || 0) + v; }));
   mesociclosKeys.forEach(c => Object.entries(volumenPorMesociclo[c]).forEach(([m, v]) => { totalPorMusculoCompleto[m] = (totalPorMusculoCompleto[m] || 0) + v; }));
   const ordenMusculosCompleto = Object.keys(totalPorMusculoCompleto).sort((a, b) => totalPorMusculoCompleto[b] - totalPorMusculoCompleto[a]);
-  const TOP_MUSCULOS = COLORES_MUSCULO.length - 1;
-  const musculosDestacados = ordenMusculosCompleto.slice(0, TOP_MUSCULOS);
-  const hayOtros = ordenMusculosCompleto.length > TOP_MUSCULOS;
-  const ordenMusculos = hayOtros ? [...musculosDestacados, "Otros"] : musculosDestacados;
-  const agruparOtros = (obj) => {
+  const ordenMusculos = MUSCULOS_VOLUMEN_PERMITIDOS.filter(m => totalPorMusculoCompleto[m] > 0);
+  const filtrarPermitidos = (obj) => {
     const nuevo = {};
-    Object.entries(obj).forEach(([m, v]) => {
-      const clave = (hayOtros && !musculosDestacados.includes(m)) ? "Otros" : m;
-      nuevo[clave] = (nuevo[clave] || 0) + v;
-    });
+    Object.entries(obj).forEach(([m, v]) => { if (MUSCULOS_VOLUMEN_PERMITIDOS.includes(m)) nuevo[m] = v; });
     return nuevo;
   };
-  semanasKeys.forEach(s => { tonelajePorSemana[s] = agruparOtros(tonelajePorSemana[s]); });
-  mesociclosKeys.forEach(c => { volumenPorMesociclo[c] = agruparOtros(volumenPorMesociclo[c]); });
+  semanasKeys.forEach(s => { tonelajePorSemana[s] = filtrarPermitidos(tonelajePorSemana[s]); });
+  mesociclosKeys.forEach(c => { volumenPorMesociclo[c] = filtrarPermitidos(volumenPorMesociclo[c]); });
 
   const formatearKg = (n) => Math.round(n).toLocaleString("es-CL");
   const formatearSeries = (n) => Number(n.toFixed(2)).toString();
@@ -8094,55 +8105,39 @@ function HistorialVolumenTonelaje({ alumno }) {
     <>
       <Card style={{ marginBottom: 14 }}>
         <div style={{ fontSize: 12, color: theme.muted, marginBottom: 2 }}>📈 TENDENCIA DE TONELAJE SEMANAL</div>
-        <div style={{ fontSize: 10, color: theme.muted, marginBottom: 10 }}>kg reales movidos por semana, solo del músculo motor principal de cada ejercicio. Tocá un punto para ver el detalle de esa semana.</div>
+        <div style={{ fontSize: 10, color: theme.muted, marginBottom: 10 }}>kg reales movidos por semana, solo del músculo motor principal de cada ejercicio. Tocá una fila para resaltarla.</div>
         {semanasKeys.length === 0 ? (
           <div style={{ fontSize: 12, color: theme.muted, padding: "8px 0" }}>Todavía no hay registros con peso cargados -- este gráfico aparece en cuanto el alumno registre series con kg de un ejercicio con músculo asignado.</div>
         ) : (
           <>
           <div style={{ overflowX: "auto" }}>
-            <svg width={anchoLinea} height={ALTO} style={{ display: "block" }}>
-              <line x1={PL} x2={anchoLinea - PR} y1={PT + altoUtil} y2={PT + altoUtil} stroke={theme.border} strokeWidth={1} />
-              {ordenMusculos.map(m => {
-                const pts = semanasKeys.map((s, i) => [xSemana(i), ySemana(tonelajePorSemana[s][m] || 0)]);
-                const d = pts.map((p, i) => (i === 0 ? "M" : "L") + p[0].toFixed(1) + "," + p[1].toFixed(1)).join(" ");
-                return (
-                  <g key={m}>
-                    <path d={d} fill="none" stroke={colorMusculo(m, ordenMusculos)} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
-                    {pts.map((p, i) => (tonelajePorSemana[semanasKeys[i]][m] > 0) && (
-                      <circle key={i} cx={p[0]} cy={p[1]} r={semanasKeys[i] === semanaActiva ? 5 : 3.5}
-                        fill={colorMusculo(m, ordenMusculos)} stroke={theme.bg} strokeWidth={2}
-                        style={{ cursor: "pointer" }} onClick={() => setSemanaSel(semanasKeys[i])} />
-                    ))}
-                  </g>
-                );
-              })}
-              {semanasKeys.map((s, i) => (
-                <rect key={s} x={PL + i * AP} y={0} width={AP} height={ALTO} fill="transparent"
-                  style={{ cursor: "pointer" }} onClick={() => setSemanaSel(s)} />
-              ))}
-              {semanasKeys.map((s, i) => (
-                <text key={s} x={xSemana(i)} y={ALTO - 5} textAnchor="middle" fontSize="8.5" fill={theme.muted}>{corta(s)}</text>
-              ))}
-            </svg>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
+              <thead>
+                <tr>
+                  <th style={{ textAlign: "left", padding: "6px 10px 6px 4px", color: theme.muted, borderBottom: `1px solid ${theme.border}`, whiteSpace: "nowrap" }}>Semana</th>
+                  {ordenMusculos.map(m => (
+                    <th key={m} style={{ textAlign: "right", padding: "6px 8px", color: colorMusculo(m, ordenMusculos), borderBottom: `1px solid ${theme.border}`, whiteSpace: "nowrap", fontWeight: 700 }}>{m}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {semanasKeys.slice().reverse().map(s => (
+                  <tr key={s} onClick={() => setSemanaSel(s === semanaActiva ? null : s)}
+                    style={{ background: s === semanaActiva ? `${theme.accent}18` : "transparent", cursor: "pointer" }}>
+                    <td style={{ padding: "6px 10px 6px 4px", color: theme.text, fontWeight: 700, borderBottom: `1px solid ${theme.border}`, whiteSpace: "nowrap" }}>{formatearRangoSemana(s)}</td>
+                    {ordenMusculos.map(m => {
+                      const v = tonelajePorSemana[s][m] || 0;
+                      return (
+                        <td key={m} style={{ textAlign: "right", padding: "6px 8px", color: v > 0 ? theme.text : theme.muted, borderBottom: `1px solid ${theme.border}`, whiteSpace: "nowrap" }}>
+                          {v > 0 ? `${formatearKg(v)} kg` : "—"}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 8 }}>
-            {ordenMusculos.map(m => (
-              <div key={m} style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                <span style={{ width: 12, height: 2, borderRadius: 1, background: colorMusculo(m, ordenMusculos), display: "inline-block" }} />
-                <span style={{ fontSize: 10.5, color: theme.muted }}>{m}</span>
-              </div>
-            ))}
-          </div>
-          {semanaActiva && (
-            <div style={{ marginTop: 10, paddingTop: 8, borderTop: `1px solid ${theme.border}` }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: theme.text, marginBottom: 4 }}>Semana {formatearRangoSemana(semanaActiva)}</div>
-              {ordenMusculos.filter(m => tonelajePorSemana[semanaActiva][m] > 0).sort((a, b) => tonelajePorSemana[semanaActiva][b] - tonelajePorSemana[semanaActiva][a]).map(m => (
-                <div key={m} style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, color: theme.muted, marginTop: 2 }}>
-                  <span>{m}</span><span style={{ color: theme.text, fontWeight: 700 }}>{formatearKg(tonelajePorSemana[semanaActiva][m])} kg</span>
-                </div>
-              ))}
-            </div>
-          )}
           </>
         )}
       </Card>
@@ -8508,6 +8503,13 @@ function RutinaCoach({ alumno }) {
         if (!grouped[c.ejercicio_id]) grouped[c.ejercicio_id] = [];
         grouped[c.ejercicio_id].push(c);
       });
+      // Se ordena por fecha (más reciente primero) y, dentro de la misma
+      // fecha, por número de serie (S1, S2, S3...) -- antes quedaba en el
+      // orden en que se habían guardado, mezclando series y fechas sin
+      // ningún criterio visual.
+      Object.keys(grouped).forEach(id => {
+        grouped[id].sort((a, b) => (b.fecha || "").localeCompare(a.fecha || "") || (a.serie || 0) - (b.serie || 0));
+      });
       setCargas(grouped);
     }
     setLoading(false);
@@ -8745,6 +8747,7 @@ function RutinaCoach({ alumno }) {
     setEditandoPlantillaId(null);
     setNombreRutina("");
     setDiaRutina("");
+    setGrupoMuscularRutina("");
     setCalentamientoGeneral([]);
     setVueltaCalma([]);
     setCardio([]);
@@ -8762,6 +8765,7 @@ function RutinaCoach({ alumno }) {
   const cargarParaEditar = (rutina, modo) => {
     setNombreRutina(modo === "editar" ? rutina.nombre : rutina.nombre + " (copia)");
     setDiaRutina(rutina.dia || "");
+    setGrupoMuscularRutina(rutina.grupo_muscular || "");
     setCalentamientoGeneral(Array.isArray(rutina.calentamiento_general) ? rutina.calentamiento_general : []);
     setVueltaCalma(Array.isArray(rutina.vuelta_calma) ? rutina.vuelta_calma : []);
     setCardio(Array.isArray(rutina.cardio) ? rutina.cardio : []);
@@ -8856,9 +8860,9 @@ function RutinaCoach({ alumno }) {
           {!esDescanso && (
           <>
           <div style={{ marginBottom:16 }}>
-            <div style={{ fontSize:11, color:theme.muted, marginBottom:4 }}>Grupo muscular</div>
+            <div style={{ fontSize:11, color:theme.muted, marginBottom:4 }}>Enfoque de rutina</div>
             <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-              <input style={{ ...inputStyle, flex:1 }} placeholder="Ej: Femoral" value={grupoMuscularRutina}
+              <input style={{ ...inputStyle, flex:1 }} placeholder="Ej: Push, Pull, Cuádriceps, Femoral, Legs..." value={grupoMuscularRutina}
                 onChange={e => setGrupoMuscularRutina(e.target.value)} list="lista-grupos-musculares" />
               <datalist id="lista-grupos-musculares">
                 {nombresGruposMuscularesUsados.map(n => <option key={n} value={n} />)}
@@ -9883,7 +9887,7 @@ function VistaPreviaCoach({ alumno }) {
   return (
     <div>
       <div style={{ fontSize:11, color:theme.muted, marginBottom:12, background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:8, padding:"8px 10px" }}>
-        👁 Esto es exactamente lo que {alumno?.nombre || "el alumno"} va a ver en su celular, armado con sus datos reales ya guardados -- de solo lectura, no se puede tocar nada desde acá. Revisalo antes de avisarle que ya puede entrar.
+        👁 Esto es exactamente lo que {alumno?.nombre || "el alumno"} va a ver en su celular, armado con sus datos reales ya guardados. Podés navegar (cambiar de rutina/dieta, desplegar secciones) pero no se guarda nada desde acá -- los campos para cargar peso, reps o marcar cosas quedan bloqueados. Revisalo antes de avisarle que ya puede entrar.
       </div>
 
       {!hayContenido && (
@@ -9905,8 +9909,8 @@ function VistaPreviaCoach({ alumno }) {
               ninguno de los checks/inputs/botones de la pantalla real
               responde a clics acá adentro, sin haber tenido que tocar esa
               pantalla para nada. */}
-          <div style={{ background:theme.bg, border:`1px solid ${theme.border}`, borderRadius:16, overflow:"hidden", height:640, maxHeight:"70vh" }}>
-            <div style={{ pointerEvents:"none", height:"100%" }}>
+          <div style={{ background:theme.bg, border:`1px solid ${theme.border}`, borderRadius:16, overflowY:"auto", overflowX:"hidden", height:640, maxHeight:"70vh" }}>
+            <div style={{ pointerEvents:"none" }}>
               {subTab === "rutina" && hayRutinas && <RutinaScreen onNav={() => {}} alumnoPreview={alumno} />}
               {subTab === "dieta" && hayDietas && <NutricionScreen onNav={() => {}} alumnoPreview={alumno} />}
             </div>
