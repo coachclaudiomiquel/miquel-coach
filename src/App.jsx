@@ -5406,6 +5406,12 @@ function DietaCoach({ alumno }) {
     return calcularMacrosAlimento(alim, item.cantidad);
   };
   const macrosDeComida = (c) => sumarMacros((c.alimentos || []).map(macrosDeItem));
+  // Sumatoria REAL de un plan ya guardado (suma de los macros de todos los
+  // alimentos de todas sus comidas), para mostrarla en las tarjetas del coach
+  // en vez del objetivo que se cargó a mano (dieta.calorias/proteinas/...).
+  // "—" si todavía no hay alimentos calculables (o la biblioteca no cargó).
+  const sumatoriaDePlan = (d) => sumarMacros((d.comidas || []).flatMap(c => (c.alimentos || []).map(macrosDeItem)));
+  const valorSumaPlan = (d, key) => { const v = sumatoriaDePlan(d)[key]; return v > 0 ? Math.round(v) : "—"; };
   const planArmado = sumarMacros(comidas.flatMap(c => (c.alimentos || []).map(macrosDeItem)));
 
   // Sustitutos curados a mano: se guardan en el propio alimento de la
@@ -5416,7 +5422,15 @@ function DietaCoach({ alumno }) {
   // empieza vacía y solo tiene lo que el coach agregó a propósito (ver
   // sustitutosCuradosAlimento).
   const actualizarSustitutosAlimento = async (alimento, nuevaListaIds) => {
-    await supabase.from("alimentos").update({ sustitutos_ids: nuevaListaIds }).eq("id", alimento.id);
+    // Antes no se revisaba el resultado: si Supabase rechazaba el guardado, la
+    // pantalla igual mostraba el cambio (ej: gramaje en 1) y al recargar
+    // volvía al valor automático. Ahora solo se actualiza la pantalla si de
+    // verdad se guardó, y si falla se avisa con el motivo.
+    const { data, error } = await supabase.from("alimentos").update({ sustitutos_ids: nuevaListaIds }).eq("id", alimento.id).select("id");
+    if (error || !data || data.length === 0) {
+      alert("No se pudo guardar el cambio de sustitutos: " + (error?.message || "no se actualizó ninguna fila (revisá permisos de la tabla alimentos)"));
+      return;
+    }
     setAlimentosBiblioteca(prev => prev.map(a => a.id === alimento.id ? { ...a, sustitutos_ids: nuevaListaIds } : a));
   };
   // "opcionesActuales" es la lista ya calculada que se está mostrando en ese
@@ -5715,8 +5729,9 @@ function DietaCoach({ alumno }) {
   const formularioContenido = (
     <>
           <div style={{ fontSize:13, fontWeight:800, color:theme.accent, marginBottom:4 }}>
-            {editandoPlantillaDietaId ? "✏️ EDITANDO PLANTILLA" : editandoDietaId ? "✏️ EDITANDO PLAN" : "NUEVO PLAN NUTRICIONAL"}
+            {editandoPlantillaDietaId ? "✏️ EDITANDO PLANTILLA" : editandoDietaId ? "✏️ EDITANDO PLAN" : modoDuplicar ? "⧉ DUPLICANDO PLAN" : "NUEVO PLAN NUTRICIONAL"}
           </div>
+          {modoDuplicar && !editandoDietaId && !editandoPlantillaDietaId && <div style={{ fontSize:11, color:theme.muted, marginBottom:10 }}>Ajustá lo que necesites (nombre, días, comidas) y guardá. Se crea como un plan nuevo, en borrador; el original no se modifica. Ojo: los días asignados se copian, revisalos.</div>}
           {editandoPlantillaDietaId && <div style={{ fontSize:11, color:theme.muted, marginBottom:10 }}>Estás editando esta plantilla compartida directamente. Los cambios van a afectar a los próximos alumnos a los que se la asignes, no a los que ya tienen un plan asignado a partir de ella.</div>}
           {editandoDietaId && <div style={{ fontSize:11, color:theme.muted, marginBottom:10 }}>Los cambios se guardan sobre este mismo plan.</div>}
 
@@ -6081,7 +6096,7 @@ function DietaCoach({ alumno }) {
               {Array.isArray(d.dias) && d.dias.length > 0
                 ? d.dias.map(dia => <Tag key={dia} color={theme.gold}>{dia}</Tag>)
                 : <Tag color={theme.muted}>Sin día asignado</Tag>}
-              <Tag color={theme.accentLight}>{d.calorias} kcal</Tag>
+              <Tag color={theme.accentLight}>{valorSumaPlan(d, "calorias")} kcal</Tag>
               <button onClick={() => {
                   if (creando && editandoDietaId === d.id) {
                     setCreando(false); setEditandoDietaId(null); setGuardarPlantillaDietaAbierto(false);
@@ -6092,14 +6107,16 @@ function DietaCoach({ alumno }) {
                 style={{ background: creando && editandoDietaId === d.id ? `${theme.muted}22` : `${theme.success}22`, border:`1px solid ${creando && editandoDietaId === d.id ? theme.muted : theme.success}44`, borderRadius:6, padding:"4px 8px", color: creando && editandoDietaId === d.id ? theme.muted : theme.success, fontSize:11, cursor:"pointer", fontWeight:700 }}>
                 {creando && editandoDietaId === d.id ? "▲ Cerrar" : "✏️ Editar"}
               </button>
+              <button onClick={() => cargarParaEditar(d, "duplicar")} title="Crear una copia de este plan (el original no se modifica)"
+                style={{ background:`${theme.accent}22`, border:`1px solid ${theme.accent}44`, borderRadius:6, padding:"4px 8px", color:theme.accentLight, fontSize:11, cursor:"pointer", fontWeight:700 }}>⧉ Duplicar</button>
               <button onClick={async () => { if (!confirm(`¿Eliminar el plan "${d.nombre || "sin nombre"}"?`)) return; await supabase.from("dietas").delete().eq("id", d.id); cargarDietas(); }}
                 style={{ background:`${theme.danger}22`, border:`1px solid ${theme.danger}44`, borderRadius:6, padding:"4px 8px", color:theme.danger, fontSize:11, cursor:"pointer", fontWeight:700 }}>× Eliminar</button>
             </div>
           </div>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:6, fontSize:12, color:theme.muted }}>
-            <span>Prot: {d.proteinas}g</span>
-            <span>Carbos: {d.carbos}g</span>
-            <span>Grasas: {d.grasas}g</span>
+            <span>Prot: {valorSumaPlan(d, "proteinas")}g</span>
+            <span>Carbos: {valorSumaPlan(d, "carbos")}g</span>
+            <span>Grasas: {valorSumaPlan(d, "grasas")}g</span>
           </div>
           {Array.isArray(d.comidas) && d.comidas.length > 0 && (
             <div style={{ marginTop:8, fontSize:11, color:theme.muted }}>
@@ -6193,7 +6210,7 @@ function DietaCoach({ alumno }) {
             <div key={p.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"8px 0", borderBottom:`1px solid ${theme.border}` }}>
               <div>
                 <div style={{ fontSize:13, fontWeight:700, color:theme.text }}>{p.nombre}</div>
-                <div style={{ fontSize:11, color:theme.muted }}>{(p.comidas || []).length} comidas · {p.calorias ? `${p.calorias} kcal` : "sin objetivo"}</div>
+                <div style={{ fontSize:11, color:theme.muted }}>{(p.comidas || []).length} comidas · {valorSumaPlan(p, "calorias")} kcal</div>
               </div>
               <div style={{ display:"flex", gap:6 }}>
                 <button onClick={() => editarPlantillaDieta(p)} style={{ background:`${theme.success}22`, border:`1px solid ${theme.success}44`, borderRadius:6, padding:"4px 8px", color:theme.success, fontSize:11, cursor:"pointer", fontWeight:700 }}>✏️ Editar</button>
