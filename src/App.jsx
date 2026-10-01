@@ -4043,6 +4043,7 @@ function RutinaScreen({ onNav, alumnoPreview }) {
                 // En formato "fallo" tampoco hay RIR (ni propuesto ni sentido).
                 const columnas = tipo !== "efectiva" ? "38px 1fr 46px 40px 24px"
                   : formatoEjercicio === "fallo" ? "38px 1fr 46px 40px 24px"
+                  : formatoEjercicio === "rir_sentido" ? "30px 1fr 44px 42px 42px 48px"
                   : "38px 1fr 46px 40px 44px 24px";
                 return (
                   <div key={idx}>
@@ -4052,7 +4053,7 @@ function RutinaScreen({ onNav, alumnoPreview }) {
                       <div style={{ display: "grid", gridTemplateColumns: columnas, gap: 3 }}>
                         {(tipo !== "efectiva" ? ["SERIE", "OBJETIVO", "KG", "REPS", "✓"]
                           : formatoEjercicio === "fallo" ? ["SERIE", "OBJETIVO", "KG", "REPS", "✓"]
-                          : formatoEjercicio === "rir_sentido" ? ["SERIE", "OBJETIVO", "KG", "REPS", "RIR", "SENTIDO"]
+                          : formatoEjercicio === "rir_sentido" ? ["SERIE", "OBJETIVO", "RIR", "KG", "REPS", "RIR REAL"]
                           : ["SERIE", "OBJETIVO", "KG", "REPS", "RIR", "✓"]).map(h => (
                           <span key={h} style={{ fontSize: 9, color: theme.muted, textAlign: "center", fontWeight: 700 }}>{h}</span>
                         ))}
@@ -4082,15 +4083,15 @@ function RutinaScreen({ onNav, alumnoPreview }) {
                       )}
                     </div>
                     <input value={reg.kg || ""} onChange={e => setReg(ej.id, idx, "kg", e.target.value)} placeholder={placeholderKg}
-                      style={{ background: theme.card, border: `1px solid ${reg.kg ? theme.accent + "66" : theme.border}`, borderRadius: 6, padding: "5px 2px", color: theme.text, fontSize: 12, fontWeight: 700, width: "100%", textAlign: "center", outline: "none", boxSizing: "border-box" }} />
+                      style={{ background: theme.card, border: `1px solid ${reg.kg ? theme.accent + "66" : theme.border}`, borderRadius: 6, padding: "5px 2px", color: theme.text, fontSize: 12, fontWeight: 700, width: "100%", textAlign: "center", outline: "none", boxSizing: "border-box", order: formatoEjercicio === "rir_sentido" ? 4 : undefined }} />
                     <input value={reg.reps || ""} onChange={e => setReg(ej.id, idx, "reps", e.target.value)} placeholder={s.reps}
-                      style={{ background: theme.card, border: `1px solid ${reg.reps ? theme.accent + "66" : theme.border}`, borderRadius: 6, padding: "5px 2px", color: theme.text, fontSize: 12, fontWeight: 700, width: "100%", textAlign: "center", outline: "none", boxSizing: "border-box" }} />
+                      style={{ background: theme.card, border: `1px solid ${reg.reps ? theme.accent + "66" : theme.border}`, borderRadius: 6, padding: "5px 2px", color: theme.text, fontSize: 12, fontWeight: 700, width: "100%", textAlign: "center", outline: "none", boxSizing: "border-box", order: formatoEjercicio === "rir_sentido" ? 5 : undefined }} />
                     {tipo === "efectiva" && formatoEjercicio !== "fallo" && (
-                      <div style={{ background: `${rc}18`, border: `1px solid ${rc}55`, borderRadius: 6, padding: "4px 2px", textAlign: "center", fontSize: 10, fontWeight: 800, color: rc }}>{getRirLabel(rir)}</div>
+                      <div style={{ background: `${rc}18`, border: `1px solid ${rc}55`, borderRadius: 6, padding: "4px 2px", textAlign: "center", fontSize: 10, fontWeight: 800, color: rc, order: formatoEjercicio === "rir_sentido" ? 3 : undefined }}>{getRirLabel(rir)}</div>
                     )}
                     {tipo === "efectiva" && formatoEjercicio === "rir_sentido" ? (
                       <select value={reg.rirSentido ?? ""} onChange={e => setReg(ej.id, idx, "rirSentido", e.target.value)}
-                        style={{ background: theme.card, border: `1px solid ${reg.rirSentido ? theme.success + "66" : theme.border}`, borderRadius: 6, padding: "3px 1px", color: theme.text, fontSize: 9, textAlign: "center", outline: "none", width: "100%", boxSizing: "border-box" }}>
+                        style={{ background: theme.card, border: `1px solid ${reg.rirSentido ? theme.success + "66" : theme.border}`, borderRadius: 6, padding: "3px 1px", color: theme.text, fontSize: 9, textAlign: "center", outline: "none", width: "100%", boxSizing: "border-box", order: 6 }}>
                         <option value="">--</option>
                         <option value="0">Fallo</option>
                         <option value="1">RIR 1</option>
