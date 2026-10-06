@@ -2137,6 +2137,10 @@ const [estadoPago, setEstadoPago] = useState(null);
           .eq("usuario_id", user.id)
           .eq("publicada", true)
           .order("created_at", { ascending: false });
+        // Los ejercicios que el coach "eliminó" de la rutina quedan guardados
+        // con activo=false (nunca se borran, para no perder el historial) --
+        // acá se ocultan para que el alumno no los vea ni los entrene.
+        if (rutinas) rutinas.forEach(r => { r.ejercicios = (r.ejercicios || []).filter(e => e.activo !== false); });
         if (rutinas && rutinas.length > 0) {
           setTieneRutinas(true);
           const rutinaHoy = calcularRutinaHoy(usuario, rutinas);
@@ -3249,6 +3253,65 @@ const MENSAJE_CHECKIN_SEMANAL = "¡Terminaste tu semana de entrenamiento! 💪 �
 // lo mismo de siempre). Quien renderiza esta pantalla en modo preview es
 // responsable de bloquear la interacción (ver VistaPreviaCoach), así que acá
 // adentro no hace falta ningún cambio en los botones/inputs.
+//
+// Panel para cambiar un ejercicio en el momento (ej. la máquina está ocupada
+// o no está disponible). No modifica la rutina: el cambio queda anotado solo
+// en el registro de esta sesión puntual. Si el ejercicio ya tiene "variantes"
+// definidas por el coach, aparecen como botones rápidos; si no, se escribe el
+// nombre a mano (con sugerencias de la planilla de ejercicios existente).
+function PanelCambioEjercicio({ ejercicio, nombresLib, valorActual, motivos, theme, onConfirmar, onCancelar }) {
+  const [nombre, setNombre] = useState(valorActual?.nombre || "");
+  const [motivo, setMotivo] = useState(valorActual?.motivo || "");
+  const [motivoLibre, setMotivoLibre] = useState(valorActual?.motivo && !motivos.slice(0, -1).includes(valorActual.motivo) ? valorActual.motivo : "");
+  const variantes = Array.isArray(ejercicio.variantes) ? ejercicio.variantes.filter(Boolean) : [];
+  const datalistId = `variantes-${ejercicio.id}`;
+  const motivoFinal = motivo === "Otro" ? motivoLibre : motivo;
+  return (
+    <div style={{ background: theme.surface, border: `1px solid ${theme.border}`, borderRadius: 10, padding: 12, marginBottom: 10 }}>
+      <div style={{ fontSize: 12, fontWeight: 800, color: theme.text, marginBottom: 8 }}>🔄 Cambiar "{ejercicio.nombre}" por otro</div>
+      {variantes.length > 0 && (
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 10, color: theme.muted, marginBottom: 4 }}>Variantes sugeridas</div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {variantes.map(v => (
+              <button key={v} onClick={() => setNombre(v)}
+                style={{ padding: "6px 10px", borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: "pointer", background: nombre === v ? `${theme.accent}33` : theme.card, border: `1px solid ${nombre === v ? theme.accent : theme.border}`, color: theme.text }}>{v}</button>
+            ))}
+          </div>
+        </div>
+      )}
+      <div style={{ marginBottom: 10 }}>
+        <div style={{ fontSize: 10, color: theme.muted, marginBottom: 4 }}>O escribe el reemplazo (sugiere desde tu planilla si ya existe)</div>
+        <input list={datalistId} value={nombre} onChange={e => setNombre(e.target.value)} placeholder="Nombre del ejercicio reemplazo"
+          style={{ width: "100%", boxSizing: "border-box", background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 8, padding: "8px 10px", color: theme.text, fontSize: 13 }} />
+        <datalist id={datalistId}>
+          {nombresLib.map(n => <option key={n} value={n} />)}
+        </datalist>
+      </div>
+      <div style={{ marginBottom: 10 }}>
+        <div style={{ fontSize: 10, color: theme.muted, marginBottom: 4 }}>¿Por qué lo cambiaste? (opcional)</div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {motivos.map(m => (
+            <button key={m} onClick={() => setMotivo(m)}
+              style={{ padding: "6px 10px", borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: "pointer", background: motivo === m ? `${theme.accent}33` : theme.card, border: `1px solid ${motivo === m ? theme.accent : theme.border}`, color: theme.text }}>{m}</button>
+          ))}
+        </div>
+        {motivo === "Otro" && (
+          <input value={motivoLibre} onChange={e => setMotivoLibre(e.target.value)} placeholder="Especificar..."
+            style={{ width: "100%", boxSizing: "border-box", marginTop: 6, background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 8, padding: "8px 10px", color: theme.text, fontSize: 13 }} />
+        )}
+      </div>
+      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+        {valorActual?.nombre && (
+          <button onClick={() => onConfirmar(null, null)} style={{ padding: "8px 12px", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", background: "transparent", border: `1px solid ${theme.border}`, color: theme.text }}>Volver al original</button>
+        )}
+        <button onClick={onCancelar} style={{ padding: "8px 12px", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", background: "transparent", border: `1px solid ${theme.border}`, color: theme.text }}>Cancelar</button>
+        <button onClick={() => nombre.trim() && onConfirmar(nombre.trim(), motivoFinal)} disabled={!nombre.trim()}
+          style={{ padding: "8px 12px", borderRadius: 8, fontSize: 12, fontWeight: 800, cursor: nombre.trim() ? "pointer" : "not-allowed", opacity: nombre.trim() ? 1 : 0.5, background: `linear-gradient(135deg, ${theme.accentLight}, ${theme.accent})`, border: "none", color: "#fff" }}>Confirmar cambio</button>
+      </div>
+    </div>
+  );
+}
 function RutinaScreen({ onNav, alumnoPreview }) {
   const [rutinas, setRutinas] = useState([]);
   const [rutinaActiva, setRutinaActiva] = useState(null);
@@ -3264,6 +3327,26 @@ function RutinaScreen({ onNav, alumnoPreview }) {
   const [verInfoRutina, setVerInfoRutina] = useState(false);
   const [minijuegoAbierto, setMinijuegoAbierto] = useState(false);
   const [tipoMinijuego, setTipoMinijuego] = useState(null); // se sortea al abrir, no en cada render
+
+  // Cambio de ejercicio en el momento (ej. no hay máquina / está ocupada):
+  // sustitutos[ejId] = { nombre, motivo } -- no modifica la rutina ni crea
+  // un ejercicio nuevo, solo queda anotado en el registro de esta sesión.
+  const [sustitutos, setSustitutos] = useState({});
+  const [panelCambioAbierto, setPanelCambioAbierto] = useState(null);
+  const [nombresEjerciciosLib, setNombresEjerciciosLib] = useState([]);
+  useEffect(() => {
+    supabase.from("ejercicios").select("nombre").eq("activo", true).then(({ data }) => {
+      if (data) setNombresEjerciciosLib([...new Set(data.map(d => d.nombre).filter(Boolean))].sort());
+    });
+  }, []);
+  const MOTIVOS_CAMBIO = ["No hay máquina disponible", "Máquina ocupada / mucha espera", "Molestia o dolor", "Otro"];
+
+  // Autoguardado del avance del entreno en el celular (localStorage): si el
+  // alumno sale de la app por accidente a mitad de entreno (se minimiza, el
+  // celular la cierra en segundo plano, recarga por error), al volver a
+  // entrar recupera dónde había quedado en vez de empezar de nuevo. Nunca se
+  // usa en la "Vista previa" del coach (alumnoPreview), que es solo lectura.
+  const claveProgresoLocal = (uid, rutinaId) => uid && rutinaId ? `progreso_entreno_${uid}_${rutinaId}_${fechaOperativaStr()}` : null;
   const [edadAlumno, setEdadAlumno] = useState(null);
   const hoyStrRutina = fechaOperativaStr();
 
@@ -3351,12 +3434,40 @@ function RutinaScreen({ onNav, alumnoPreview }) {
 
   useEffect(() => {
     setCompletado(false);
-    setRegistros({});
+    // Si hay avance guardado localmente para esta rutina y hoy (porque el
+    // alumno salió de la app sin terminar), se recupera en vez de partir en
+    // blanco. En la vista previa del coach nunca se guarda ni se restaura.
+    const clave = !alumnoPreview ? claveProgresoLocal(userId, rutinaActiva?.id) : null;
+    let restaurado = null;
+    if (clave) {
+      try {
+        const guardado = window.localStorage.getItem(clave);
+        if (guardado) restaurado = JSON.parse(guardado);
+      } catch (e) { /* localStorage no disponible o dato corrupto: se ignora */ }
+    }
+    setRegistros(restaurado || {});
+    setSustitutos({});
+    setPanelCambioAbierto(null);
     limpiarIntervaloDescanso();
     setEstadoSerie("idle");
     setSerieObjetivo(null);
     setSegDescanso(0);
-  }, [rutinaActiva]);
+  }, [rutinaActiva, userId]);
+
+  // Guarda el avance en el celular cada vez que cambia algo (marcar serie,
+  // cambiar kg/reps, etc.) -- liviano, así que no hace falta debounce.
+  useEffect(() => {
+    if (alumnoPreview) return;
+    const clave = claveProgresoLocal(userId, rutinaActiva?.id);
+    if (!clave) return;
+    try {
+      if (Object.keys(registros).length > 0) {
+        window.localStorage.setItem(clave, JSON.stringify(registros));
+      } else {
+        window.localStorage.removeItem(clave);
+      }
+    } catch (e) { /* localStorage lleno o no disponible: se sigue igual, solo no queda el respaldo */ }
+  }, [registros, userId, rutinaActiva?.id, alumnoPreview]);
 
   const [ultimasCargas, setUltimasCargas] = useState({});
 
@@ -3438,6 +3549,9 @@ function RutinaScreen({ onNav, alumnoPreview }) {
           .eq("usuario_id", uid)
           .eq("publicada", true)
           .order("created_at", { ascending: false });
+        // Ocultar ejercicios eliminados (activo=false) -- siguen en la base
+        // de datos por su historial, pero no se entrenan más.
+        if (data) data.forEach(r => { r.ejercicios = (r.ejercicios || []).filter(e => e.activo !== false); });
         if (data && data.length > 0) {
           setRutinas(data);
           const rutinaHoy = calcularRutinaHoy(usuarioModo, data);
@@ -3978,7 +4092,12 @@ function RutinaScreen({ onNav, alumnoPreview }) {
                   {ej.grupo_superserie && (
                     <div style={{ display:"inline-block", fontSize:9, fontWeight:800, color:theme.gold, background:`${theme.gold}18`, border:`1px solid ${theme.gold}44`, borderRadius:6, padding:"2px 6px", marginBottom:4 }}>🔗 SUPERSERIE {ej.grupo_superserie} · sin descanso entre ejercicios</div>
                   )}
-                  <div style={{ fontSize: 14, fontWeight: 800, color: theme.text, marginBottom: 4, textTransform:"uppercase", letterSpacing:0.4, lineHeight:1.3, display:"-webkit-box", WebkitLineClamp:2, WebkitBoxOrient:"vertical", overflow:"hidden" }}>{ej.nombre}</div>
+                  <div style={{ fontSize: 14, fontWeight: 800, color: theme.text, marginBottom: 4, textTransform:"uppercase", letterSpacing:0.4, lineHeight:1.3, display:"-webkit-box", WebkitLineClamp:2, WebkitBoxOrient:"vertical", overflow:"hidden" }}>
+                    {sustitutos[ej.id]?.nombre || ej.nombre}
+                  </div>
+                  {sustitutos[ej.id]?.nombre && (
+                    <div style={{ fontSize: 10, color: theme.muted, marginBottom: 4 }}>en vez de "{ej.nombre}"{sustitutos[ej.id]?.motivo ? ` · ${sustitutos[ej.id].motivo}` : ""}</div>
+                  )}
                   <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
                     <div style={{ fontSize: 11, color: theme.muted }}>⏱ Descanso: {ej.descanso_desde && ej.descanso_hasta ? `${ej.descanso_desde}-${ej.descanso_hasta}s` : `${ej.descanso}s`}</div>
                     <div style={{ fontSize: 9.5, fontWeight:800, color: theme.muted, background:theme.card, border:`1px solid ${theme.border}`, borderRadius:6, padding:"2px 6px" }} title="Tempo: negativa-pausa-positiva">🆃 {ej.tempo || "3-1-1"}</div>
@@ -3988,7 +4107,31 @@ function RutinaScreen({ onNav, alumnoPreview }) {
               {ej.video_url && (
                 <a href={ej.video_url} target="_blank" rel="noreferrer" style={{ width: 36, height: 36, borderRadius: 10, background: theme.surface, display: "flex", alignItems: "center", justifyContent: "center", border: `1px solid ${theme.border}`, flexShrink: 0, textDecoration: "none" }}>▶️</a>
               )}
+              {!alumnoPreview && (
+                <button onClick={() => setPanelCambioAbierto(panelCambioAbierto === ej.id ? null : ej.id)}
+                  title="Cambiar este ejercicio por otro (ej. no hay máquina)"
+                  style={{ width: 36, height: 36, borderRadius: 10, background: panelCambioAbierto === ej.id ? `${theme.accent}33` : theme.surface, display: "flex", alignItems: "center", justifyContent: "center", border: `1px solid ${panelCambioAbierto === ej.id ? theme.accent : theme.border}`, flexShrink: 0, cursor: "pointer", fontSize: 16 }}>🔄</button>
+              )}
             </div>
+
+            {panelCambioAbierto === ej.id && (
+              <PanelCambioEjercicio
+                ejercicio={ej}
+                nombresLib={nombresEjerciciosLib}
+                valorActual={sustitutos[ej.id]}
+                motivos={MOTIVOS_CAMBIO}
+                theme={theme}
+                onConfirmar={(nombre, motivo) => {
+                  if (!nombre) {
+                    setSustitutos(prev => { const next = { ...prev }; delete next[ej.id]; return next; });
+                  } else {
+                    setSustitutos(prev => ({ ...prev, [ej.id]: { nombre, motivo } }));
+                  }
+                  setPanelCambioAbierto(null);
+                }}
+                onCancelar={() => setPanelCambioAbierto(null)}
+              />
+            )}
 
             {(() => {
               let contAprox = 0, contEfect = 0;
@@ -4244,6 +4387,8 @@ function RutinaScreen({ onNav, alumnoPreview }) {
                       reps: parseInt(repsFinal) || null,
                       rir_sentido: reg.rirSentido !== undefined && reg.rirSentido !== "" ? parseInt(reg.rirSentido) : null,
                       fecha: hoyStr,
+                      ejercicio_sustituto: sustitutos[ej.id]?.nombre || null,
+                      motivo_sustituto: sustitutos[ej.id]?.motivo || null,
                     });
                   }
                 });
@@ -4284,6 +4429,10 @@ function RutinaScreen({ onNav, alumnoPreview }) {
                 }
               }
             }
+            // Entreno guardado de verdad en la base: se borra el respaldo
+            // local, ya cumplió su función.
+            const clave = claveProgresoLocal(userId, rutinaActiva.id);
+            if (clave) { try { window.localStorage.removeItem(clave); } catch (e) {} }
             setCompletado(true);
           }} style={{ background: `linear-gradient(135deg, ${theme.accentLight}, ${theme.accent})`, boxShadow: `0 0 18px ${theme.accent}66`, padding: 16, fontSize: 15, fontWeight: 800, letterSpacing: 1, borderRadius: 14 }}>✓ ENTRENAMIENTO COMPLETADO</Btn>
       )}
@@ -5219,6 +5368,8 @@ function DietaCoach({ alumno }) {
   // plantilla). Acá el formulario actualiza la plantilla compartida.
   const [editandoPlantillaDietaId, setEditandoPlantillaDietaId] = useState(null);
   const formRef = useRef(null);
+  const [historialDietas, setHistorialDietas] = useState([]);
+  const [verHistorialDietas, setVerHistorialDietas] = useState(false);
 
   const [nombrePlan, setNombrePlan] = useState("");
   const [diasDieta, setDiasDieta] = useState([]);
@@ -5391,6 +5542,8 @@ function DietaCoach({ alumno }) {
     if (!alumno?.id) return;
     const { data } = await supabase.from("dietas").select("*").eq("usuario_id", alumno.id).order("created_at", { ascending: false });
     if (data) setDietas(ordenarDietasPorDia(data));
+    const { data: historial } = await supabase.from("historial_dietas").select("*").eq("usuario_id", alumno.id).order("fecha", { ascending: false });
+    if (historial) setHistorialDietas(historial);
     setLoading(false);
   };
 
@@ -5597,6 +5750,21 @@ function DietaCoach({ alumno }) {
       const { error } = await supabase.from("dietas").insert({ usuario_id: alumno.id, ...datos, publicada: false });
       if (error) { alert("Error creando dieta: " + error.message); setGuardando(false); return; }
     }
+    // Snapshot de kcal/macros de este plan en el historial (día inferior,
+    // día superior, descanso, etc.) -- sirve para ir viendo cómo cambió mes
+    // a mes. Si ya se había guardado hoy este mismo plan, se reemplaza en
+    // vez de duplicar (onConflict por alumno+nombre del plan+fecha).
+    const totalesPlan = sumatoriaDePlan({ comidas: datos.comidas });
+    const { error: errHist } = await supabase.from("historial_dietas").upsert({
+      usuario_id: alumno.id,
+      nombre_plan: nombrePlan,
+      fecha: fechaOperativaStr(),
+      kcal: Math.round(totalesPlan.calorias) || null,
+      proteinas: Math.round(totalesPlan.proteinas) || null,
+      carbos: Math.round(totalesPlan.carbos) || null,
+      grasas: Math.round(totalesPlan.grasas) || null,
+    }, { onConflict: "usuario_id,nombre_plan,fecha" });
+    if (errHist) console.error("No se pudo guardar el historial de dieta:", errHist.message);
     recordarSuplementosEnBiblioteca(datos.suplementos_opcionales);
     setGuardando(false);
     setExito(true);
@@ -6129,6 +6297,44 @@ function DietaCoach({ alumno }) {
       {exito && (
         <Card style={{ textAlign:"center", padding:16, marginBottom:14, background:`${theme.success}18`, border:`1px solid ${theme.success}44` }}>
           <div style={{ fontSize:13, fontWeight:700, color:theme.success }}>✅ Dieta guardada correctamente</div>
+        </Card>
+      )}
+
+      {/* Historial de calorías/macros guardados cada vez que se guarda un plan */}
+      {!loading && historialDietas.length > 0 && (
+        <Card style={{ marginBottom:14 }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", cursor:"pointer" }} onClick={() => setVerHistorialDietas(v => !v)}>
+            <div style={{ fontSize:13, fontWeight:800, color:theme.text }}>📊 Historial de dieta</div>
+            <div style={{ fontSize:12, color:theme.muted }}>{verHistorialDietas ? "▲ Ocultar" : "▼ Ver"}</div>
+          </div>
+          {verHistorialDietas && (
+            <div style={{ marginTop:10, overflowX:"auto" }}>
+              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
+                <thead>
+                  <tr style={{ textAlign:"left", color:theme.muted }}>
+                    <th style={{ padding:"4px 6px" }}>Fecha</th>
+                    <th style={{ padding:"4px 6px" }}>Plan</th>
+                    <th style={{ padding:"4px 6px" }}>Kcal</th>
+                    <th style={{ padding:"4px 6px" }}>Prot.</th>
+                    <th style={{ padding:"4px 6px" }}>Carbos</th>
+                    <th style={{ padding:"4px 6px" }}>Grasas</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {historialDietas.map(h => (
+                    <tr key={h.id} style={{ borderTop:`1px solid ${theme.border}` }}>
+                      <td style={{ padding:"4px 6px", color:theme.text }}>{h.fecha ? new Date(h.fecha + "T00:00:00").toLocaleDateString("es-CL", { day:"2-digit", month:"short" }) : "—"}</td>
+                      <td style={{ padding:"4px 6px", color:theme.text }}>{h.nombre_plan || "—"}</td>
+                      <td style={{ padding:"4px 6px", color:theme.text }}>{h.kcal ?? "—"}</td>
+                      <td style={{ padding:"4px 6px", color:theme.text }}>{h.proteinas ?? "—"}</td>
+                      <td style={{ padding:"4px 6px", color:theme.text }}>{h.carbos ?? "—"}</td>
+                      <td style={{ padding:"4px 6px", color:theme.text }}>{h.grasas ?? "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </Card>
       )}
 
@@ -7440,12 +7646,18 @@ function CoachPanel({ onNav, onVerAlumno }) {
     }
     setEliminandoId(a.id);
     try {
+      // "registros_entreno" tiene que borrarse ANTES que "ejercicios" (cada
+      // registro apunta a un ejercicio puntual) -- si no, la base rechaza el
+      // borrado de "ejercicios" por la misma razón que al eliminar un
+      // ejercicio suelto desde una rutina.
+      await supabase.from("registros_entreno").delete().eq("usuario_id", a.id);
       const { data: rutinasDelAlumno } = await supabase.from("rutinas").select("id").eq("usuario_id", a.id);
       const rutinaIds = (rutinasDelAlumno || []).map(r => r.id);
       if (rutinaIds.length > 0) {
         await supabase.from("ejercicios").delete().in("rutina_id", rutinaIds);
       }
       for (const tabla of TABLAS_POR_ALUMNO) {
+        if (tabla === "registros_entreno") continue; // ya se borró arriba
         await supabase.from(tabla).delete().eq("usuario_id", a.id);
       }
       await supabase.from("usuarios").delete().eq("id", a.id);
@@ -8560,6 +8772,10 @@ function RutinaCoach({ alumno }) {
       .select("*, ejercicios(*)")
       .eq("usuario_id", alumno.id)
       .order("created_at", { ascending: false });
+    // Ocultar de la lista/edición los ejercicios que se "eliminaron"
+    // (activo=false) -- se conservan en la base por su historial, pero
+    // el coach ya no los ve ni los vuelve a editar desde acá.
+    if (data) data.forEach(r => { r.ejercicios = (r.ejercicios || []).filter(e => e.activo !== false); });
     if (data) {
       if (modoAlumno === "ciclo") {
         // En modo ciclo se ordena según la primera vez que aparece cada
@@ -8750,6 +8966,16 @@ function RutinaCoach({ alumno }) {
         .eq("id", editandoRutinaId);
       if (errRutina) { alert("Error actualizando rutina: " + errRutina.message); setGuardando(false); return; }
 
+      // Ejercicios que el coach sacó de la rutina durante esta edición: se
+      // marcan como inactivos (nunca se borran) para no perder el historial
+      // de cargas/PRs del alumno. Va primero para que, si en esta misma
+      // edición se vuelve a agregar un ejercicio con el mismo nombre, la
+      // búsqueda de reactivación de abajo ya lo encuentre como inactivo.
+      for (const idBorrar of ejerciciosEliminados) {
+        const { error: errDel } = await supabase.from("ejercicios").update({ activo: false }).eq("id", idBorrar);
+        if (errDel) { alert("Error eliminando ejercicio: " + errDel.message); setGuardando(false); return; }
+      }
+
       for (let i = 0; i < ejercicios.length; i++) {
         const ej = ejercicios[i];
         if (!ej.nombre) continue;
@@ -8766,25 +8992,31 @@ function RutinaCoach({ alumno }) {
           tempo: `${ej.tempoBajada || "3"}-${ej.tempoPausa || "1"}-${ej.tempoSubida || "1"}`,
           grupo_superserie: ej.grupoSuperserie || null,
           formato_series: ej.formatoSerie || null,
+          variantes: ej.variantes || [],
           orden: i,
           series: seriesCombinadas
         };
         if (ej._dbId) {
           // Ya existía: se actualiza en su lugar (mismo id, conserva el historial de cargas)
-          const { error } = await supabase.from("ejercicios").update(datosEjercicio).eq("id", ej._dbId);
+          const { error } = await supabase.from("ejercicios").update({ ...datosEjercicio, activo: true }).eq("id", ej._dbId);
           if (error) { alert("Error actualizando ejercicio: " + error.message); setGuardando(false); return; }
         } else {
-          // Ejercicio nuevo agregado durante la edición
-          const { error } = await supabase.from("ejercicios").insert({ rutina_id: editandoRutinaId, ...datosEjercicio });
-          if (error) { alert("Error agregando ejercicio: " + error.message); setGuardando(false); return; }
+          // Ejercicio nuevo agregado durante la edición -- si ya existe uno
+          // inactivo (eliminado antes) con el mismo nombre en esta misma
+          // rutina, se reactiva en vez de crear uno nuevo, para que recupere
+          // todo su historial de cargas/PRs previo.
+          const { data: inactivo } = await supabase
+            .from("ejercicios").select("id")
+            .eq("rutina_id", editandoRutinaId).eq("nombre", ej.nombre).eq("activo", false)
+            .limit(1).maybeSingle();
+          if (inactivo) {
+            const { error } = await supabase.from("ejercicios").update({ ...datosEjercicio, activo: true }).eq("id", inactivo.id);
+            if (error) { alert("Error reactivando ejercicio: " + error.message); setGuardando(false); return; }
+          } else {
+            const { error } = await supabase.from("ejercicios").insert({ rutina_id: editandoRutinaId, activo: true, ...datosEjercicio });
+            if (error) { alert("Error agregando ejercicio: " + error.message); setGuardando(false); return; }
+          }
         }
-      }
-
-      // Ejercicios que el coach sacó de la rutina durante esta edición: se
-      // borran recién ahora, al confirmar el guardado.
-      for (const idBorrar of ejerciciosEliminados) {
-        const { error: errDel } = await supabase.from("ejercicios").delete().eq("id", idBorrar);
-        if (errDel) { alert("Error eliminando ejercicio: " + errDel.message); setGuardando(false); return; }
       }
     } else {
       // Rutina nueva o duplicada: se crea desde cero, como borrador -- el
@@ -8814,6 +9046,7 @@ function RutinaCoach({ alumno }) {
               tempo: `${ej.tempoBajada || "3"}-${ej.tempoPausa || "1"}-${ej.tempoSubida || "1"}`,
               grupo_superserie: ej.grupoSuperserie || null,
               formato_series: ej.formatoSerie || null,
+              variantes: ej.variantes || [],
               orden: i,
               series: seriesCombinadas
             });
@@ -8878,6 +9111,7 @@ function RutinaCoach({ alumno }) {
         tempoSubida: (ej.tempo || "3-1-1").split("-")[2] || "1",
         grupoSuperserie: ej.grupo_superserie || "",
         formatoSerie: ej.formato_series || null,
+        variantes: Array.isArray(ej.variantes) ? ej.variantes : [],
         seriesAproximacion,
         seriesEfectivas: seriesEfectivas.length > 0 ? seriesEfectivas : [{ reps: "10", rir: 2, tecnica: "normal" }],
       };
@@ -9082,6 +9316,14 @@ function RutinaCoach({ alumno }) {
                 <input style={{ ...inputStyle, width:70 }} placeholder="Ej: A" maxLength={3}
                   value={ej.grupoSuperserie || ""} onChange={e => updateEj(ejIdx, "grupoSuperserie", e.target.value.toUpperCase())} />
                 <div style={{ fontSize:10, color:theme.muted, marginTop:4, lineHeight:1.4 }}>Ejercicios con la misma letra, uno debajo del otro en la lista, se hacen en superserie/biserie: sin descanso entre ellos, el descanso se aplica recién al cerrar la ronda completa.</div>
+              </div>
+
+              <div style={{ marginBottom:10 }}>
+                <div style={{ fontSize:10, color:theme.muted, marginBottom:3 }}>Variantes sugeridas (opcional, separadas por coma)</div>
+                <input style={inputStyle} placeholder="Ej: Prensa, Zancada"
+                  value={(ej.variantes || []).join(", ")}
+                  onChange={e => updateEj(ejIdx, "variantes", e.target.value.split(",").map(v => v.trim()).filter(Boolean))} />
+                <div style={{ fontSize:10, color:theme.muted, marginTop:4, lineHeight:1.4 }}>Si el alumno no puede hacer este ejercicio (máquina ocupada, etc.), estas aparecen como botones rápidos para cambiarlo en el momento.</div>
               </div>
 
               {/* Aproximación (reemplaza al antiguo calentamiento específico del
