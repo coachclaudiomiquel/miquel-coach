@@ -7072,8 +7072,10 @@ function MensajesScreen({ onNav }) {
 function ProgresoMetricas({ userId, esCoach = false }) {
   const [loading, setLoading] = useState(true);
   const [reportes, setReportes] = useState([]);
-  const [fotoAntes, setFotoAntes] = useState(null);
-  const [fotoActual, setFotoActual] = useState(null);
+  // Fotos de la comparación: un objeto por momento, con los 4 ángulos
+  // (foto_frente, foto_espalda, foto_perf_der, foto_perf_izq).
+  const [fotosAntes, setFotosAntes] = useState({});
+  const [fotosActual, setFotosActual] = useState({});
   const [prs, setPrs] = useState([]);
   const [progresionExpandida, setProgresionExpandida] = useState({});
   const [lightbox, setLightbox] = useState(null);
@@ -7098,6 +7100,7 @@ function ProgresoMetricas({ userId, esCoach = false }) {
   const pasosHideTimerRef = useRef(null);
   const [pasosScrub, setPasosScrub] = useState(null); // { idx, left } | null
 
+  const pasosUltimoIdxRef = useRef(null);
   const pasosActualizarScrub = (clientX) => {
     const bars = pasosBarRefs.current.filter(Boolean);
     if (!bars.length) return;
@@ -7109,6 +7112,7 @@ function ProgresoMetricas({ userId, esCoach = false }) {
       if (dist < mejorDist) { mejorDist = dist; idx = i; }
     });
     const bar = bars[idx];
+    pasosUltimoIdxRef.current = idx;
     clearTimeout(pasosHideTimerRef.current);
     setPasosScrub({ idx, left: bar.offsetLeft + bar.offsetWidth / 2 });
   };
@@ -7169,10 +7173,10 @@ function ProgresoMetricas({ userId, esCoach = false }) {
       const [{ data: reportesData }, { data: usrPeso }] = await Promise.all([
         supabase
           .from("reportes")
-          .select("peso, fecha, foto_frente, porc_grasa, cintura, cadera, brazo, pecho, pierna")
+          .select("peso, fecha, foto_frente, foto_espalda, foto_perf_der, foto_perf_izq, porc_grasa, cintura, cadera, brazo, pecho, pierna")
           .eq("usuario_id", userId)
           .order("fecha", { ascending: true }),
-        supabase.from("usuarios").select("peso_actual, created_at").eq("id", userId).maybeSingle(),
+        supabase.from("usuarios").select("peso_actual, created_at, porc_grasa, cintura_inicial, cadera_inicial, brazo_inicial, pecho_inicial, pierna_inicial").eq("id", userId).maybeSingle(),
       ]);
       const reportesConPeso = (reportesData || []).filter(c => c.peso);
       let historialPeso = reportesConPeso;
@@ -7182,7 +7186,10 @@ function ProgresoMetricas({ userId, esCoach = false }) {
         const esRealmenteElMasAntiguo = reportesConPeso.length === 0 || fechaAnamnesis < reportesConPeso[0].fecha;
         if (!yaHayReporteEsaFecha && esRealmenteElMasAntiguo) {
           historialPeso = [
-            { peso: usrPeso.peso_actual, fecha: fechaAnamnesis, foto_frente: null, porc_grasa: null, cintura: null, cadera: null, brazo: null, pecho: null, pierna: null, deAnamnesis: true },
+            // Las medidas de la Anamnesis (las del alumno o las que el coach
+            // completó/corrigió a mano en su perfil) entran como punto de
+            // partida de "Evolución de medidas", igual que el peso.
+            { peso: usrPeso.peso_actual, fecha: fechaAnamnesis, foto_frente: null, porc_grasa: usrPeso.porc_grasa || null, cintura: usrPeso.cintura_inicial || null, cadera: usrPeso.cadera_inicial || null, brazo: usrPeso.brazo_inicial || null, pecho: usrPeso.pecho_inicial || null, pierna: usrPeso.pierna_inicial || null, deAnamnesis: true },
             ...reportesConPeso,
           ];
         }
@@ -7225,11 +7232,17 @@ function ProgresoMetricas({ userId, esCoach = false }) {
       setAnillos30({ entrenoPct, nutriPct, sueñoPct });
 
       // Foto "antes": la de la Anamnesis. Foto "actual": el reporte más reciente con foto.
-      const { data: usr } = await supabase.from("usuarios").select("foto_frente").eq("id", userId).single();
-      setFotoAntes(usr?.foto_frente || null);
+      const { data: usr } = await supabase.from("usuarios").select("foto_frente, foto_espalda, foto_perf_der, foto_perf_izq").eq("id", userId).single();
+      setFotosAntes(usr || {});
       if (reportesData) {
-        const conFoto = reportesData.filter(c => c.foto_frente);
-        setFotoActual(conFoto.length > 0 ? conFoto[conFoto.length - 1].foto_frente : null);
+        // Para cada ángulo, la foto "actual" es la del reporte más reciente
+        // que la tenga (así un reporte sin alguna foto no borra el ángulo).
+        const actual = {};
+        ["foto_frente", "foto_espalda", "foto_perf_der", "foto_perf_izq"].forEach(col => {
+          const conFoto = reportesData.filter(c => c[col]);
+          actual[col] = conFoto.length > 0 ? conFoto[conFoto.length - 1][col] : null;
+        });
+        setFotosActual(actual);
       }
 
       // PRs reales: solo de los 4 ejercicios básicos, y solo si están en su rutina
@@ -7377,10 +7390,16 @@ function ProgresoMetricas({ userId, esCoach = false }) {
                 <div ref={pasosBarsRef}
                   onPointerDown={e => { pasosDraggingRef.current = true; clearTimeout(pasosHideTimerRef.current); e.currentTarget.setPointerCapture?.(e.pointerId); pasosActualizarScrub(e.clientX); }}
                   onPointerMove={e => { if (pasosDraggingRef.current || e.pointerType === "mouse") pasosActualizarScrub(e.clientX); }}
-                  onPointerUp={pasosTerminarScrub}
+                  onPointerUp={() => {
+                    pasosTerminarScrub();
+                    // Solo el coach: al soltar sobre una barra, el corrector de
+                    // pasos de abajo se llena solo con esa fecha y su valor.
+                    const p = esCoach ? pasosResumen[pasosUltimoIdxRef.current] : null;
+                    if (p) { setFechaEditarPasos(p.fecha); setValorEditarPasos(String(p.pasos)); setPasosGuardadoOk(false); }
+                  }}
                   onPointerCancel={pasosTerminarScrub}
                   onPointerLeave={() => { if (!pasosDraggingRef.current) pasosTerminarScrub(); }}
-                  style={{ position: "relative", display: "flex", alignItems: "flex-end", gap: Math.max(2, 4 - Math.floor(pasosResumen.length / 15)), height: barH + 24, overflowX: pasosResumen.length > 20 ? "auto" : "visible", touchAction: "pan-y", cursor: "pointer" }}>
+                  style={{ position: "relative", display: "flex", alignItems: "flex-end", gap: Math.max(2, 4 - Math.floor(pasosResumen.length / 15)), height: barH + 46, overflow: "visible", touchAction: "pan-y", cursor: "pointer" }}>
                   {pScrub && (
                     <>
                       <div style={{ position: "absolute", top: 0, bottom: 2, width: 1, left: pasosScrub.left, background: "rgba(240,240,245,0.28)", pointerEvents: "none" }} />
@@ -7396,6 +7415,9 @@ function ProgresoMetricas({ userId, esCoach = false }) {
                     const fechaCorta = new Date(p.fecha + "T00:00:00").toLocaleDateString("es-CL", { day: "numeric", month: "short" });
                     return (
                       <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0, width: anchoBarra }}>
+                        <div style={{ writingMode: "vertical-rl", transform: "rotate(180deg)", fontSize: 7, lineHeight: 1, color: theme.muted, marginBottom: 2, whiteSpace: "nowrap", pointerEvents: "none" }}>
+                          {p.pasos >= 1000 ? `${(p.pasos / 1000).toLocaleString("es-CL", { maximumFractionDigits: 1 })}k` : p.pasos}
+                        </div>
                         <div ref={el => (pasosBarRefs.current[i] = el)}
                           style={{ width: "100%", height: h, background: `linear-gradient(180deg, ${theme.accentLight}, ${theme.accent})`, borderRadius: 3, boxShadow: pasosScrub?.idx === i ? `0 0 8px ${theme.accentLight}` : `0 0 6px ${theme.accent}55` }} />
                         {(i === 0 || i === pasosResumen.length - 1 || pasosResumen.length <= 8) && (
@@ -7406,7 +7428,7 @@ function ProgresoMetricas({ userId, esCoach = false }) {
                   })}
                 </div>
               </div>
-              <div style={{ fontSize: 10, color: theme.muted, marginTop: 6, textAlign: "center" }}>Tocá o pasá el mouse sobre las barras para ver el detalle de un día</div>
+              <div style={{ fontSize: 10, color: theme.muted, marginTop: 6, textAlign: "center" }}>Tocá o pasá el mouse sobre las barras para ver el detalle de un día{esCoach ? " · al soltar sobre una barra se carga abajo para corregirla" : ""}</div>
             </>
           );
         })()}
@@ -7474,25 +7496,31 @@ function ProgresoMetricas({ userId, esCoach = false }) {
 
       <Card style={{ marginBottom: 14 }}>
         <div style={{ fontSize: 12, color: theme.muted, marginBottom: 10 }}>COMPARACIÓN DE FOTOS</div>
-        {!fotoAntes && !fotoActual ? (
-          <div style={{ fontSize: 13, color: theme.muted }}>Aún no hay fotos para comparar.</div>
-        ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            {[{label:"Antes (Anamnesis)", url: fotoAntes, actual:false},{label:"Actual (Reporte)", url: fotoActual, actual:true}].map(({label,url,actual})=>(
-              <div key={label} style={{ background: theme.surface, borderRadius: 10, overflow:"hidden", border: `1px solid ${actual?theme.accent+"44":theme.border}` }}>
-                {url ? (
-                  <img src={url} alt={label} onClick={() => setLightbox(url)} style={{ width:"100%", height:120, objectFit:"cover", cursor:"pointer" }} />
-                ) : (
-                  <div style={{ height:120, display:"flex", alignItems:"center", justifyContent:"center" }}><span style={{ fontSize: 24, opacity:0.3 }}>📷</span></div>
-                )}
-                <div style={{ padding:"6px 4px", textAlign:"center" }}>
-                  <span style={{ fontSize: 11, color: theme.muted }}>{label}</span>
-                  {actual && url && <div><Tag color={theme.success}>Actual</Tag></div>}
-                </div>
+        {(() => {
+          const angulos = [["Frente", "foto_frente"], ["Espalda", "foto_espalda"], ["Perfil derecho", "foto_perf_der"], ["Perfil izquierdo", "foto_perf_izq"]]
+            .filter(([, col]) => fotosAntes[col] || fotosActual[col]);
+          if (angulos.length === 0) return <div style={{ fontSize: 13, color: theme.muted }}>Aún no hay fotos para comparar.</div>;
+          return angulos.map(([nombreAngulo, col]) => (
+            <div key={col} style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 11, color: theme.text, fontWeight: 700, marginBottom: 6 }}>{nombreAngulo}</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                {[{ label: "Antes (Anamnesis)", url: fotosAntes[col], actual: false }, { label: "Actual (Reporte)", url: fotosActual[col], actual: true }].map(({ label, url, actual }) => (
+                  <div key={label} style={{ background: theme.surface, borderRadius: 10, overflow: "hidden", border: `1px solid ${actual ? theme.accent + "44" : theme.border}` }}>
+                    {url ? (
+                      <img src={url} alt={`${nombreAngulo} - ${label}`} onClick={() => setLightbox(url)} style={{ width: "100%", height: 120, objectFit: "cover", cursor: "pointer" }} />
+                    ) : (
+                      <div style={{ height: 120, display: "flex", alignItems: "center", justifyContent: "center" }}><span style={{ fontSize: 24, opacity: 0.3 }}>📷</span></div>
+                    )}
+                    <div style={{ padding: "6px 4px", textAlign: "center" }}>
+                      <span style={{ fontSize: 11, color: theme.muted }}>{label}</span>
+                      {actual && url && <div><Tag color={theme.success}>Actual</Tag></div>}
+                    </div>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        )}
+            </div>
+          ));
+        })()}
       </Card>
 
       <Card style={{ marginBottom: 14 }}>
