@@ -3405,6 +3405,23 @@ function RutinaScreen({ onNav, alumnoPreview }) {
   };
   const [bloqueado, setBloqueado] = useState(false);
   const [seriesHechas, setSeriesHechas] = useState({});
+  // Modo de entreno: "guiado" (barra Iniciar serie / Descanso / Fin de serie)
+  // o "manual" (el alumno solo anota sus cargas, sin barra ni cronómetro).
+  // Lo elige cada alumno y queda recordado en su celular.
+  // Top set: serie cuya nube explicativa está abierta (clave ejId-idx).
+  const [nubeSerie, setNubeSerie] = useState(null);
+  const [modoManual, setModoManualState] = useState(() => {
+    try { return window.localStorage.getItem("modo_entreno_manual") === "1"; } catch (e) { return false; }
+  });
+  const setModoManual = (v) => {
+    setModoManualState(v);
+    try { window.localStorage.setItem("modo_entreno_manual", v ? "1" : "0"); } catch (e) {}
+    // Al pasar a manual se corta cualquier serie/descanso en curso del modo guiado.
+    limpiarIntervaloDescanso();
+    setEstadoSerie("idle");
+    setSerieObjetivo(null);
+    setSegDescanso(0);
+  };
   const [diarioPaso, setDiarioPaso] = useState("form");
   const [intensidad, setIntensidad] = useState(7);
   const [horasSueno, setHorasSueno] = useState("8");
@@ -3510,14 +3527,14 @@ function RutinaScreen({ onNav, alumnoPreview }) {
   const cargarUltimasCargas = async (userId) => {
     const { data: historico } = await supabase
       .from("registros_entreno")
-      .select("ejercicio_id, serie, kg, reps, fecha, creado_en")
+      .select("ejercicio_id, serie, kg, reps, fecha, creado_en, rir_sentido")
       .eq("usuario_id", userId)
       .order("creado_en", { ascending: false });
     if (historico) {
       const ultimas = {};
       historico.forEach(r => {
         const key = `${r.ejercicio_id}-${r.serie}`;
-        if (!(key in ultimas) && r.kg) ultimas[key] = { kg: r.kg, reps: r.reps, fecha: r.fecha };
+        if (!(key in ultimas) && r.kg) ultimas[key] = { kg: r.kg, reps: r.reps, fecha: r.fecha, rir: r.rir_sentido };
       });
       setUltimasCargas(ultimas);
     }
@@ -3730,7 +3747,18 @@ function RutinaScreen({ onNav, alumnoPreview }) {
     }
     return items;
   });
-  const siguientePendiente = todasLasSeries.find(x => !seriesHechas[x.key]);
+  // Serie "marcada como hecha". En modo guiado es solo lo que marca la barra
+  // (o el check a mano), igual que siempre. En modo manual, además, se marca
+  // sola cuando el alumno escribe a mano el peso o las reps (lo que la app
+  // precarga en la aproximación no cuenta); el check se puede tocar para
+  // marcar/desmarcar a mano y eso tiene prioridad sobre lo automático.
+  const serieMarcada = (key) => {
+    if (!modoManual) return !!seriesHechas[key];
+    if (seriesHechas[key] !== undefined) return !!seriesHechas[key];
+    const r = registros[key] || {};
+    return !!((r.kg && !r._autoKg) || (r.reps && !r._autoReps));
+  };
+  const siguientePendiente = todasLasSeries.find(x => !serieMarcada(x.key));
 
   // Descanso a aplicar según el TIPO de la serie recién terminada: las de
   // aproximación siempre descansan 60-90s fijo (no hace falta tanto como en
@@ -3828,14 +3856,16 @@ function RutinaScreen({ onNav, alumnoPreview }) {
     bottomLabelSerie = siguientePendiente ? `${siguientePendiente.ej.nombre} · ${siguientePendiente.s.reps} reps` : "";
     bottomLabelColorSerie = theme.muted;
   }
-  const mostrarBarraSerie = !completado && (estadoSerie !== "idle" || !!siguientePendiente);
+  const mostrarBarraSerie = !modoManual && !completado && (estadoSerie !== "idle" || !!siguientePendiente);
 
   // El botón de terminar entrenamiento no se muestra mientras queden series
   // o cardio pendientes -- antes aparecía siempre, lo que dejaba a la vista
   // al mismo tiempo que la barra de "Iniciar serie", como si el entreno ya
   // pudiera darse por terminado aunque todavía hubiera series sin marcar.
   const cardioPendiente = Array.isArray(rutinaActiva.cardio) && rutinaActiva.cardio.some((c, i) => !cardioRegistros[i]?.completado);
-  const faltaParaTerminar = siguientePendiente ? "series" : cardioPendiente ? "cardio" : null;
+  // El cardio ya no bloquea cerrar el entrenamiento (se puede hacer en otro
+  // momento del día); solo se avisa si queda pendiente.
+  const faltaParaTerminar = siguientePendiente ? "series" : null;
 
   return (
     <div style={{ padding: `20px 16px ${mostrarBarraSerie ? 200 : 90}px`, overflowY: "auto", height: "100%", boxSizing: "border-box" }}>
@@ -3850,6 +3880,20 @@ function RutinaScreen({ onNav, alumnoPreview }) {
         <button onClick={() => setVerInfoRutina(true)} aria-label="Info de la rutina"
           style={{ flexShrink:0, width:34, height:34, borderRadius:"50%", background:`${theme.accent}22`, border:`1px solid ${theme.accent}66`, color:theme.accentLight, fontSize:16, fontWeight:800, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", pointerEvents:"auto" }}>ⓘ</button>
       </div>
+
+      {!rutinaActiva.es_descanso && !completado && (
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:10, background:theme.surface, border:`1px solid ${theme.border}`, borderRadius:12, padding:"8px 10px", marginBottom:14 }}>
+          <div style={{ fontSize:11, color:theme.muted, lineHeight:1.35, minWidth:0 }}>
+            {modoManual ? "Modo manual: solo anotas tus cargas, sin cronómetro." : "Modo guiado: te marca cada serie y tu descanso."}
+          </div>
+          <div style={{ display:"flex", flexShrink:0, background:theme.card, borderRadius:9, padding:2, border:`1px solid ${theme.border}`, pointerEvents:"auto" }}>
+            {[["Guiado", false], ["Manual", true]].map(([label, valor]) => (
+              <button key={label} onClick={() => setModoManual(valor)}
+                style={{ padding:"6px 11px", borderRadius:7, border:"none", fontSize:11, fontWeight:800, cursor:"pointer", background: modoManual === valor ? theme.accent : "transparent", color: modoManual === valor ? "#fff" : theme.muted }}>{label}</button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {rutinaActiva.es_descanso && (
         <Card style={{ textAlign: "center", padding: 18, marginBottom: 14 }}>
@@ -4153,6 +4197,17 @@ function RutinaScreen({ onNav, alumnoPreview }) {
                 // en vez de un check simple). ej.formato_series pisa el de la
                 // rutina si está cargado.
                 const formatoEjercicio = tipo === "efectiva" ? (ej.formato_series || rutinaActiva.formato_series || "rir") : "rir";
+                // Formato Top set: nombre de serie tocable (Top set / Back-off)
+                // con nube explicativa y columna RIR REAL (Fallo por defecto).
+                const esTop = tipo === "efectiva" && formatoEjercicio === "fallo";
+                const tipoPlan = s.tipoSerie || (contEfect === 1 ? "top" : "backoff");
+                const tipoReal = reg.tipoSerie || tipoPlan;
+                const nubeAbierta = esTop && nubeSerie === key;
+                // Reps propuestas por el coach (si el Objetivo es solo un número
+                // o rango, ej. "12" u "8-10"): se muestran siempre dentro del
+                // recuadro REPS, escriba lo que escriba el alumno.
+                const objRaw = (s.reps ?? "").toString().trim();
+                const repsObj = esTop && /^\d+(\s*[-–]\s*\d+)?$/.test(objRaw) ? objRaw.replace(/\s+/g, "") : "";
                 // La carga "semana anterior" se compara por posición entre series
                 // EFECTIVAS únicamente (contEfect), no por posición en el arreglo
                 // completo, para que la aproximación no la desordene.
@@ -4178,14 +4233,15 @@ function RutinaScreen({ onNav, alumnoPreview }) {
                 // "hecha", si no toda fila de aproximación se vería marcada en
                 // verde desde el principio sin que el alumno hiciera nada. Solo
                 // cuenta si tocó el check, o si escribió algo a mano encima.
-                const hecha = tipo === "efectiva" && formatoEjercicio === "rir_sentido"
+                const hecha = modoManual ? serieMarcada(key)
+                  : tipo === "efectiva" && formatoEjercicio === "rir_sentido"
                   ? !!(reg.kg && reg.reps && reg.rirSentido)
                   : !!seriesHechas[key] || (tipo === "efectiva" ? !!(reg.kg && reg.reps) : !!((reg.kg && !reg._autoKg) || (reg.reps && !reg._autoReps)));
                 // La aproximación no usa columna de RIR (se trabaja en % de la
                 // efectiva, no en esfuerzo percibido) -- 5 columnas en vez de 6.
                 // En formato "fallo" tampoco hay RIR (ni propuesto ni sentido).
                 const columnas = tipo !== "efectiva" ? "38px 1fr 46px 40px 24px"
-                  : formatoEjercicio === "fallo" ? "38px 1fr 46px 40px 24px"
+                  : formatoEjercicio === "fallo" ? "28px 1fr 44px 44px 58px"
                   : formatoEjercicio === "rir_sentido" ? "30px 1fr 44px 42px 42px 48px"
                   : "38px 1fr 46px 40px 44px 24px";
                 return (
@@ -4195,7 +4251,7 @@ function RutinaScreen({ onNav, alumnoPreview }) {
                       <div style={{ fontSize: 10, fontWeight: 800, color: colorTipo, background: `${colorTipo}18`, border: `1px solid ${colorTipo}44`, borderRadius: 6, padding: "3px 8px", marginBottom: 6, display: "inline-block" }}>{tituloSeccion}</div>
                       <div style={{ display: "grid", gridTemplateColumns: columnas, gap: 3 }}>
                         {(tipo !== "efectiva" ? ["SERIE", "OBJETIVO", "KG", "REPS", "✓"]
-                          : formatoEjercicio === "fallo" ? ["SERIE", "OBJETIVO", "KG", "REPS", "✓"]
+                          : formatoEjercicio === "fallo" ? ["SERIE", "OBJETIVO", "KG", "REPS", "RIR REAL"]
                           : formatoEjercicio === "rir_sentido" ? ["SERIE", "OBJETIVO", "RIR", "KG", "REPS", "RIR REAL"]
                           : ["SERIE", "OBJETIVO", "KG", "REPS", "RIR", "✓"]).map(h => (
                           <span key={h} style={{ fontSize: 9, color: theme.muted, textAlign: "center", fontWeight: 700 }}>{h}</span>
@@ -4211,7 +4267,13 @@ function RutinaScreen({ onNav, alumnoPreview }) {
                   }}>
                     <div style={{ textAlign: "center", fontSize: 11, fontWeight: 800, color: colorTipo }}>{etiqueta}</div>
                     <div style={{ fontSize: 12, color: theme.muted, paddingLeft: 4, lineHeight: 1.15, minWidth: 0 }}>
-                      <span style={{ color: theme.text, fontWeight: 700, display: "block", lineHeight: 1.1 }}>{tipo === "efectiva" && formatoEjercicio === "fallo" ? s.reps : `${s.reps} reps`}</span>
+                      <span style={{ color: theme.text, fontWeight: 700, display: "block", lineHeight: 1.1 }}>{esTop ? (repsObj ? `${repsObj} reps` : objRaw) : `${s.reps} reps`}</span>
+                      {esTop && (
+                        <button onClick={() => setNubeSerie(nubeAbierta ? null : key)}
+                          style={{ marginTop: 3, marginLeft: -2, height: 20, borderRadius: 6, border: `1px solid ${tipoReal === "top" ? theme.accentLight : "#3A3A4C"}`, background: "transparent", color: tipoReal === "top" ? "#B8C0FF" : "#B0B0C4", fontSize: 9.5, fontWeight: 700, cursor: "pointer", padding: "0 6px", whiteSpace: "nowrap" }}>
+                          {tipoReal === "top" ? "Top set" : "Back-off"} ⓘ
+                        </button>
+                      )}
                       {tipo === "aproximacion" && (s.pctDesde || s.pctHasta) && (
                         <div style={{ fontSize: 8.5, color: colorTipo, fontWeight: 700, marginTop: 2, lineHeight: 1.1 }}>{s.pctDesde}-{s.pctHasta}% de tu efectiva</div>
                       )}
@@ -4227,10 +4289,19 @@ function RutinaScreen({ onNav, alumnoPreview }) {
                     </div>
                     <input value={reg.kg || ""} onChange={e => setReg(ej.id, idx, "kg", e.target.value)} placeholder={placeholderKg}
                       style={{ background: theme.card, border: `1px solid ${reg.kg ? theme.accent + "66" : theme.border}`, borderRadius: 6, padding: "5px 2px", color: theme.text, fontSize: 12, fontWeight: 700, width: "100%", textAlign: "center", outline: "none", boxSizing: "border-box", order: formatoEjercicio === "rir_sentido" ? 4 : undefined }} />
-                    <input value={reg.reps || ""} onChange={e => setReg(ej.id, idx, "reps", e.target.value)} placeholder={s.reps}
+                    <input value={reg.reps || ""} onChange={e => setReg(ej.id, idx, "reps", e.target.value)} placeholder={esTop ? (repsObj || "reps") : s.reps}
                       style={{ background: theme.card, border: `1px solid ${reg.reps ? theme.accent + "66" : theme.border}`, borderRadius: 6, padding: "5px 2px", color: theme.text, fontSize: 12, fontWeight: 700, width: "100%", textAlign: "center", outline: "none", boxSizing: "border-box", order: formatoEjercicio === "rir_sentido" ? 5 : undefined }} />
                     {tipo === "efectiva" && formatoEjercicio !== "fallo" && (
                       <div style={{ background: `${rc}18`, border: `1px solid ${rc}55`, borderRadius: 6, padding: "4px 2px", textAlign: "center", fontSize: 10, fontWeight: 800, color: rc, order: formatoEjercicio === "rir_sentido" ? 3 : undefined }}>{getRirLabel(rir)}</div>
+                    )}
+                    {esTop && (
+                      <select value={reg.rirSentido ?? "0"} onChange={e => setReg(ej.id, idx, "rirSentido", e.target.value)}
+                        style={{ background: hecha ? `${theme.success}18` : theme.card, border: `1px solid ${hecha ? theme.success + "88" : theme.accentLight + "88"}`, borderRadius: 6, padding: "5px 1px", color: hecha ? theme.success : theme.text, fontSize: 9.5, fontWeight: 800, textAlign: "center", outline: "none", width: "100%", boxSizing: "border-box" }}>
+                        <option value="0">Fallo</option>
+                        <option value="1">RIR 1</option>
+                        <option value="2">RIR 2</option>
+                        <option value="3">RIR 3</option>
+                      </select>
                     )}
                     {tipo === "efectiva" && formatoEjercicio === "rir_sentido" ? (
                       <select value={reg.rirSentido ?? ""} onChange={e => setReg(ej.id, idx, "rirSentido", e.target.value)}
@@ -4241,11 +4312,41 @@ function RutinaScreen({ onNav, alumnoPreview }) {
                         <option value="2">RIR 2</option>
                         <option value="3">RIR 3</option>
                       </select>
-                    ) : (
-                      <div onClick={() => setSeriesHechas({ ...seriesHechas, [key]: !seriesHechas[key] })}
-                        style={{ width: 20, height: 20, borderRadius: 6, border: `2px solid ${seriesHechas[key] ? theme.success : theme.border}`, background: seriesHechas[key] ? theme.success : "transparent", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 11, color: "#fff", fontWeight: 800 }}>{seriesHechas[key] ? "✓" : ""}</div>
+                    ) : esTop ? null : (
+                      <div onClick={() => setSeriesHechas({ ...seriesHechas, [key]: modoManual ? !serieMarcada(key) : !seriesHechas[key] })}
+                        style={{ width: 20, height: 20, borderRadius: 6, border: `2px solid ${(modoManual ? serieMarcada(key) : seriesHechas[key]) ? theme.success : theme.border}`, background: (modoManual ? serieMarcada(key) : seriesHechas[key]) ? theme.success : "transparent", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 11, color: "#fff", fontWeight: 800 }}>{(modoManual ? serieMarcada(key) : seriesHechas[key]) ? "✓" : ""}</div>
                     )}
                   </div>
+                  {esTop && (() => {
+                    const objTxt = (s.reps || "").toString().trim();
+                    const redundante = !!repsObj || ["top set", "bajada", "back off", "back-off", "backoff"].includes(objTxt.toLowerCase());
+                    const tec = s.tecnica === "dropset" ? `${s.dropsetCantidad || 2} drops -${s.dropsetPct || 25}%`
+                      : s.tecnica === "isometrica" ? `Pausa ${s.isoSegundos || 4}s (iso)`
+                      : s.tecnica === "restpause" ? `R-pause ${s.rpCantidad || 2}×${s.rpSegundos || 15}s` : "";
+                    const lineaObj = [redundante ? "" : objTxt, tec].filter(Boolean).join(" · ");
+                    return (
+                      <>
+                        {tipoReal !== tipoPlan && (
+                          <div style={{ marginTop: 3, paddingLeft: 6 }}>
+                            <span style={{ fontSize: 9, fontWeight: 700, border: `1px solid ${theme.warning}66`, color: theme.warning, borderRadius: 6, padding: "1px 6px" }}>cambiado · planificado: {tipoPlan === "top" ? "Top set" : "Back-off"}</span>
+                          </div>
+                        )}
+                        {nubeAbierta && (
+                          <div style={{ background: theme.accent, border: `1px solid ${theme.accentLight}`, borderRadius: 10, padding: "10px 12px", margin: "6px 0 4px", fontSize: 12, lineHeight: 1.5, color: "#fff" }}>
+                            {tipoReal === "top"
+                              ? <><b>Top set:</b> serie al fallo, o muy cerca, con el peso que te deje llegar justo a las repeticiones propuestas. Anota el RIR que te quedó.</>
+                              : <><b>Back-off:</b> baja el peso lo justo para completar las repeticiones propuestas. Anota cuántas te sobraron.</>}
+                            <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                              {[["top", "Top set"], ["backoff", "Back-off"]].map(([v, l]) => (
+                                <button key={v} onClick={() => { setReg(ej.id, idx, "tipoSerie", v); setNubeSerie(null); }}
+                                  style={{ flex: 1, height: 30, borderRadius: 8, border: "1px solid #fff", background: tipoReal === v ? "#fff" : "transparent", color: tipoReal === v ? theme.accent : "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{l}</button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                   {esActiva && (
                     <div style={{ display:"flex", alignItems:"center", gap:6, fontSize:10, color:theme.accentLight, fontWeight:700, paddingLeft:6, marginBottom:6, marginTop:-2 }}>
                       🔵 Serie en curso...
@@ -4253,7 +4354,7 @@ function RutinaScreen({ onNav, alumnoPreview }) {
                   )}
                   {anterior && (
                     <div style={{ fontSize: 10, color: theme.muted, paddingLeft: 6, marginBottom: 8 }}>
-                      Semana anterior: <span style={{ color: colorTipo, fontWeight: 700 }}>{anterior.kg}kg × {anterior.reps}</span> {anterior.fecha ? `(${anterior.fecha})` : ""}
+                      Semana anterior: <span style={{ color: colorTipo, fontWeight: 700 }}>{anterior.kg}kg × {anterior.reps}{(anterior.rir !== null && anterior.rir !== undefined) ? ` · ${anterior.rir === 0 ? "Fallo" : `RIR ${anterior.rir}`}` : ""}</span> {anterior.fecha ? `(${anterior.fecha})` : ""}
                     </div>
                   )}
                   </div>
@@ -4349,11 +4450,17 @@ function RutinaScreen({ onNav, alumnoPreview }) {
         <Card style={{ textAlign:"center", padding:16, border:`1px dashed ${theme.border}` }}>
           <div style={{ fontSize:12, color:theme.muted, lineHeight:1.5 }}>
             {faltaParaTerminar === "series"
-              ? "Te faltan series por completar más arriba."
+              ? (modoManual ? "Te faltan series por anotar más arriba (escribe el peso o toca el ✓)." : "Te faltan series por completar más arriba.")
               : "Te falta marcar el cardio como hecho más arriba."}
             {" "}Termina eso para poder cerrar el entrenamiento.
           </div>
         </Card>
+      )}
+
+      {!rutinaActiva.es_descanso && !completado && !faltaParaTerminar && cardioPendiente && (
+        <div style={{ fontSize:12, color:theme.muted, lineHeight:1.5, textAlign:"center", marginBottom:10 }}>
+          Te queda cardio por hacer hoy. Puedes marcarlo después.
+        </div>
       )}
 
       {!rutinaActiva.es_descanso && !completado && !faltaParaTerminar && (
@@ -4364,6 +4471,7 @@ function RutinaScreen({ onNav, alumnoPreview }) {
               const hoyStr = fechaOperativaStr();
               ejercicios.forEach(ej => {
                 const series = Array.isArray(ej.series) ? ej.series : [];
+                const esTopFmt = (ej.formato_series || rutinaActiva.formato_series || "rir") === "fallo";
                 let serieEfectiva = 0; // numeración independiente de la aproximación
                 series.forEach((s, idx) => {
                   const key = `${ej.id}-${idx}`;
@@ -4385,7 +4493,8 @@ function RutinaScreen({ onNav, alumnoPreview }) {
                       serie: serieEfectiva,
                       kg: parseFloat(kgFinal) || null,
                       reps: parseInt(repsFinal) || null,
-                      rir_sentido: reg.rirSentido !== undefined && reg.rirSentido !== "" ? parseInt(reg.rirSentido) : null,
+                      rir_sentido: reg.rirSentido !== undefined && reg.rirSentido !== "" ? parseInt(reg.rirSentido) : (esTopFmt ? 0 : null),
+                      ...(esTopFmt ? { tipo_serie: reg.tipoSerie || s.tipoSerie || (serieEfectiva === 1 ? "top" : "backoff") } : {}),
                       fecha: hoyStr,
                       ejercicio_sustituto: sustitutos[ej.id]?.nombre || null,
                       motivo_sustituto: sustitutos[ej.id]?.motivo || null,
@@ -8553,7 +8662,7 @@ function RutinaCoach({ alumno }) {
   const [esDescanso, setEsDescanso] = useState(false);
   const [ejercicios, setEjercicios] = useState([
     { nombre: "", videoUrl: "", descansoDesde: 60, descansoHasta: 90, tempoBajada: "3", tempoPausa: "1", tempoSubida: "1", grupoSuperserie: "",
-      seriesAproximacion: [{ reps: "8", pctDesde: "50", pctHasta: "60" }, { reps: "6", pctDesde: "70", pctHasta: "80" }, { reps: "3", pctDesde: "85", pctHasta: "90" }],
+      seriesAproximacion: [],
       seriesEfectivas: [{ reps: "10", rir: 2, tecnica: "normal" }] }
   ]);
   // Ids (_dbId) de ejercicios que existían en la rutina y el coach sacó
@@ -8636,7 +8745,7 @@ function RutinaCoach({ alumno }) {
     setFormatoSeriesRutina(p.formato_series || "rir");
     const ejerciciosPlantilla = Array.isArray(p.ejercicios) && p.ejercicios.length > 0
       ? p.ejercicios.map(ej => ({ ...ej, _dbId: undefined }))
-      : [{ nombre: "", videoUrl: "", descansoDesde: 60, descansoHasta: 90, tempoBajada: "3", tempoPausa: "1", tempoSubida: "1", grupoSuperserie: "", seriesAproximacion: [{ reps: "8", pctDesde: "50", pctHasta: "60" }, { reps: "6", pctDesde: "70", pctHasta: "80" }, { reps: "3", pctDesde: "85", pctHasta: "90" }], seriesEfectivas: [{ reps: "10", rir: 2, tecnica: "normal" }] }];
+      : [{ nombre: "", videoUrl: "", descansoDesde: 60, descansoHasta: 90, tempoBajada: "3", tempoPausa: "1", tempoSubida: "1", grupoSuperserie: "", seriesAproximacion: [], seriesEfectivas: [{ reps: "10", rir: 2, tecnica: "normal" }] }];
     setEjercicios(ejerciciosPlantilla);
     setEjerciciosEliminados([]); setAproxExpandida({});
     setModoPlantilla(true);
@@ -8664,7 +8773,7 @@ function RutinaCoach({ alumno }) {
     setFormatoSeriesRutina(p.formato_series || "rir");
     const ejerciciosPlantilla = Array.isArray(p.ejercicios) && p.ejercicios.length > 0
       ? p.ejercicios.map(ej => ({ ...ej, _dbId: undefined }))
-      : [{ nombre: "", videoUrl: "", descansoDesde: 60, descansoHasta: 90, tempoBajada: "3", tempoPausa: "1", tempoSubida: "1", grupoSuperserie: "", seriesAproximacion: [{ reps: "8", pctDesde: "50", pctHasta: "60" }, { reps: "6", pctDesde: "70", pctHasta: "80" }, { reps: "3", pctDesde: "85", pctHasta: "90" }], seriesEfectivas: [{ reps: "10", rir: 2, tecnica: "normal" }] }];
+      : [{ nombre: "", videoUrl: "", descansoDesde: 60, descansoHasta: 90, tempoBajada: "3", tempoPausa: "1", tempoSubida: "1", grupoSuperserie: "", seriesAproximacion: [], seriesEfectivas: [{ reps: "10", rir: 2, tecnica: "normal" }] }];
     setEjercicios(ejerciciosPlantilla);
     setEjerciciosEliminados([]); setAproxExpandida({});
     setDefaultParaPlantillaNueva(p.default_para || "");
@@ -8845,7 +8954,7 @@ function RutinaCoach({ alumno }) {
 
   const agregarEjercicio = () => {
     setEjercicios([...ejercicios, { nombre: "", videoUrl: "", descansoDesde: 60, descansoHasta: 90, tempoBajada: "3", tempoPausa: "1", tempoSubida: "1", grupoSuperserie: "",
-      seriesAproximacion: [{ reps: "8", pctDesde: "50", pctHasta: "60" }, { reps: "6", pctDesde: "70", pctHasta: "80" }, { reps: "3", pctDesde: "85", pctHasta: "90" }],
+      seriesAproximacion: [],
       seriesEfectivas: [{ reps: "10", rir: 2, tecnica: "normal" }] }]);
   };
 
@@ -8859,7 +8968,7 @@ function RutinaCoach({ alumno }) {
       const idsExistentes = ejercicios.filter(ej => ej._dbId).map(ej => ej._dbId);
       if (idsExistentes.length > 0) setEjerciciosEliminados(prev => [...prev, ...idsExistentes]);
       setEjercicios([{ nombre: "", videoUrl: "", descansoDesde: 60, descansoHasta: 90, tempoBajada: "3", tempoPausa: "1", tempoSubida: "1", grupoSuperserie: "",
-        seriesAproximacion: [{ reps: "8", pctDesde: "50", pctHasta: "60" }, { reps: "6", pctDesde: "70", pctHasta: "80" }, { reps: "3", pctDesde: "85", pctHasta: "90" }],
+        seriesAproximacion: [],
         seriesEfectivas: [{ reps: "10", rir: 2, tecnica: "normal" }] }]);
       setCalentamientoGeneral([]);
       setVueltaCalma([]);
@@ -8890,7 +8999,7 @@ function RutinaCoach({ alumno }) {
   // final y subirlo a fuerza de flechas.
   const insertarEjercicioDespues = (idx) => {
     const nuevo = { nombre: "", videoUrl: "", descansoDesde: 60, descansoHasta: 90, tempoBajada: "3", tempoPausa: "1", tempoSubida: "1", grupoSuperserie: "",
-      seriesAproximacion: [{ reps: "8", pctDesde: "50", pctHasta: "60" }, { reps: "6", pctDesde: "70", pctHasta: "80" }, { reps: "3", pctDesde: "85", pctHasta: "90" }],
+      seriesAproximacion: [],
       seriesEfectivas: [{ reps: "10", rir: 2, tecnica: "normal" }] };
     const upd = [...ejercicios];
     upd.splice(idx + 1, 0, nuevo);
@@ -9102,7 +9211,7 @@ function RutinaCoach({ alumno }) {
     setMetaPasos("10000");
     setEsDescanso(false);
     setEjercicios([{ nombre: "", videoUrl: "", descansoDesde: 60, descansoHasta: 90, tempoBajada: "3", tempoPausa: "1", tempoSubida: "1", grupoSuperserie: "",
-      seriesAproximacion: [{ reps: "8", pctDesde: "50", pctHasta: "60" }, { reps: "6", pctDesde: "70", pctHasta: "80" }, { reps: "3", pctDesde: "85", pctHasta: "90" }],
+      seriesAproximacion: [],
       seriesEfectivas: [{ reps: "10", rir: 2, tecnica: "normal" }] }]);
     setEjerciciosEliminados([]); setAproxExpandida({});
     cargarRutinas();
@@ -9146,7 +9255,7 @@ function RutinaCoach({ alumno }) {
     });
     setEjercicios(ejerciciosCargados.length > 0 ? ejerciciosCargados : [
       { nombre: "", videoUrl: "", descansoDesde: 60, descansoHasta: 90, tempoBajada: "3", tempoPausa: "1", tempoSubida: "1", grupoSuperserie: "",
-        seriesAproximacion: [{ reps: "8", pctDesde: "50", pctHasta: "60" }, { reps: "6", pctDesde: "70", pctHasta: "80" }, { reps: "3", pctDesde: "85", pctHasta: "90" }],
+        seriesAproximacion: [],
         seriesEfectivas: [{ reps: "10", rir: 2, tecnica: "normal" }] }
     ]);
     setEjerciciosEliminados([]); setAproxExpandida({});
@@ -9369,9 +9478,9 @@ function RutinaCoach({ alumno }) {
                     </div>
                     {expandidoAprox && (
                       <>
-                        <div style={{ display:"grid", gridTemplateColumns:"30px 1fr 46px 10px 46px 20px", gap:4, marginBottom:6 }}>
+                        {ej.seriesAproximacion.length > 0 && <div style={{ display:"grid", gridTemplateColumns:"30px 1fr 46px 10px 46px 20px", gap:4, marginBottom:6 }}>
                           {["#","REPS","% DESDE","","% HASTA",""].map((h,i) => <span key={i} style={{ fontSize:9, color:theme.muted, textAlign:"center" }}>{h}</span>)}
-                        </div>
+                        </div>}
                         {ej.seriesAproximacion.map((s, sIdx) => (
                           <div key={sIdx} style={{ display:"grid", gridTemplateColumns:"30px 1fr 46px 10px 46px 20px", gap:4, alignItems:"center", marginBottom:6, background:"#B0C4DE14", border:"1px solid #B0C4DE33", borderRadius:8, padding:"4px 4px" }}>
                             <div style={{ textAlign:"center", fontSize:11, color:"#B0C4DE", fontWeight:700 }}>{sIdx+1}</div>
@@ -9392,14 +9501,20 @@ function RutinaCoach({ alumno }) {
 
               {/* Efectivas */}
               <div style={{ fontSize:10, fontWeight:700, color:theme.accentLight, marginBottom:6 }}>💪 SERIES EFECTIVAS</div>
-              <div style={{ display:"grid", gridTemplateColumns: formatoEjercicio === "fallo" ? "30px 1fr 50px 20px" : "30px 1fr 60px 50px 20px", gap:4, marginBottom:6 }}>
-                {(formatoEjercicio === "fallo" ? ["#","OBJETIVO (texto libre)","TÉC.",""] : ["#","REPS","RIR","TÉC.",""]).map((h,i) => <span key={i} style={{ fontSize:9, color:theme.muted, textAlign:"center" }}>{h}</span>)}
+              <div style={{ display:"grid", gridTemplateColumns: formatoEjercicio === "fallo" ? "30px 1fr 66px 50px 20px" : "30px 1fr 60px 50px 20px", gap:4, marginBottom:6 }}>
+                {(formatoEjercicio === "fallo" ? ["#","OBJETIVO (texto libre)","TIPO","TÉC.",""] : ["#","REPS","RIR","TÉC.",""]).map((h,i) => <span key={i} style={{ fontSize:9, color:theme.muted, textAlign:"center" }}>{h}</span>)}
               </div>
               {ej.seriesEfectivas.map((s, sIdx) => (
                 <div key={sIdx}>
-                <div style={{ display:"grid", gridTemplateColumns: formatoEjercicio === "fallo" ? "30px 1fr 50px 20px" : "30px 1fr 60px 50px 20px", gap:4, alignItems:"center", marginBottom:4, background:`${theme.accent}14`, border:`1px solid ${theme.accent}33`, borderRadius:8, padding:"4px 4px" }}>
+                <div style={{ display:"grid", gridTemplateColumns: formatoEjercicio === "fallo" ? "30px 1fr 66px 50px 20px" : "30px 1fr 60px 50px 20px", gap:4, alignItems:"center", marginBottom:4, background:`${theme.accent}14`, border:`1px solid ${theme.accent}33`, borderRadius:8, padding:"4px 4px" }}>
                   <div style={{ textAlign:"center", fontSize:11, color:theme.accentLight, fontWeight:700 }}>{sIdx+1}</div>
-                  <input style={inputStyle} placeholder={formatoEjercicio === "fallo" ? (sIdx === 0 ? "Top set" : "Bajada") : "10"} value={s.reps} onChange={e => updateSerie(ejIdx, "efectiva", sIdx, "reps", e.target.value)} />
+                  <input style={inputStyle} placeholder={formatoEjercicio === "fallo" ? "Ej: 8 reps · prueba 2,5 kg más" : "10"} value={s.reps} onChange={e => updateSerie(ejIdx, "efectiva", sIdx, "reps", e.target.value)} />
+                  {formatoEjercicio === "fallo" && (
+                    <select style={{ ...inputStyle, padding:"6px 2px", fontSize:10 }} value={s.tipoSerie || (sIdx === 0 ? "top" : "backoff")} onChange={e => updateSerie(ejIdx, "efectiva", sIdx, "tipoSerie", e.target.value)}>
+                      <option value="top">Top set</option>
+                      <option value="backoff">Back-off</option>
+                    </select>
+                  )}
                   {formatoEjercicio !== "fallo" && (
                     <select style={{ ...inputStyle, padding:"6px 4px" }} value={s.rir} onChange={e => updateSerie(ejIdx, "efectiva", sIdx, "rir", e.target.value)}>
                       <option value={0}>Fallo</option>
@@ -9801,6 +9916,9 @@ function RutinaCoach({ alumno }) {
                               <div style={{ fontSize:9, color:theme.muted, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>S{c.serie} · {c.fecha}</div>
                               <div style={{ fontSize:12, fontWeight:800, color:theme.text, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{c.kg}kg</div>
                               <div style={{ fontSize:10, color:theme.muted, whiteSpace:"nowrap" }}>×{c.reps}</div>
+                              {c.tipo_serie && (
+                                <div style={{ fontSize:9, fontWeight:700, color:theme.accentLight, whiteSpace:"nowrap" }}>{c.tipo_serie === "top" ? "Top set" : "Back-off"}</div>
+                              )}
                               {(c.rir_sentido !== null && c.rir_sentido !== undefined) && (
                                 <div style={{ fontSize:9, fontWeight:700, color: c.rir_sentido === 0 ? theme.danger : theme.warning, whiteSpace:"nowrap" }}>{c.rir_sentido === 0 ? "Fallo" : `RIR ${c.rir_sentido}`}</div>
                               )}
