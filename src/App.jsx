@@ -3410,6 +3410,8 @@ function RutinaScreen({ onNav, alumnoPreview }) {
   // Lo elige cada alumno y queda recordado en su celular.
   // Top set: serie cuya nube explicativa está abierta (clave ejId-idx).
   const [nubeSerie, setNubeSerie] = useState(null);
+  // Comentario por serie: clave ejId-idx de la serie con el panel abierto.
+  const [obsAbierta, setObsAbierta] = useState(null);
   const [modoManual, setModoManualState] = useState(() => {
     try { return window.localStorage.getItem("modo_entreno_manual") === "1"; } catch (e) { return false; }
   });
@@ -3527,14 +3529,14 @@ function RutinaScreen({ onNav, alumnoPreview }) {
   const cargarUltimasCargas = async (userId) => {
     const { data: historico } = await supabase
       .from("registros_entreno")
-      .select("ejercicio_id, serie, kg, reps, fecha, creado_en, rir_sentido")
+      .select("ejercicio_id, serie, kg, reps, fecha, creado_en, rir_sentido, observacion")
       .eq("usuario_id", userId)
       .order("creado_en", { ascending: false });
     if (historico) {
       const ultimas = {};
       historico.forEach(r => {
         const key = `${r.ejercicio_id}-${r.serie}`;
-        if (!(key in ultimas) && r.kg) ultimas[key] = { kg: r.kg, reps: r.reps, fecha: r.fecha, rir: r.rir_sentido };
+        if (!(key in ultimas) && r.kg) ultimas[key] = { kg: r.kg, reps: r.reps, fecha: r.fecha, rir: r.rir_sentido, obs: r.observacion };
       });
       setUltimasCargas(ultimas);
     }
@@ -4347,6 +4349,38 @@ function RutinaScreen({ onNav, alumnoPreview }) {
                       </>
                     );
                   })()}
+                  {tipo === "efectiva" && (() => {
+                    const OPCIONES_OBS = ["Salió bien", "Me sentí cómodo", "Subir peso", "Bajar peso", "Mejorar técnica", "Con spotter", "Sin energía", "Molestia"];
+                    const sel = Array.isArray(reg.obsSel) ? reg.obsSel : [];
+                    const txtObs = (reg.obsTxt || "").trim();
+                    const resumen = [...sel, ...(txtObs ? [txtObs] : [])].join(" · ");
+                    const abierta = obsAbierta === key;
+                    if (!abierta) {
+                      return (
+                        <div onClick={() => setObsAbierta(key)} style={{ fontSize: 11, color: resumen ? theme.accentLight : theme.muted, padding: "4px 0 2px 6px", cursor: "pointer", lineHeight: 1.35 }}>
+                          {resumen ? `💬 ${resumen}` : "+ Comentario"}
+                        </div>
+                      );
+                    }
+                    return (
+                      <div style={{ background: `${theme.accent}33`, border: `1px solid ${theme.accentLight}66`, borderRadius: 10, padding: 10, margin: "6px 0 4px" }}>
+                        <div>
+                          {OPCIONES_OBS.map(o => {
+                            const on = sel.includes(o);
+                            return (
+                              <span key={o} onClick={() => setReg(ej.id, idx, "obsSel", on ? sel.filter(x => x !== o) : [...sel, o])}
+                                style={{ display: "inline-block", border: `1px solid ${on ? theme.accentLight : "#3A3A4C"}`, background: on ? `${theme.accentLight}33` : "transparent", color: on ? "#fff" : "#B0B0C4", borderRadius: 12, padding: "4px 9px", fontSize: 11, margin: "0 4px 5px 0", cursor: "pointer" }}>{o}</span>
+                            );
+                          })}
+                        </div>
+                        <input value={reg.obsTxt || ""} maxLength={60} onChange={e => setReg(ej.id, idx, "obsTxt", e.target.value)} placeholder="Otro comentario corto"
+                          style={{ width: "100%", boxSizing: "border-box", background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 8, height: 32, color: theme.text, fontSize: 12, padding: "0 8px", outline: "none" }} />
+                        <div style={{ textAlign: "right", marginTop: 6 }}>
+                          <span onClick={() => setObsAbierta(null)} style={{ display: "inline-block", border: `1px solid ${theme.accentLight}`, background: `${theme.accentLight}33`, color: "#fff", borderRadius: 12, padding: "4px 12px", fontSize: 11, cursor: "pointer" }}>Listo</span>
+                        </div>
+                      </div>
+                    );
+                  })()}
                   {esActiva && (
                     <div style={{ display:"flex", alignItems:"center", gap:6, fontSize:10, color:theme.accentLight, fontWeight:700, paddingLeft:6, marginBottom:6, marginTop:-2 }}>
                       🔵 Serie en curso...
@@ -4355,6 +4389,7 @@ function RutinaScreen({ onNav, alumnoPreview }) {
                   {anterior && (
                     <div style={{ fontSize: 10, color: theme.muted, paddingLeft: 6, marginBottom: 8 }}>
                       Semana anterior: <span style={{ color: colorTipo, fontWeight: 700 }}>{anterior.kg}kg × {anterior.reps}{(anterior.rir !== null && anterior.rir !== undefined) ? ` · ${anterior.rir === 0 ? "Fallo" : `RIR ${anterior.rir}`}` : ""}</span> {anterior.fecha ? `(${anterior.fecha})` : ""}
+                      {anterior.obs && <div style={{ color: theme.accentLight, marginTop: 2 }}>💬 {anterior.obs}</div>}
                     </div>
                   )}
                   </div>
@@ -4494,6 +4529,7 @@ function RutinaScreen({ onNav, alumnoPreview }) {
                       kg: parseFloat(kgFinal) || null,
                       reps: parseInt(repsFinal) || null,
                       rir_sentido: reg.rirSentido !== undefined && reg.rirSentido !== "" ? parseInt(reg.rirSentido) : (esTopFmt ? 0 : null),
+                      observacion: ([...(Array.isArray(reg.obsSel) ? reg.obsSel : []), (reg.obsTxt || "").trim()].filter(Boolean).join(" · ")) || null,
                       ...(esTopFmt ? { tipo_serie: reg.tipoSerie || s.tipoSerie || (serieEfectiva === 1 ? "top" : "backoff") } : {}),
                       fecha: hoyStr,
                       ejercicio_sustituto: sustitutos[ej.id]?.nombre || null,
@@ -9916,6 +9952,9 @@ function RutinaCoach({ alumno }) {
                               <div style={{ fontSize:9, color:theme.muted, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>S{c.serie} · {c.fecha}</div>
                               <div style={{ fontSize:12, fontWeight:800, color:theme.text, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{c.kg}kg</div>
                               <div style={{ fontSize:10, color:theme.muted, whiteSpace:"nowrap" }}>×{c.reps}</div>
+                              {c.observacion && (
+                                <div style={{ fontSize:9, color:theme.muted, marginTop:2, lineHeight:1.25, whiteSpace:"normal", wordBreak:"break-word" }}>💬 {c.observacion}</div>
+                              )}
                               {c.tipo_serie && (
                                 <div style={{ fontSize:9, fontWeight:700, color:theme.accentLight, whiteSpace:"nowrap" }}>{c.tipo_serie === "top" ? "Top set" : "Back-off"}</div>
                               )}
