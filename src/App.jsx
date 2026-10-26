@@ -7221,6 +7221,9 @@ function ProgresoMetricas({ userId, esCoach = false }) {
   // (foto_frente, foto_espalda, foto_perf_der, foto_perf_izq).
   const [fotosAntes, setFotosAntes] = useState({});
   const [fotosActual, setFotosActual] = useState({});
+  // De dónde sale la foto "antes" de cada ángulo: "anamnesis" o "reporte"
+  // (el reporte más antiguo que la tenga, si la Anamnesis no la trae).
+  const [fotosAntesOrigen, setFotosAntesOrigen] = useState({});
   const [prs, setPrs] = useState([]);
   const [progresionExpandida, setProgresionExpandida] = useState({});
   const [lightbox, setLightbox] = useState(null);
@@ -7326,18 +7329,24 @@ function ProgresoMetricas({ userId, esCoach = false }) {
       const reportesConPeso = (reportesData || []).filter(c => c.peso);
       let historialPeso = reportesConPeso;
       if (usrPeso?.peso_actual && usrPeso?.created_at) {
-        const fechaAnamnesis = aFechaStr(new Date(usrPeso.created_at));
-        const yaHayReporteEsaFecha = reportesConPeso.some(c => c.fecha === fechaAnamnesis);
-        const esRealmenteElMasAntiguo = reportesConPeso.length === 0 || fechaAnamnesis < reportesConPeso[0].fecha;
-        if (!yaHayReporteEsaFecha && esRealmenteElMasAntiguo) {
-          historialPeso = [
-            // Las medidas de la Anamnesis (las del alumno o las que el coach
-            // completó/corrigió a mano en su perfil) entran como punto de
-            // partida de "Evolución de medidas", igual que el peso.
-            { peso: usrPeso.peso_actual, fecha: fechaAnamnesis, foto_frente: null, porc_grasa: usrPeso.porc_grasa || null, cintura: usrPeso.cintura_inicial || null, cadera: usrPeso.cadera_inicial || null, brazo: usrPeso.brazo_inicial || null, pecho: usrPeso.pecho_inicial || null, pierna: usrPeso.pierna_inicial || null, deAnamnesis: true },
-            ...reportesConPeso,
-          ];
+        // El punto de partida de la Anamnesis siempre entra al historial. Si
+        // la fecha de la cuenta cae igual o después del primer reporte (ej.
+        // la cuenta se creó cuando el alumno ya había hecho su primer
+        // reporte), se ubica un día antes de ese reporte para que quede
+        // primero en el orden en vez de descartarse.
+        let fechaAnamnesis = aFechaStr(new Date(usrPeso.created_at));
+        if (reportesConPeso.length > 0 && fechaAnamnesis >= reportesConPeso[0].fecha) {
+          const d = new Date(reportesConPeso[0].fecha + "T12:00:00");
+          d.setDate(d.getDate() - 1);
+          fechaAnamnesis = aFechaStr(d);
         }
+        historialPeso = [
+          // Las medidas de la Anamnesis (las del alumno o las que el coach
+          // completó/corrigió a mano en su perfil) entran como punto de
+          // partida de "Evolución de medidas", igual que el peso.
+          { peso: usrPeso.peso_actual, fecha: fechaAnamnesis, foto_frente: null, porc_grasa: usrPeso.porc_grasa || null, cintura: usrPeso.cintura_inicial || null, cadera: usrPeso.cadera_inicial || null, brazo: usrPeso.brazo_inicial || null, pecho: usrPeso.pecho_inicial || null, pierna: usrPeso.pierna_inicial || null, deAnamnesis: true },
+          ...reportesConPeso,
+        ];
       }
       setReportes(historialPeso);
 
@@ -7378,12 +7387,24 @@ function ProgresoMetricas({ userId, esCoach = false }) {
 
       // Foto "antes": la de la Anamnesis. Foto "actual": el reporte más reciente con foto.
       const { data: usr } = await supabase.from("usuarios").select("foto_frente, foto_espalda, foto_perf_der, foto_perf_izq").eq("id", userId).single();
-      setFotosAntes(usr || {});
+      const COLS_FOTO = ["foto_frente", "foto_espalda", "foto_perf_der", "foto_perf_izq"];
+      // "Antes": la foto de la Anamnesis; si ese ángulo no la tiene, la del
+      // reporte más antiguo que sí la tenga.
+      const antes = {}, origen = {};
+      COLS_FOTO.forEach(col => {
+        if (usr?.[col]) { antes[col] = usr[col]; origen[col] = "anamnesis"; }
+        else {
+          const masAntiguo = (reportesData || []).find(c => c[col]);
+          if (masAntiguo) { antes[col] = masAntiguo[col]; origen[col] = "reporte"; }
+        }
+      });
+      setFotosAntes(antes);
+      setFotosAntesOrigen(origen);
       if (reportesData) {
         // Para cada ángulo, la foto "actual" es la del reporte más reciente
         // que la tenga (así un reporte sin alguna foto no borra el ángulo).
         const actual = {};
-        ["foto_frente", "foto_espalda", "foto_perf_der", "foto_perf_izq"].forEach(col => {
+        COLS_FOTO.forEach(col => {
           const conFoto = reportesData.filter(c => c[col]);
           actual[col] = conFoto.length > 0 ? conFoto[conFoto.length - 1][col] : null;
         });
@@ -7603,7 +7624,6 @@ function ProgresoMetricas({ userId, esCoach = false }) {
       </Card>
 
       {reportes.length > 1 && (() => {
-        const primero = reportes[0], ultimo = reportes[reportes.length - 1];
         const metricas = [
           { label: "% Grasa", key: "porc_grasa", unidad: "%", color: "#B0C4DE" },
           { label: "Cintura", key: "cintura", unidad: "cm", color: "#B0C4DE" },
@@ -7611,27 +7631,38 @@ function ProgresoMetricas({ userId, esCoach = false }) {
           { label: "Brazo", key: "brazo", unidad: "cm", color: "#B0C4DE" },
           { label: "Pecho", key: "pecho", unidad: "cm", color: "#B0C4DE" },
           { label: "Pierna", key: "pierna", unidad: "cm", color: "#B0C4DE" },
-        ].filter(m => primero[m.key] || ultimo[m.key]);
+        ].filter(m => reportes.some(r => r[m.key]));
         if (metricas.length === 0) return null;
         return (
           <Card style={{ marginBottom: 14 }}>
             <div style={{ fontSize: 12, color: theme.muted, marginBottom: 12 }}>EVOLUCIÓN DE MEDIDAS</div>
             {metricas.map(m => {
-              const val1 = primero[m.key], val2 = ultimo[m.key];
+              // Cada medida se compara por separado: el valor más antiguo que
+              // exista (Anamnesis o reporte) contra el más reciente.
+              const conValor = reportes.filter(r => r[m.key]);
+              const val1 = conValor[0][m.key];
+              const val2 = conValor.length > 1 ? conValor[conValor.length - 1][m.key] : null;
               const diff = (val1 && val2) ? (val2 - val1).toFixed(1) : null;
               return (
                 <div key={m.key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, paddingBottom: 10, borderBottom: `1px solid ${theme.border}` }}>
                   <span style={{ fontSize: 13, color: theme.text, fontWeight: 600 }}>{m.label}</span>
+                  {val2 === null ? (
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ fontSize: 11, color: theme.muted }}>falta otra medición</span>
+                      <span style={{ fontSize: 14, fontWeight: 800, color: m.color }}>{val1}{m.unidad}</span>
+                    </div>
+                  ) : (
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ fontSize: 12, color: theme.muted }}>{val1 || "—"}{m.unidad}</span>
+                    <span style={{ fontSize: 12, color: theme.muted }}>{val1}{m.unidad}</span>
                     <span style={{ color: theme.muted, fontSize: 12 }}>→</span>
-                    <span style={{ fontSize: 14, fontWeight: 800, color: m.color }}>{val2 || "—"}{m.unidad}</span>
+                    <span style={{ fontSize: 14, fontWeight: 800, color: m.color }}>{val2}{m.unidad}</span>
                     {diff !== null && (
                       <span style={{ fontSize: 11, fontWeight: 700, color: diff <= 0 ? theme.success : theme.warning }}>
                         {diff > 0 ? "+" : ""}{diff}
                       </span>
                     )}
                   </div>
+                  )}
                 </div>
               );
             })}
@@ -7645,11 +7676,20 @@ function ProgresoMetricas({ userId, esCoach = false }) {
           const angulos = [["Frente", "foto_frente"], ["Espalda", "foto_espalda"], ["Perfil derecho", "foto_perf_der"], ["Perfil izquierdo", "foto_perf_izq"]]
             .filter(([, col]) => fotosAntes[col] || fotosActual[col]);
           if (angulos.length === 0) return <div style={{ fontSize: 13, color: theme.muted }}>Aún no hay fotos para comparar.</div>;
-          return angulos.map(([nombreAngulo, col]) => (
+          const hayComparacion = angulos.some(([, col]) => fotosAntes[col] && fotosActual[col] && fotosAntes[col] !== fotosActual[col]);
+          return (<>
+            {!hayComparacion && <div style={{ fontSize: 12, color: theme.muted, marginBottom: 10, lineHeight: 1.4 }}>Todavía no hay fotos de comparación. Con el próximo reporte con fotos se compararán con las del primer reporte.</div>}
+            {angulos.map(([nombreAngulo, col]) => {
+            const mismaFoto = fotosAntes[col] && fotosAntes[col] === fotosActual[col];
+            const labelAntes = fotosAntesOrigen[col] === "reporte" ? "Antes (primer reporte)" : "Antes (Anamnesis)";
+            return (
             <div key={col} style={{ marginBottom: 14 }}>
               <div style={{ fontSize: 11, color: theme.text, fontWeight: 700, marginBottom: 6 }}>{nombreAngulo}</div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                {[{ label: "Antes (Anamnesis)", url: fotosAntes[col], actual: false }, { label: "Actual (Reporte)", url: fotosActual[col], actual: true }].map(({ label, url, actual }) => (
+                {(mismaFoto
+                  ? [{ label: "Primer reporte", url: fotosAntes[col], actual: false }]
+                  : [{ label: labelAntes, url: fotosAntes[col], actual: false }, { label: "Actual (Reporte)", url: fotosActual[col], actual: true }]
+                ).map(({ label, url, actual }) => (
                   <div key={label} style={{ background: theme.surface, borderRadius: 10, overflow: "hidden", border: `1px solid ${actual ? theme.accent + "44" : theme.border}` }}>
                     {url ? (
                       <img src={url} alt={`${nombreAngulo} - ${label}`} onClick={() => setLightbox(url)} style={{ width: "100%", height: 120, objectFit: "cover", cursor: "pointer" }} />
@@ -7664,7 +7704,9 @@ function ProgresoMetricas({ userId, esCoach = false }) {
                 ))}
               </div>
             </div>
-          ));
+            );
+            })}
+          </>);
         })()}
       </Card>
 
