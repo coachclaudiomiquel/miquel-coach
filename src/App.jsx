@@ -3333,6 +3333,8 @@ function RutinaScreen({ onNav, alumnoPreview }) {
   // un ejercicio nuevo, solo queda anotado en el registro de esta sesión.
   const [sustitutos, setSustitutos] = useState({});
   const [panelCambioAbierto, setPanelCambioAbierto] = useState(null);
+  // Reseña (descripción) del ejercicio cambiado: ejId con el texto desplegado.
+  const [resenaSustAbierta, setResenaSustAbierta] = useState({});
   const [nombresEjerciciosLib, setNombresEjerciciosLib] = useState([]);
   useEffect(() => {
     supabase.from("ejercicios").select("nombre").eq("activo", true).then(({ data }) => {
@@ -3465,7 +3467,15 @@ function RutinaScreen({ onNav, alumnoPreview }) {
       } catch (e) { /* localStorage no disponible o dato corrupto: se ignora */ }
     }
     setRegistros(restaurado || {});
-    setSustitutos({});
+    // El cambio de ejercicio de hoy también se recupera si se recarga la app.
+    let sustRestaurado = {};
+    if (clave) {
+      try {
+        const g = window.localStorage.getItem(clave + "_sust");
+        if (g) sustRestaurado = JSON.parse(g) || {};
+      } catch (e) { /* se ignora */ }
+    }
+    setSustitutos(sustRestaurado);
     setPanelCambioAbierto(null);
     limpiarIntervaloDescanso();
     setEstadoSerie("idle");
@@ -3488,7 +3498,29 @@ function RutinaScreen({ onNav, alumnoPreview }) {
     } catch (e) { /* localStorage lleno o no disponible: se sigue igual, solo no queda el respaldo */ }
   }, [registros, userId, rutinaActiva?.id, alumnoPreview]);
 
+  // Guarda también los ejercicios cambiados de hoy.
+  useEffect(() => {
+    if (alumnoPreview) return;
+    const clave = claveProgresoLocal(userId, rutinaActiva?.id);
+    if (!clave) return;
+    try {
+      if (Object.keys(sustitutos).length > 0) window.localStorage.setItem(clave + "_sust", JSON.stringify(sustitutos));
+      else window.localStorage.removeItem(clave + "_sust");
+    } catch (e) { /* sin respaldo, se sigue igual */ }
+  }, [sustitutos, userId, rutinaActiva?.id, alumnoPreview]);
+
   const [ultimasCargas, setUltimasCargas] = useState({});
+  // Últimas cargas por NOMBRE de ejercicio (clave "nombre normalizado|serie"),
+  // sumando las sesiones en que ese ejercicio se hizo como cambio de otro. Se
+  // usa cuando el alumno cambió el ejercicio: su historial es el del ejercicio
+  // que de verdad hizo, en cualquier rutina o día.
+  const [ultimasPorNombre, setUltimasPorNombre] = useState({});
+  const cargaPrevia = (ej, nSerie) => {
+    const sust = sustitutos[ej.id]?.nombre;
+    return sust
+      ? ultimasPorNombre[`${normalizarNombreEjercicio(sust)}|${nSerie}`]
+      : ultimasCargas[`${ej.id}-${nSerie}`];
+  };
 
   // Precarga el KG y las REPS de cada serie de aproximación con el valor
   // sugerido (reps objetivo del coach, kg calculado según el % y el último
@@ -3510,7 +3542,7 @@ function RutinaScreen({ onNav, alumnoPreview }) {
           if ((s.tipo || "efectiva") !== "aproximacion") return;
           const key = `${ej.id}-${idx}`;
           const actual = next[key] || {};
-          const refEfectiva = ultimasCargas[`${ej.id}-1`];
+          const refEfectiva = cargaPrevia(ej, 1);
           const kgSugerido = (refEfectiva?.kg && s.pctDesde) ? redondearKg((parseFloat(s.pctDesde) / 100) * refEfectiva.kg) : null;
           const kgEditadoAMano = actual.kg && !actual._autoKg;
           const repsEditadoAMano = actual.reps && !actual._autoReps;
@@ -3524,21 +3556,35 @@ function RutinaScreen({ onNav, alumnoPreview }) {
       });
       return cambio ? next : prev;
     });
-  }, [rutinaActiva, ultimasCargas]);
+  }, [rutinaActiva, ultimasCargas, ultimasPorNombre, sustitutos]);
 
   const cargarUltimasCargas = async (userId) => {
     const { data: historico } = await supabase
       .from("registros_entreno")
-      .select("ejercicio_id, serie, kg, reps, fecha, creado_en, rir_sentido, observacion")
+      .select("ejercicio_id, serie, kg, reps, fecha, creado_en, rir_sentido, observacion, ejercicio_sustituto, ejercicios(nombre)")
       .eq("usuario_id", userId)
       .order("creado_en", { ascending: false });
     if (historico) {
       const ultimas = {};
+      const porNombre = {};
       historico.forEach(r => {
-        const key = `${r.ejercicio_id}-${r.serie}`;
-        if (!(key in ultimas) && r.kg) ultimas[key] = { kg: r.kg, reps: r.reps, fecha: r.fecha, rir: r.rir_sentido, obs: r.observacion };
+        if (!r.kg) return;
+        const datos = { kg: r.kg, reps: r.reps, fecha: r.fecha, rir: r.rir_sentido, obs: r.observacion };
+        // Por nombre del ejercicio realmente hecho (el cambiado, si lo hubo).
+        const nombreReal = r.ejercicio_sustituto || r.ejercicios?.nombre;
+        if (nombreReal) {
+          const kN = `${normalizarNombreEjercicio(nombreReal)}|${r.serie}`;
+          if (!(kN in porNombre)) porNombre[kN] = datos;
+        }
+        // Por ejercicio de la rutina: las sesiones en que se hizo otro
+        // ejercicio en su lugar no cuentan para el original.
+        if (!r.ejercicio_sustituto) {
+          const key = `${r.ejercicio_id}-${r.serie}`;
+          if (!(key in ultimas)) ultimas[key] = datos;
+        }
       });
       setUltimasCargas(ultimas);
+      setUltimasPorNombre(porNombre);
     }
   };
 
@@ -4133,7 +4179,7 @@ function RutinaScreen({ onNav, alumnoPreview }) {
           <Card key={ej.id} style={{ marginBottom: 14 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6, gap:10 }}>
               <div style={{ display:"flex", alignItems:"center", gap:10, flex:1, minWidth:0 }}>
-                <ImagenReferenciaEjercicio nombre={ej.nombre} mapa={mapaImagenes} size={64} />
+                <ImagenReferenciaEjercicio nombre={sustitutos[ej.id]?.nombre || ej.nombre} mapa={mapaImagenes} size={64} />
                 <div style={{ flex:1, minWidth:0, borderLeft:`3px solid ${theme.accent}`, paddingLeft:10 }}>
                   {ej.grupo_superserie && (
                     <div style={{ display:"inline-block", fontSize:9, fontWeight:800, color:theme.gold, background:`${theme.gold}18`, border:`1px solid ${theme.gold}44`, borderRadius:6, padding:"2px 6px", marginBottom:4 }}>🔗 SUPERSERIE {ej.grupo_superserie} · sin descanso entre ejercicios</div>
@@ -4144,13 +4190,25 @@ function RutinaScreen({ onNav, alumnoPreview }) {
                   {sustitutos[ej.id]?.nombre && (
                     <div style={{ fontSize: 10, color: theme.muted, marginBottom: 4 }}>en vez de "{ej.nombre}"{sustitutos[ej.id]?.motivo ? ` · ${sustitutos[ej.id].motivo}` : ""}</div>
                   )}
+                  {sustitutos[ej.id]?.nombre && (() => {
+                    const resena = buscarInfoEjercicio(sustitutos[ej.id].nombre, mapaImagenes)?.resena;
+                    if (!resena) return null;
+                    const abierta = !!resenaSustAbierta[ej.id];
+                    return (
+                      <div style={{ marginBottom: 4 }}>
+                        <div onClick={() => setResenaSustAbierta(prev => ({ ...prev, [ej.id]: !abierta }))}
+                          style={{ fontSize: 10, color: theme.accentLight, cursor: "pointer", fontWeight: 700 }}>{abierta ? "▲ Ocultar descripción" : "ⓘ Ver descripción"}</div>
+                        {abierta && <div style={{ fontSize: 11, color: theme.muted, lineHeight: 1.5, marginTop: 3 }}>{resena}</div>}
+                      </div>
+                    );
+                  })()}
                   <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
                     <div style={{ fontSize: 11, color: theme.muted }}>⏱ Descanso: {ej.descanso_desde && ej.descanso_hasta ? `${ej.descanso_desde}-${ej.descanso_hasta}s` : `${ej.descanso}s`}</div>
                     <div style={{ fontSize: 9.5, fontWeight:800, color: theme.muted, background:theme.card, border:`1px solid ${theme.border}`, borderRadius:6, padding:"2px 6px" }} title="Tempo: negativa-pausa-positiva">🆃 {ej.tempo || "3-1-1"}</div>
                   </div>
                 </div>
               </div>
-              {ej.video_url && (
+              {ej.video_url && !sustitutos[ej.id]?.nombre && (
                 <a href={ej.video_url} target="_blank" rel="noreferrer" style={{ width: 36, height: 36, borderRadius: 10, background: theme.surface, display: "flex", alignItems: "center", justifyContent: "center", border: `1px solid ${theme.border}`, flexShrink: 0, textDecoration: "none" }}>▶️</a>
               )}
               {!alumnoPreview && (
@@ -4213,13 +4271,13 @@ function RutinaScreen({ onNav, alumnoPreview }) {
                 // La carga "semana anterior" se compara por posición entre series
                 // EFECTIVAS únicamente (contEfect), no por posición en el arreglo
                 // completo, para que la aproximación no la desordene.
-                const anterior = tipo === "efectiva" ? ultimasCargas[`${ej.id}-${contEfect}`] : null;
+                const anterior = tipo === "efectiva" ? cargaPrevia(ej, contEfect) : null;
                 // El kg sugerido de aproximación se calcula con el % (extremo
                 // inferior del rango que definió el coach) sobre el último peso
                 // conocido de la PRIMERA serie efectiva de este ejercicio. Si el
                 // alumno todavía no tiene carga registrada ahí, no hay sugerencia
                 // -- igual que la primera vez en una serie efectiva.
-                const refEfectiva = ultimasCargas[`${ej.id}-1`];
+                const refEfectiva = cargaPrevia(ej, 1);
                 const kgSugeridoAprox = (refEfectiva?.kg && s.pctDesde) ? redondearKg((parseFloat(s.pctDesde) / 100) * refEfectiva.kg) : null;
                 const placeholderKg = tipo === "efectiva"
                   ? (anterior?.kg || "kg")
@@ -4513,7 +4571,7 @@ function RutinaScreen({ onNav, alumnoPreview }) {
                   const reg = registros[key] || {};
                   const tipo = s.tipo || "efectiva";
                   if (tipo === "efectiva") serieEfectiva++;
-                  const sugerido = tipo === "efectiva" ? ultimasCargas[`${ej.id}-${serieEfectiva}`]?.kg : null;
+                  const sugerido = tipo === "efectiva" ? cargaPrevia(ej, serieEfectiva)?.kg : null;
                   const kgFinal = reg.kg || sugerido || null;
                   const repsFinal = reg.reps || s.reps || null;
                   // Solo se guardan las series efectivas. La aproximación no se
@@ -7438,14 +7496,14 @@ function ProgresoMetricas({ userId, esCoach = false }) {
 
       const { data: registros } = await supabase
         .from("registros_entreno")
-        .select("kg, reps, fecha, creado_en, ejercicios(nombre)")
+        .select("kg, reps, fecha, creado_en, ejercicio_sustituto, ejercicios(nombre)")
         .eq("usuario_id", userId)
         .not("kg", "is", null)
         .order("creado_en", { ascending: true });
       if (registros) {
         const porEjercicio = {};
         registros.forEach(r => {
-          const nombreReal = r.ejercicios?.nombre;
+          const nombreReal = r.ejercicio_sustituto || r.ejercicios?.nombre;
           const basico = matchBasico(nombreReal);
           if (!basico) return;
           if (!porEjercicio[basico.label]) porEjercicio[basico.label] = [];
@@ -7841,6 +7899,10 @@ function CoachPanel({ onNav, onVerAlumno }) {
   const [alumnosPorVencer, setAlumnosPorVencer] = useState([]);
   const [reportesPendientes, setReportesPendientes] = useState(0);
   const [eliminandoId, setEliminandoId] = useState(null);
+  // Filtro por modalidad ("todos" | "online" | "presencial") y panel de pagos.
+  const [filtroModalidad, setFiltroModalidad] = useState("todos");
+  const [pagosAbierto, setPagosAbierto] = useState(false);
+  const [pagosUltimos, setPagosUltimos] = useState({}); // usuario_id -> último pago
 
   // Borra TODA la información del alumno (rutinas, dietas, registros,
   // mensajes, pagos, etc.) de forma permanente -- pide escribir su nombre
@@ -7886,10 +7948,17 @@ function CoachPanel({ onNav, onVerAlumno }) {
 
   useEffect(() => {
     const cargarAlumnos = async () => {
-      const { data } = await supabase
+      const columnasAlumno = "id, nombre, email, whatsapp, objetivo, peso_actual, edad, sexo, estatura, created_at, anamnesis_completada";
+      let { data, error: errAlumnos } = await supabase
         .from("usuarios")
-        .select("id, nombre, email, whatsapp, objetivo, peso_actual, edad, sexo, estatura, created_at, anamnesis_completada")
+        .select(columnasAlumno + ", modalidad")
         .order("created_at", { ascending: false });
+      if (errAlumnos) {
+        // Si la columna "modalidad" todavía no existe en la base, se carga la
+        // lista igual (todos como online) en vez de dejar el panel vacío.
+        const resp = await supabase.from("usuarios").select(columnasAlumno).order("created_at", { ascending: false });
+        data = resp.data;
+      }
       if (data) {
           // Los guardados parciales de una anamnesis a medio terminar crean
           // fila en "usuarios" antes de tiempo -- se excluyen acá para que
@@ -7902,6 +7971,12 @@ function CoachPanel({ onNav, onVerAlumno }) {
         setLoading(false);
       const { data: pendientes } = await supabase.from("mensajes").select("id, usuario_id, texto, created_at").eq("de", "alumno").eq("leido", false).order("created_at", { ascending: false });
       if (pendientes) setMensajesPendientes(pendientes.length);
+      const { data: pagosTodos } = await supabase.from("pagos").select("usuario_id, estado, fecha_vencimiento, reportado_por_alumno, created_at").order("created_at", { ascending: false });
+      if (pagosTodos) {
+        const ultimos = {};
+        pagosTodos.forEach(pg => { if (!(pg.usuario_id in ultimos)) ultimos[pg.usuario_id] = pg; });
+        setPagosUltimos(ultimos);
+      }
       const { data: pagosData } = await supabase.from("pagos").select("*, usuarios(nombre, id)").eq("estado", "activo").order("fecha_vencimiento", { ascending: true });
       if (pagosData) {
         const hoy = new Date();
@@ -7921,6 +7996,41 @@ function CoachPanel({ onNav, onVerAlumno }) {
     cargarAlumnos();
   }, []);
 
+  // Modalidad de cada alumno ("online" si no está definida) y alumnos visibles
+  // según la pestaña elegida.
+  const modalidadDe = (a) => a.modalidad === "presencial" ? "presencial" : "online";
+  const cuentaOnline = alumnos.filter(a => modalidadDe(a) === "online").length;
+  const cuentaPresencial = alumnos.filter(a => modalidadDe(a) === "presencial").length;
+  const alumnosVisibles = filtroModalidad === "todos" ? alumnos : alumnos.filter(a => modalidadDe(a) === filtroModalidad);
+
+  // Estado de pago de cada alumno visible: vencido, por vencer (hasta 3 días),
+  // al día, o sin pago registrado.
+  const ahoraPagos = new Date();
+  const gruposPago = { vencidos: [], porVencer: [], alDia: [], sin: [] };
+  alumnosVisibles.forEach(a => {
+    const pg = pagosUltimos[a.id];
+    if (!pg || !pg.fecha_vencimiento) { gruposPago.sin.push({ a, pg }); return; }
+    const dias = Math.ceil((new Date(pg.fecha_vencimiento) - ahoraPagos) / (1000 * 60 * 60 * 24));
+    const item = { a, pg, dias };
+    if (dias < 0 || pg.estado === "bloqueado") gruposPago.vencidos.push(item);
+    else if (dias <= 3) gruposPago.porVencer.push(item);
+    else gruposPago.alDia.push(item);
+  });
+  gruposPago.vencidos.sort((x, y) => x.dias - y.dias);
+  gruposPago.porVencer.sort((x, y) => x.dias - y.dias);
+  gruposPago.alDia.sort((x, y) => x.dias - y.dias);
+  const gruposPagoLista = [
+    ["vencidos", "Vencidos", theme.danger, gruposPago.vencidos],
+    ["porVencer", "Por vencer", theme.warning, gruposPago.porVencer],
+    ["alDia", "Al día", theme.success, gruposPago.alDia],
+    ["sin", "Sin pago registrado", theme.muted, gruposPago.sin],
+  ];
+  const textoPago = (g, it) => {
+    if (g === "sin") return "Sin pago registrado";
+    if (g === "vencidos") return it.pg.estado === "bloqueado" && it.dias >= 0 ? "Bloqueado" : `Venció hace ${Math.abs(it.dias)} día${Math.abs(it.dias) === 1 ? "" : "s"}`;
+    if (it.dias === 0) return "Vence hoy";
+    return `Vence en ${it.dias} día${it.dias === 1 ? "" : "s"}`;
+  };
 
   return (
     <div style={{ padding:"20px 16px 24px",overflowY:"auto",height:"100%",boxSizing:"border-box" }}>
@@ -7939,27 +8049,46 @@ function CoachPanel({ onNav, onVerAlumno }) {
       <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:16 }}>
         {[
           { label:"Alumnos", value: String(alumnos.length), icon:"👥", color:theme.accentLight },
-          { label:"Sin pago", value:String(alumnosPorVencer.length), icon:"💳", color:theme.danger },
+          { label:"Pagos vencidos", value:String(gruposPago.vencidos.length), icon:"💳", color:theme.danger, onClick: () => setPagosAbierto(v => !v), activo: pagosAbierto },
         ].map(m=>(
-          <Card key={m.label} style={{ textAlign:"center",padding:14 }}>
+          <Card key={m.label} onClick={m.onClick} style={{ textAlign:"center",padding:14, cursor: m.onClick ? "pointer" : "default", border: m.activo ? `1px solid ${theme.danger}` : undefined }}>
             <div style={{ fontSize:20 }}>{m.icon}</div>
             <div style={{ fontSize:22,fontWeight:900,color:m.color,marginTop:4 }}>{m.value}</div>
             <div style={{ fontSize:10,color:theme.muted }}>{m.label}</div>
+            {m.onClick && <div style={{ fontSize:9,color:theme.accentLight,marginTop:2 }}>{m.activo ? "▲ ocultar" : "▼ ver detalle"}</div>}
           </Card>
         ))}
       </div>
 
-      {/* Botón temporal -- solo para chequear visualmente cómo quedaron los
-          campos de medidas nuevos en la Anamnesis. Se puede sacar cuando ya
-          no se necesite. */}
-      <button onClick={() => onNav("anamnesis_preview")} style={{ background:"transparent", border:`1px dashed ${theme.accent}`, borderRadius:8, padding:"8px", color:theme.accentLight, fontSize:11, fontWeight:600, cursor:"pointer", width:"100%", marginBottom:14 }}>
-        🔍 Vista previa (temporal): pantalla de medidas en la Anamnesis
-      </button>
+      {pagosAbierto && (
+        <div style={{ marginBottom:16 }}>
+          <div style={{ fontSize:12, color:theme.muted, fontWeight:700, marginBottom:10 }}>
+            PAGOS{filtroModalidad !== "todos" ? ` · ${filtroModalidad === "online" ? "ONLINE" : "PRESENCIAL"}` : ""}
+          </div>
+          {gruposPagoLista.map(([clave, titulo, color, items]) => (
+            <div key={clave} style={{ marginBottom:12 }}>
+              <div style={{ fontSize:11, fontWeight:800, color, marginBottom:6 }}>{titulo} ({items.length})</div>
+              {items.length === 0 ? (
+                <div style={{ fontSize:11, color:theme.muted, paddingLeft:4 }}>Nadie en este grupo.</div>
+              ) : items.map(it => (
+                <div key={it.a.id} onClick={() => onVerAlumno({ ...it.a, tabInicial: "Pagos" })}
+                  style={{ background:`${color}10`, border:`1px solid ${color}33`, borderRadius:12, padding:"10px 14px", marginBottom:6, display:"flex", justifyContent:"space-between", alignItems:"center", cursor:"pointer", gap:8 }}>
+                  <div style={{ minWidth:0 }}>
+                    <div style={{ fontSize:13, fontWeight:700, color:theme.text }}>{it.a.nombre || "Sin nombre"}</div>
+                    <div style={{ fontSize:11, color:theme.muted }}>
+                      {textoPago(clave, it)}{it.pg?.reportado_por_alumno && clave !== "alDia" ? " · dice que pagó" : ""}
+                    </div>
+                  </div>
+                  <div style={{ fontSize:11, fontWeight:700, color, whiteSpace:"nowrap" }}>Ver →</div>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Lista alumnos reales */}
-      {mensajesPendientes > 0 && (
-        <div style={{ marginBottom: 16 }}>
-          {alumnosPorVencer.length > 0 && (
+      {alumnosPorVencer.length > 0 && (
         <div style={{ marginBottom: 16 }}>
           <div style={{ fontSize: 12, color: theme.warning, fontWeight: 700, marginBottom: 10 }}>⚠️ PAGOS POR VENCER</div>
           {alumnosPorVencer.map(a => (
@@ -7973,6 +8102,9 @@ function CoachPanel({ onNav, onVerAlumno }) {
           ))}
         </div>
       )}
+
+      {mensajesPendientes > 0 && (
+        <div style={{ marginBottom: 16 }}>
           <div style={{ fontSize: 12, color: theme.danger, fontWeight: 700, marginBottom: 10 }}>💬 MENSAJES SIN LEER</div>
           {alumnos.filter(a => a.tieneMensaje).map(a => (
             <div key={a.id} onClick={() => { onVerAlumno({...a, tabInicial: "Mensajes"}); }}
@@ -7987,6 +8119,15 @@ function CoachPanel({ onNav, onVerAlumno }) {
         </div>
       )}
       <div style={{ fontSize:12,color:theme.muted,marginBottom:10 }}>ALUMNOS REGISTRADOS</div>
+      <div style={{ display:"flex", gap:6, marginBottom:12 }}>
+        {[["todos", "Todos", alumnos.length], ["online", "Online", cuentaOnline], ["presencial", "Presencial", cuentaPresencial]].map(([v, l, n]) => (
+          <button key={v} onClick={() => setFiltroModalidad(v)}
+            style={{ flex:1, padding:"8px 6px", borderRadius:10, fontSize:12, fontWeight:700, cursor:"pointer",
+              background: filtroModalidad === v ? `${theme.accentLight}22` : "transparent",
+              border: `1px solid ${filtroModalidad === v ? theme.accentLight : theme.border}`,
+              color: filtroModalidad === v ? theme.accentLight : theme.muted }}>{l} ({n})</button>
+        ))}
+      </div>
       {loading ? (
         <Card style={{ textAlign:"center",padding:20 }}>
           <div style={{ color:theme.muted,fontSize:13 }}>Cargando alumnos...</div>
@@ -7996,15 +8137,22 @@ function CoachPanel({ onNav, onVerAlumno }) {
           <div style={{ fontSize:24,marginBottom:8 }}>👥</div>
           <div style={{ color:theme.muted,fontSize:13 }}>Aún no hay alumnos registrados</div>
         </Card>
+      ) : alumnosVisibles.length === 0 ? (
+        <Card style={{ textAlign:"center",padding:20 }}>
+          <div style={{ color:theme.muted,fontSize:13 }}>No hay alumnos en esta modalidad.</div>
+        </Card>
       ) : (
-        alumnos.map(a => (
+        alumnosVisibles.map(a => (
           <div key={a.id} onClick={() => onVerAlumno(a)} style={{ marginBottom:10, cursor:"pointer", background:theme.card, border:`1px solid ${theme.border}`, borderRadius:14, padding:"14px 16px" }}>
             <div style={{ display:"flex",alignItems:"center",gap:12 }}>
               <div style={{ width:40,height:40,minWidth:40,borderRadius:12,background:theme.accent,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,fontWeight:800 }}>
                 {a.nombre ? a.nombre[0].toUpperCase() : "?"}
               </div>
               <div style={{ flex:1, display:"grid", gridTemplateColumns:"1fr 1fr", gap:"2px 10px", alignItems:"center" }}>
-                <div style={{ fontSize:14,fontWeight:700,color:theme.text, gridColumn:"1 / -1" }}>{a.nombre || "Sin nombre"}</div>
+                <div style={{ fontSize:14,fontWeight:700,color:theme.text, gridColumn:"1 / -1", display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
+                  {a.nombre || "Sin nombre"}
+                  <span style={{ fontSize:9, fontWeight:700, color: modalidadDe(a) === "presencial" ? theme.warning : theme.accentLight, border:`1px solid ${modalidadDe(a) === "presencial" ? theme.warning : theme.accentLight}66`, borderRadius:6, padding:"1px 6px" }}>{modalidadDe(a) === "presencial" ? "Presencial" : "Online"}</span>
+                </div>
                 <div style={{ fontSize:11,color:theme.muted, display:"flex", alignItems:"center", gap:4 }}>📱 {a.whatsapp || "—"}</div>
                 <div style={{ fontSize:11,color:theme.muted, display:"flex", alignItems:"center", gap:4, justifySelf:"end" }}>🎯 {a.objetivo || "—"}</div>
               </div>
@@ -9994,6 +10142,9 @@ function RutinaCoach({ alumno }) {
                               <div style={{ fontSize:9, color:theme.muted, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>S{c.serie} · {c.fecha}</div>
                               <div style={{ fontSize:12, fontWeight:800, color:theme.text, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{c.kg}kg</div>
                               <div style={{ fontSize:10, color:theme.muted, whiteSpace:"nowrap" }}>×{c.reps}</div>
+                              {c.ejercicio_sustituto && (
+                                <div style={{ fontSize:9, color:theme.warning, marginTop:2, lineHeight:1.25, whiteSpace:"normal", wordBreak:"break-word" }}>↔ {c.ejercicio_sustituto}</div>
+                              )}
                               {c.observacion && (
                                 <div style={{ fontSize:9, color:theme.muted, marginTop:2, lineHeight:1.25, whiteSpace:"normal", wordBreak:"break-word" }}>💬 {c.observacion}</div>
                               )}
@@ -10637,6 +10788,15 @@ function CoachAlumno({ onNav, alumno }) {
 
   const setCampo = (k, v) => setFormDatos(prev => ({ ...prev, [k]: v }));
 
+  // La modalidad se guarda sola (sin pasar por "Editar datos"), así no depende
+  // del resto de los campos de la Anamnesis.
+  const cambiarModalidad = async (valor) => {
+    if (!alumno?.id) return;
+    const { error } = await supabase.from("usuarios").update({ modalidad: valor }).eq("id", alumno.id);
+    if (error) { alert("No se pudo guardar la modalidad: " + error.message); return; }
+    setDatosCompletos(prev => ({ ...(prev || {}), modalidad: valor }));
+  };
+
   return (
     <div style={{ height:"100%",display:"flex",flexDirection:"column" }}>
       <div style={{ padding:"16px 16px 0",background:theme.surface,borderBottom:`1px solid ${theme.border}` }}>
@@ -10664,6 +10824,22 @@ function CoachAlumno({ onNav, alumno }) {
               </>
             )}
           </div>
+
+          <Card>
+            <div style={{ fontSize:12,color:theme.muted,marginBottom:10 }}>MODALIDAD</div>
+            <div style={{ display:"flex", gap:8 }}>
+              {[["online", "Online"], ["presencial", "Presencial"]].map(([v, l]) => {
+                const activa = (datosCompletos?.modalidad === "presencial" ? "presencial" : "online") === v;
+                return (
+                  <button key={v} onClick={() => cambiarModalidad(v)}
+                    style={{ flex:1, padding:"9px 6px", borderRadius:10, fontSize:12, fontWeight:700, cursor:"pointer",
+                      background: activa ? `${theme.accentLight}22` : "transparent",
+                      border: `1px solid ${activa ? theme.accentLight : theme.border}`,
+                      color: activa ? theme.accentLight : theme.muted }}>{l}</button>
+                );
+              })}
+            </div>
+          </Card>
 
           {!editandoDatos ? (
             <>
