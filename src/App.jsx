@@ -852,7 +852,8 @@ async function subirImagenEjercicio(nombreOriginal, file) {
   const normalizado = normalizarNombreEjercicio(nombreOriginal);
   if (!normalizado) return null;
   const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
-  const path = `${normalizado}.${ext}`;
+  // Nombre de archivo seguro: el almacenamiento rechaza símbolos como "°".
+  const path = `${normalizado.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "imagen"}.${ext}`;
   const { error: errUpload } = await supabase.storage.from("ejercicios-imagenes").upload(path, file, { upsert: true, contentType: file.type || undefined });
   if (errUpload) { alert("No se pudo subir la imagen: " + errUpload.message); return null; }
   const url = `https://srlucwsakjuivogvunzx.supabase.co/storage/v1/object/public/ejercicios-imagenes/${path}?t=${new Date().getTime()}`;
@@ -966,7 +967,8 @@ async function subirImagenGrupoMuscular(nombreOriginal, file) {
   const normalizado = normalizarNombreEjercicio(nombreOriginal);
   if (!normalizado) return null;
   const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
-  const path = `${normalizado}.${ext}`;
+  // Nombre de archivo seguro: el almacenamiento rechaza símbolos como "°".
+  const path = `${normalizado.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "imagen"}.${ext}`;
   const { error: errUpload } = await supabase.storage.from("grupo-muscular-imagenes").upload(path, file, { upsert: true, contentType: file.type || undefined });
   if (errUpload) { alert("No se pudo subir la imagen: " + errUpload.message); return null; }
   const url = `https://srlucwsakjuivogvunzx.supabase.co/storage/v1/object/public/grupo-muscular-imagenes/${path}?t=${new Date().getTime()}`;
@@ -11028,7 +11030,15 @@ function CoachAlumno({ onNav, alumno }) {
                       campoKey={key}
                       label={label}
                       urlActual={datosCompletos?.[dbCol]}
-                      onSubida={(url) => setDatosCompletos(prev => ({ ...prev, [dbCol]: url }))}
+                      onSubida={async (url) => {
+                        // La foto ya está en el almacenamiento: se anota su
+                        // dirección en la ficha del alumno de inmediato (si no,
+                        // se perdía al recargar, porque "Guardar cambios" no
+                        // incluye las fotos).
+                        const { error } = await supabase.from("usuarios").update({ [dbCol]: url }).eq("id", alumno.id);
+                        if (error) { alert("La foto se subió, pero no se pudo guardar en la ficha del alumno: " + error.message); return; }
+                        setDatosCompletos(prev => ({ ...prev, [dbCol]: url }));
+                      }}
                     />
                   ))}
                 </div>
